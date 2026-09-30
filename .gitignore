@@ -35,3 +35,7 @@ data/pgdata/
 .rag-index/
 .transcripts/
 knowledge-base/local/
+
+## Local working memory for AI assistants — never commit.
+CLAUDE.md
+AGENTS.md
