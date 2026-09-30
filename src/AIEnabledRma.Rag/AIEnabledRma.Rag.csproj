@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>AIEnabledRma.Rag</RootNamespace>
+    <AssemblyName>AIEnabledRma.Rag</AssemblyName>
+    <UserSecretsId>aienabledrma-rag</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AIEnabledRma.Domain\AIEnabledRma.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\knowledge-base\**\*.md"
+          Link="knowledge-base\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!--
+    This project is both a runnable diagnostic host and a library referenced by the Web app.
+    A referenced project copies its CopyToOutputDirectory content into the consumer's output,
+    so shipping an appsettings.json here would collide with the host's own file and fail the
+    Web publish with NETSDK1152. The host is the one that owns configuration, and it declares
+    its own complete Rag and Rag:Retrieval sections, so nothing is lost by keeping this file
+    local to the project directory: 'dotnet run' resolves content root to the project folder
+    and reads it from there, and nothing publishes this project standalone.
+  -->
+  <ItemGroup>
+    <Content Update="appsettings.json"
+             CopyToOutputDirectory="Never"
+             CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
+</Project>

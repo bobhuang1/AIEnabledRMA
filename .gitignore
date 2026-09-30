@@ -1,0 +1,37 @@
+## .NET build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+*.user
+*.suo
+.vs/
+.idea/
+
+## Test output
+TestResults/
+*.trx
+coverage*.json
+coverage*.xml
+
+## Local secrets and environment overrides
+appsettings.Development.json
+appsettings.Local.json
+appsettings.*.Local.json
+*.env
+.env
+!.env.example
+
+## Local data / database volumes
+data/postgres/
+data/pgdata/
+*.db
+*.sqlite
+*.sqlite3
+
+## AI provider keys and chat transcripts.
+## Never commit real model output or any provider credential.
+.rag-index/
+.transcripts/
+knowledge-base/local/

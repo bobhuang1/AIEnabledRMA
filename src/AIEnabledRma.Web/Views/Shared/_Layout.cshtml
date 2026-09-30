@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] &middot; Returns</title>
+    <link rel="stylesheet" href="~/css/site.css" />
+</head>
+<body>
+    <a class="skip" href="#main">Skip to main content</a>
+
+    <header class="site-header">
+        <div class="wrap">
+            <a class="brand" asp-controller="Home" asp-action="Index">Returns</a>
+        </div>
+    </header>
+
+    <main id="main" class="wrap">
+        <partial name="_ValidationSummary" />
+        @RenderBody()
+    </main>
+
+    <footer class="site-footer">
+        <div class="wrap">
+            <p>
+                Automated troubleshooting can suggest a fix, but it never decides whether a
+                return is approved. Those decisions are made by our returns policy.
+            </p>
+        </div>
+    </footer>
+
+    <script src="~/js/site.js" asp-append-version="true"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

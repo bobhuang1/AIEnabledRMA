@@ -1,0 +1,31 @@
+@{
+    ViewData["Title"] = "Returns";
+}
+
+<h1>Start a return</h1>
+<p class="lede">
+    Check whether we can fix it without a return, or start one straight away.
+</p>
+
+<div class="card">
+    <h3>Returning an item</h3>
+    <p class="muted">
+        Enter your serial number and we will check it against your plan. If a quick step fixes
+        the problem, we will not make you post anything back.
+    </p>
+    <a class="btn" asp-controller="RmaWizard" asp-action="Start">Start a return</a>
+</div>
+
+<div class="card">
+    <h3>How this works</h3>
+    <ol class="steps-list">
+        <li>Tell us what you are sending back.</li>
+        <li>We check each item against the returns policy.</li>
+        <li>We suggest a fix from our support articles if one fits.</li>
+        <li>You choose where the replacement goes, and confirm.</li>
+    </ol>
+    <p class="muted">
+        Automated troubleshooting can suggest a fix. It cannot approve a return, change a
+        price, or decide what you owe. Those come from the returns policy, every time.
+    </p>
+</div>

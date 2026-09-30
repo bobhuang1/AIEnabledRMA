@@ -1,0 +1,55 @@
+@model ProblemsForm
+@{
+    ViewData["Title"] = "Describe the problem";
+}
+
+<ol class="steps">
+    <li>Items</li>
+    <li>Problem</li>
+    <li aria-current="step">Details</li>
+    <li>Shipping</li>
+    <li>Payment</li>
+    <li>Confirm</li>
+</ol>
+
+<h1>Describe the problem</h1>
+<p class="lede">
+    The repair bench works from these notes, so please be as specific as you can about each item.
+</p>
+
+<form method="post" asp-controller="RmaWizard" asp-action="Problems">
+    <input asp-for="RmaId" type="hidden" />
+    <input asp-for="RmaNumber" type="hidden" />
+
+    @for (var i = 0; i < Model.Lines.Count; i++)
+    {
+        var index = i;
+        <div class="card">
+            <h3>@Model.Lines[index].ProductName</h3>
+            <p class="mono muted">@Model.Lines[index].SerialNumber</p>
+
+            <div asp-validation-summary="ModelOnly" class="alert alert-error"></div>
+
+            <div class="field">
+                <label asp-for="Lines[index].Description"></label>
+                <textarea asp-for="Lines[index].Description" rows="3"
+                          data-problem-description></textarea>
+                <span asp-validation-for="Lines[index].Description" class="muted"></span>
+            </div>
+
+            <div class="field">
+                <label asp-for="Lines[index].WhatCustomerTried"></label>
+                <input asp-for="Lines[index].WhatCustomerTried" />
+            </div>
+
+            <input asp-for="Lines[index].DeviceId" type="hidden" />
+            <input asp-for="Lines[index].SerialNumber" type="hidden" />
+            <input asp-for="Lines[index].ProductName" type="hidden" />
+        </div>
+    }
+
+    <div class="actions">
+        <button class="btn btn-secondary" type="button" data-copy-first>Copy first description to the rest</button>
+        <button class="btn" type="submit">Continue</button>
+    </div>
+</form>

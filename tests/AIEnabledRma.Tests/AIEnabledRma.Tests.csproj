@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>AIEnabledRma.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\AIEnabledRma.Domain\AIEnabledRma.Domain.csproj" />
+    <ProjectReference Include="..\..\src\AIEnabledRma.Rag\AIEnabledRma.Rag.csproj" />
+    <ProjectReference Include="..\..\src\AIEnabledRma.Ai\AIEnabledRma.Ai.csproj" />
+    <ProjectReference Include="..\..\src\AIEnabledRma.Mcp\AIEnabledRma.Mcp.csproj" />
+    <!-- Data is referenced only by RmaNumberSequenceTests, which exercises real PostgreSQL
+         sequence behaviour against a throwaway database, and by WebWizardTests, which boots
+         the Web host. Nothing else in the suite touches it, so the rest of the tests stay
+         free of a database dependency. -->
+    <ProjectReference Include="..\..\src\AIEnabledRma.Data\AIEnabledRma.Data.csproj" />
+    <!-- Referenced so WebApplicationFactory can find the Web host's content root and
+         entry point. The type is a project reference, not a package: the package only
+         supplies the factory, the app under test still has to be this one. -->
+    <ProjectReference Include="..\..\src\AIEnabledRma.Web\AIEnabledRma.Web.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

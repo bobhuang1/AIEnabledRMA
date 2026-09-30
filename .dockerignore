@@ -1,0 +1,31 @@
+# Keep the build context small and reproducible. Both Dockerfiles use the repository
+# root as context because they copy Directory.Build.props, the solution file and
+# sibling projects, so everything excluded here has to be unnecessary, not just large.
+
+# Local PostgreSQL volume: the single biggest win, and it is test data, not source.
+data/
+
+# Build output and intermediates. Copying these in makes restore read stale or
+# platform-specific assets and defeats layer caching.
+**/bin/
+**/obj/
+
+# Editor and OS noise
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+
+# Version control and CI
+.git/
+.gitignore
+.github/
+azure-pipelines.yml
+
+# Docs and local tooling not needed to build a runtime image
+docs/
+*.md
+!README.md

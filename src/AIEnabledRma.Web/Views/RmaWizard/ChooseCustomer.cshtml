@@ -1,0 +1,34 @@
+@{
+    ViewData["Title"] = "Which account?";
+    var matches = ViewBag.Matches as IEnumerable<dynamic>;
+    var identifiers = ViewBag.Identifiers as string;
+}
+
+<h1>More than one account matches</h1>
+<p class="lede">
+    We found several accounts that could be yours. Pick the right one so we do not send your
+    return details to the wrong person.
+</p>
+
+<form method="post" asp-controller="RmaWizard" asp-action="ChooseCustomer">
+    <input name="identifiers" type="hidden" value="@identifiers" />
+
+    @if (matches is not null)
+    {
+        foreach (var match in matches)
+        {
+            <label class="radio-card">
+                <input type="radio" name="customerId" value="@match.Id" required />
+                <span>
+                    <strong>@match.Name</strong><br />
+                    <span class="muted">@match.Email &middot; @match.PhoneNumber</span>
+                </span>
+            </label>
+        }
+    }
+
+    <div class="actions">
+        <button class="btn" type="submit">Use this account</button>
+        <a class="btn btn-secondary" asp-controller="RmaWizard" asp-action="Start">Start over</a>
+    </div>
+</form>

@@ -1,0 +1,40 @@
+@model PaymentForm
+@{
+    ViewData["Title"] = "Payment";
+}
+
+<ol class="steps">
+    <li>Items</li>
+    <li>Problem</li>
+    <li>Details</li>
+    <li>Shipping</li>
+    <li aria-current="step">Payment</li>
+    <li>Confirm</li>
+</ol>
+
+<h1>One more step</h1>
+
+<div class="alert alert-warn">
+    <p>
+        This repair is not covered by your plan, so there is a charge to collect. It is
+        authorised now and only captured once the item is received and inspected.
+    </p>
+</div>
+
+<form method="post" asp-controller="RmaWizard" asp-action="Payment">
+    <input asp-for="RmaId" type="hidden" />
+
+    <div class="field">
+        <label asp-for="PaymentMethodToken"></label>
+        <input asp-for="PaymentMethodToken" autocomplete="off" />
+        <p class="hint">
+            A token from the payment provider, never a card number. No payment provider is
+            wired up in this build, so the sample gateway accepts any value and authorises
+            nothing.
+        </p>
+    </div>
+
+    <div class="actions">
+        <button class="btn" type="submit">Authorise and continue</button>
+    </div>
+</form>

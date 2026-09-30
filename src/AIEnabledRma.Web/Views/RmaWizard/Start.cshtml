@@ -1,0 +1,48 @@
+@model StartReturnForm
+@{
+    ViewData["Title"] = "Start a return";
+}
+
+<ol class="steps">
+    <li aria-current="step">Items</li>
+    <li>Problem</li>
+    <li>Details</li>
+    <li>Shipping</li>
+    <li>Payment</li>
+    <li>Confirm</li>
+</ol>
+
+<h1>Start a return</h1>
+<p class="lede">
+    Tell us what you are sending back and we will check it against our returns policy.
+    If a quick step fixes it, we will offer that instead.
+</p>
+
+<form method="post" asp-controller="RmaWizard" asp-action="Start">
+    <div class="field">
+        <label asp-for="Customer"></label>
+        <input asp-for="Customer" autocomplete="email" />
+        <p class="hint">We use this to find your account and your saved addresses.</p>
+    </div>
+
+    <div class="field">
+        <label asp-for="Identifiers"></label>
+        <textarea asp-for="Identifiers" rows="4"></textarea>
+        <p class="hint">
+            One per line. A serial number, MAC address, IMEI, or product code all work.
+            You can return more than one item in a single return.
+        </p>
+    </div>
+
+    <div class="field">
+        <label asp-for="RegionCode"></label>
+        <input asp-for="RegionCode" placeholder="US" maxlength="8" />
+        <p class="hint">Optional. Some regions always need a person to review a return.</p>
+    </div>
+
+    <input asp-for="CurrencyCode" type="hidden" />
+
+    <div class="actions">
+        <button class="btn" type="submit">Check my items</button>
+    </div>
+</form>

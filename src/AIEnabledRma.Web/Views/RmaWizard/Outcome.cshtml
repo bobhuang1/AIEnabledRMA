@@ -1,0 +1,147 @@
+@model WizardViewModel
+@{
+    ViewData["Title"] = "Your return";
+
+    var resolved = Model.Outcome == StepOutcome.ResolvedByTroubleshooting;
+    var completed = Model.Outcome == StepOutcome.Completed;
+    var review = Model.Outcome == StepOutcome.RequiresHumanReview;
+}
+
+@if (completed)
+{
+    <h1>Your return is confirmed</h1>
+    <div class="alert alert-ok">
+        <p>
+            We have your return. Send the items in, and we will email you when they arrive.
+        </p>
+    </div>
+}
+else if (resolved)
+{
+    <h1>Glad that worked</h1>
+    <div class="alert alert-ok">
+        <p>@Model.Message</p>
+    </div>
+}
+else if (review)
+{
+    <h1>A person will take a look</h1>
+    <div class="alert alert-warn">
+        <p>@Model.Message</p>
+    </div>
+}
+else
+{
+    <h1>We cannot take this return</h1>
+    <div class="alert alert-error">
+        <p>@Model.Message</p>
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(Model.RmaNumber))
+{
+    <p>
+        Your reference is
+        <span class="reference mono">@Model.RmaNumber</span>
+        (@Model.Status). Quote it if you contact us.
+    </p>
+}
+
+@* Items the policy left out are reported, never dropped. A customer who handed over three
+   things and had one silently discarded would have no way of knowing to ask about it. *@
+@if (Model.ExcludedItems.Count > 0)
+{
+    <h2>Items we could not include</h2>
+
+    <div class="alert alert-warn">
+        <p>
+            @Model.ExcludedItems.Count of the items you listed are not part of this return.
+            Each one is listed below with the reason.
+        </p>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th scope="col">Item</th>
+                <th scope="col">Decision</th>
+                <th scope="col">Why</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var item in Model.ExcludedItems)
+            {
+                <tr>
+                    <td>
+                        @if (!string.IsNullOrEmpty(item.SerialNumber))
+                        {
+                            <span class="mono">@item.SerialNumber</span>
+                        }
+                        else
+                        {
+                            <span class="muted">Identifier not recognised</span>
+                        }
+                    </td>
+                    <td>@item.Eligibility</td>
+                    <td>
+                        <strong>@item.Reason</strong><br />
+                        <span class="muted">@item.Explanation</span>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@if (Model.Triage is { } triage)
+{
+    <h2>What we found</h2>
+    <p>@triage.Verdict.Summary</p>
+
+    @if (triage.RefusedByScopeGuard)
+    {
+        <div class="alert alert-warn">
+            <p>
+                That question was outside what automated troubleshooting can help with, so we
+                did not answer it. A specialist will pick this up.
+            </p>
+        </div>
+    }
+    else if (triage.UsedFallback)
+    {
+        <div class="alert alert-warn">
+            <p>
+                Automated troubleshooting was unavailable, so we could not suggest a fix.
+                A specialist will review your return.
+            </p>
+        </div>
+    }
+
+    @if (triage.Verdict.Steps.Count > 0)
+    {
+        <h3>Try these, in order</h3>
+        <ol class="steps-list">
+            @foreach (var step in triage.Verdict.Steps)
+            {
+                <li>
+                    @step.Instruction
+                    @if (!string.IsNullOrEmpty(step.ArticleId))
+                    {
+                        <br />
+                        <span class="muted">From article <span class="mono">@step.ArticleId</span></span>
+                    }
+                </li>
+            }
+        </ol>
+    }
+}
+
+<div class="actions">
+    @if (!completed && !resolved && !string.IsNullOrEmpty(Model.RmaNumber) && Model.RmaId != Guid.Empty)
+    {
+        <a class="btn" asp-controller="RmaWizard" asp-action="Triage" asp-route-id="@Model.RmaId">
+            Continue this return
+        </a>
+    }
+    <a class="btn btn-secondary" asp-controller="Home" asp-action="Index">Start another return</a>
+</div>

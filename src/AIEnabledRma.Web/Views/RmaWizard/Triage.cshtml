@@ -1,0 +1,103 @@
+@model TriageForm
+@{
+    ViewData["Title"] = "What is wrong?";
+    var number = ViewBag.RmaNumber as string ?? string.Empty;
+}
+
+<ol class="steps">
+    <li>Items</li>
+    <li aria-current="step">Problem</li>
+    <li>Details</li>
+    <li>Shipping</li>
+    <li>Payment</li>
+    <li>Confirm</li>
+</ol>
+
+<h1>What is going wrong?</h1>
+@if (!string.IsNullOrEmpty(number))
+{
+    <p class="lede">Return <span class="mono">@number</span></p>
+}
+
+@if (ViewBag.Lines is IEnumerable<AIEnabledRma.Web.Models.WizardLineViewModel> lines && lines.Any())
+{
+    <div class="card">
+        <h3>Items in this return</h3>
+        <table>
+            <caption class="muted">These items were accepted by the returns policy.</caption>
+            <thead>
+                <tr>
+                    <th scope="col">Item</th>
+                    <th scope="col">Serial</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var line in lines)
+                {
+                    <tr>
+                        <td>@line.ProductName</td>
+                        <td class="mono">@line.SerialNumber</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@* A partial create has to say so here, not only on the outcome page. The customer gave us a
+   list and we kept part of it; dropping the rest without a word would leave them believing the
+   whole batch was covered. *@
+@if (ViewBag.Excluded is IReadOnlyList<AIEnabledRma.Web.Models.ExcludedItemView> excluded && excluded.Count > 0)
+{
+    <div class="alert alert-warn">
+        <h2>Some of your items are not part of this return</h2>
+        @if (ViewBag.PartialMessage is string partialMessage && !string.IsNullOrWhiteSpace(partialMessage))
+        {
+            <p>@partialMessage</p>
+        }
+
+        <table>
+            <thead>
+                <tr>
+                    <th scope="col">Item you sent</th>
+                    <th scope="col">Decision</th>
+                    <th scope="col">Why</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in excluded)
+                {
+                    <tr>
+                        <td class="mono">@(item.SerialNumber ?? "Not recognised")</td>
+                        <td>@item.Eligibility</td>
+                        <td>
+                            <strong>@item.Reason</strong><br />
+                            <span class="muted">@item.Explanation</span>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <p class="muted">
+            If you think one of these should have been accepted, quote
+            <span class="mono">@number</span> and we will look again.
+        </p>
+    </div>
+}
+
+<form method="post" asp-controller="RmaWizard" asp-action="Triage" asp-route-id="@Context.Request.RouteValues["id"]">
+    <div class="field">
+        <label asp-for="Statement"></label>
+        <textarea asp-for="Statement" rows="5"
+                  placeholder="For example: the screen stays black after a restart."></textarea>
+        <p class="hint">
+            Describe it in your own words. We look for a fix in our support articles first; if
+            nothing fits, we continue with the return.
+        </p>
+    </div>
+
+    <div class="actions">
+        <button class="btn" type="submit">Check for a fix</button>
+    </div>
+</form>

@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>AIEnabledRma.Mcp</RootNamespace>
+    <AssemblyName>AIEnabledRma.Mcp</AssemblyName>
+    <UserSecretsId>aienabledrma-mcp</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The Worker SDK would supply Hosting and the implicit usings, but this host also
+         needs to be referenced as a library by the test project, which the Worker SDK's
+         implicit top-level usings and generated Program type make awkward. Explicit
+         references keep it a plain library-with-an-entry-point. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <!-- For AddConsole, which is how logging is redirected to stderr so stdout stays a
+         clean JSON-RPC channel. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <PackageReference Include="ModelContextProtocol" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+    <Using Include="Microsoft.Extensions.Hosting" />
+    <Using Include="Microsoft.Extensions.Configuration" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Copied so the host can read the connection string and the policy configuration.
+         The values here are the local docker-compose development credentials; a real
+         deployment overrides them with the ConnectionStrings__Rma environment variable
+         and never ships a production password in a file. -->
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AIEnabledRma.Domain\AIEnabledRma.Domain.csproj" />
+    <ProjectReference Include="..\AIEnabledRma.Data\AIEnabledRma.Data.csproj" />
+  </ItemGroup>
+
+</Project>

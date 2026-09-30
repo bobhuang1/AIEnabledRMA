@@ -1,0 +1,22 @@
+@model ErrorViewModel
+@{
+    ViewData["Title"] = "Something went wrong";
+}
+
+<h1>Something went wrong</h1>
+<p class="lede">
+    We have logged this. Nothing was charged, and you can safely start again.
+</p>
+
+@if (Model.ShowRequestId)
+{
+    <p class="muted">
+        If you contact support, quoting this reference helps us find the log:
+        <span class="mono">@Model.RequestId</span>
+    </p>
+}
+
+<div class="actions">
+    <a class="btn" asp-controller="RmaWizard" asp-action="Start">Start again</a>
+    <a class="btn btn-secondary" asp-controller="Home" asp-action="Index">Home</a>
+</div>

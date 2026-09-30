@@ -1,0 +1,99 @@
+@model WizardViewModel
+@{
+    ViewData["Title"] = "Confirm your return";
+    var address = ViewBag.Address as AIEnabledRma.Domain.Customers.Address;
+    var fallback = ViewBag.FallbackAddress is bool f && f;
+}
+
+<ol class="steps">
+    <li>Items</li>
+    <li>Problem</li>
+    <li>Details</li>
+    <li>Shipping</li>
+    <li>Payment</li>
+    <li aria-current="step">Confirm</li>
+</ol>
+
+<h1>Check this over</h1>
+
+<div class="card">
+    <p class="reference mono">@Model.RmaNumber</p>
+    <p class="muted">Status: @Model.Status</p>
+</div>
+
+@if (fallback)
+{
+    <div class="alert alert-warn">
+        <p>
+            We could not confidently match the address you typed, so we picked the one below.
+            Please check it before continuing.
+        </p>
+    </div>
+}
+
+@if (address is not null)
+{
+    <div class="card">
+        <h3>Shipping to</h3>
+        <p>
+            @address.Line1@if (!string.IsNullOrWhiteSpace(address.Line2))
+            {
+                <text>, @address.Line2</text>
+            }<br />
+            @address.City@if (!string.IsNullOrWhiteSpace(address.StateOrProvince))
+            {
+                <text>, @address.StateOrProvince</text>
+            }, @address.PostalCode, @address.CountryCode
+        </p>
+    </div>
+}
+
+<div class="card">
+    <h3>Items</h3>
+    <table>
+        <thead>
+            <tr>
+                <th scope="col">Item</th>
+                <th scope="col">Serial</th>
+                <th scope="col">Problem</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var line in Model.Lines)
+            {
+                <tr>
+                    <td>@line.ProductName</td>
+                    <td class="mono">@line.SerialNumber</td>
+                    <td>@line.ProblemDescription</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <h3>Cost</h3>
+    <dl class="summary">
+        @if (Model.IsPaidRepair)
+        {
+            <dt>Repair fee</dt>
+            <dd>@Model.DepositAmount.ToString("N2") @Model.CurrencyCode</dd>
+            <dt><strong>Total due</strong></dt>
+            <dd><strong>@Model.TotalDue.ToString("N2") @Model.CurrencyCode</strong></dd>
+            <p class="muted">Authorised now; captured once the item is received and inspected.</p>
+        }
+        else
+        {
+            <dt>Total due</dt>
+            <dd>@Model.TotalDue.ToString("N2") @Model.CurrencyCode</dd>
+            <p class="muted">Nothing to pay. This repair is covered.</p>
+        }
+    </dl>
+</div>
+
+<form method="post" asp-controller="RmaWizard" asp-action="Confirm">
+    <input asp-for="RmaId" type="hidden" />
+    <div class="actions">
+        <button class="btn" type="submit">Confirm my return</button>
+    </div>
+</form>

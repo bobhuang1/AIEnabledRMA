@@ -1,0 +1,88 @@
+@model ShippingForm
+@using AIEnabledRma.Domain.Customers
+@{
+    ViewData["Title"] = "Where should we send it?";
+    var addresses = ViewBag.Addresses as ICollection<Address>;
+}
+
+<ol class="steps">
+    <li>Items</li>
+    <li>Problem</li>
+    <li>Details</li>
+    <li aria-current="step">Shipping</li>
+    <li>Payment</li>
+    <li>Confirm</li>
+</ol>
+
+<h1>Where should we send the replacement?</h1>
+
+<form method="post" asp-controller="RmaWizard" asp-action="Shipping">
+    <input asp-for="RmaId" type="hidden" />
+    <input asp-for="RmaNumber" type="hidden" />
+
+    @if (ViewBag.CustomerName is string customerName && !string.IsNullOrEmpty(customerName))
+    {
+        <p class="lede">Sending to <strong>@customerName</strong>.</p>
+    }
+
+    @if (addresses is { Count: > 0 })
+    {
+        <p class="muted">Pick a saved address, or type a different one below.</p>
+
+        foreach (var address in addresses.OrderByDescending(a => a.IsDefault))
+        {
+            <label class="radio-card">
+                <input type="radio" name="AddressId" value="@address.Id" />
+                <span>
+                    @if (!string.IsNullOrWhiteSpace(address.Label))
+                    {
+                        <strong>@address.Label</strong>
+                        <br />
+                    }
+                    @address.Line1@if (!string.IsNullOrWhiteSpace(address.Line2))
+                    {
+                        <text>, @address.Line2</text>
+                    }
+                    <br />
+                    @address.City@if (!string.IsNullOrWhiteSpace(address.StateOrProvince))
+                    {
+                        <text>, @address.StateOrProvince</text>
+                    }, @address.PostalCode, @address.CountryCode
+                    @if (address.IsDefault)
+                    {
+                        <br />
+                        <span class="muted">Default address</span>
+                    }
+                </span>
+            </label>
+        }
+    }
+    else
+    {
+        <div class="alert alert-warn">
+            <p>
+                We could not find a saved address on this account. Type the address you want us
+                to use and a person will confirm it before anything ships.
+            </p>
+        </div>
+    }
+
+    <div class="field">
+        <label asp-for="FreeTextAddress"></label>
+        <input asp-for="FreeTextAddress" />
+        <p class="hint">
+            @if (addresses is { Count: > 0 })
+            {
+                <text>Leave empty to use the saved address you picked. If we cannot match what you type confidently, we will show you which address we picked before anything ships.</text>
+            }
+            else
+            {
+                <text>The full address, including city, region, postal code, and country.</text>
+            }
+        </p>
+    </div>
+
+    <div class="actions">
+        <button class="btn" type="submit">Continue</button>
+    </div>
+</form>

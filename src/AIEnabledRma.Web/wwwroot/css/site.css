@@ -1,0 +1,246 @@
+/*
+ * Deliberately small and dependency-free.
+ *
+ * The wizard is a plain form flow: a customer on a phone, often on a poor connection, often
+ * using a screen reader. Layout and contrast matter more here than visual polish, so this
+ * stylesheet does the accessible basics and stops.
+ */
+
+:root {
+    --ink: #16191d;
+    --muted: #5b6470;
+    --line: #d5dae0;
+    --bg: #ffffff;
+    --accent: #1c4f8b;
+    --accent-ink: #ffffff;
+    --error-bg: #fdf0ef;
+    --error-line: #b3261e;
+    --warn-bg: #fff8e6;
+    --warn-line: #8a6100;
+    --ok-bg: #eef7ef;
+    --ok-line: #1d6b32;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --ink: #e8eaed;
+        --muted: #a2acb8;
+        --line: #3a4048;
+        --bg: #14171a;
+        --accent: #6ea8fe;
+        --accent-ink: #10131a;
+        --error-bg: #2b1615;
+        --error-line: #f2b8b5;
+        --warn-bg: #2b2413;
+        --warn-line: #e8c37a;
+        --ok-bg: #14261a;
+        --ok-line: #9fd8ad;
+    }
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 1rem/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.wrap {
+    max-width: 44rem;
+    margin: 0 auto;
+    padding: 0 1.25rem;
+}
+
+.skip {
+    position: absolute;
+    left: -9999px;
+}
+
+.skip:focus {
+    left: 0.5rem;
+    top: 0.5rem;
+    z-index: 10;
+    background: var(--accent);
+    color: var(--accent-ink);
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.25rem;
+}
+
+.site-header {
+    border-bottom: 1px solid var(--line);
+    padding: 1rem 0;
+}
+
+.brand {
+    font-weight: 650;
+    color: var(--ink);
+    text-decoration: none;
+    font-size: 1.1rem;
+}
+
+main { padding: 2rem 0 3rem; }
+
+h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 0.35rem; }
+h2 { font-size: 1.2rem; margin: 2rem 0 0.6rem; }
+h3 { font-size: 1rem; margin: 0 0 0.4rem; }
+
+.lede { color: var(--muted); margin: 0 0 1.75rem; }
+
+.steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1rem;
+    list-style: none;
+    padding: 0;
+    margin: 0 0 1.75rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+}
+
+.steps li::before { content: "\25CB"; margin-right: 0.35rem; }
+.steps li[aria-current="step"] { color: var(--ink); font-weight: 600; }
+.steps li[aria-current="step"]::before { content: "\25C9"; }
+
+.field { margin-bottom: 1.1rem; }
+
+.field label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 0.3rem;
+}
+
+.hint {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin: 0.25rem 0 0;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="tel"],
+textarea,
+select {
+    width: 100%;
+    padding: 0.6rem 0.7rem;
+    font: inherit;
+    color: var(--ink);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+}
+
+textarea { min-height: 7rem; resize: vertical; }
+
+:focus-visible {
+    outline: 3px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.btn {
+    display: inline-block;
+    padding: 0.65rem 1.15rem;
+    font: inherit;
+    font-weight: 600;
+    color: var(--accent-ink);
+    background: var(--accent);
+    border: 1px solid transparent;
+    border-radius: 0.3rem;
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.btn-secondary {
+    background: transparent;
+    color: var(--accent);
+    border-color: var(--line);
+}
+
+.actions {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-top: 1.5rem;
+}
+
+.alert {
+    border: 1px solid var(--line);
+    border-left-width: 4px;
+    border-radius: 0.3rem;
+    padding: 0.9rem 1.1rem;
+    margin: 0 0 1.5rem;
+}
+
+.alert-title { margin: 0 0 0.4rem; font-size: 1rem; }
+.alert ul { margin: 0; padding-left: 1.1rem; }
+.alert p:last-child { margin-bottom: 0; }
+
+.alert-error { background: var(--error-bg); border-left-color: var(--error-line); }
+.alert-warn { background: var(--warn-bg); border-left-color: var(--warn-line); }
+.alert-ok { background: var(--ok-bg); border-left-color: var(--ok-line); }
+
+.card {
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    padding: 1rem 1.1rem;
+    margin-bottom: 1rem;
+}
+
+.card + .card { margin-top: 0.75rem; }
+
+.muted { color: var(--muted); }
+
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.9em;
+}
+
+.reference {
+    font-size: 1.15rem;
+    font-weight: 650;
+}
+
+dl.summary {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.4rem 1rem;
+    margin: 0;
+}
+
+dl.summary dt { color: var(--muted); }
+dl.summary dd { margin: 0; }
+
+table { width: 100%; border-collapse: collapse; }
+
+th, td {
+    text-align: left;
+    padding: 0.5rem 0.4rem;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+}
+
+th { font-size: 0.85rem; color: var(--muted); font-weight: 600; }
+
+.radio-card {
+    display: block;
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    padding: 0.8rem 0.9rem;
+    margin-bottom: 0.6rem;
+    cursor: pointer;
+}
+
+.radio-card:has(input:checked) { border-color: var(--accent); }
+
+.radio-card input { margin-right: 0.5rem; }
+
+ol.steps-list { padding-left: 1.2rem; }
+ol.steps-list li { margin-bottom: 0.5rem; }
+
+.site-footer {
+    border-top: 1px solid var(--line);
+    padding: 1.25rem 0 2rem;
+    color: var(--muted);
+    font-size: 0.85rem;
+}
