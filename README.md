@@ -6,7 +6,7 @@ eligibility, coverage, and money. The AI can suggest a fix — it can quote noth
 nothing. Every eligibility decision, every price, and every state change comes from the same
 policy evaluator whether the caller is the web wizard, an MCP agent, or a test.
 
-MIT licensed — see [LICENSE](LICENSE).
+GPL-3.0 licensed — see [LICENSE.md](LICENSE.md).
 
 ## What you can try in five minutes
 
