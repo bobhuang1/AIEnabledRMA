@@ -54,15 +54,17 @@ public sealed class CustomerRepository(
 
         // Build a server-side prefilter from whatever the caller supplied. Each clause is
         // trigram-indexed; the OR keeps a partial match on any one field sufficient.
-        var name = query.Name?.Trim();
-        var email = query.Email?.Trim();
-        var phone = query.PhoneNumber?.Trim();
+        // User input is escaped so '%' and '_' are matched literally: an unescaped '%'
+        // would match every customer.
+        var name = EscapeLike(query.Name?.Trim());
+        var email = EscapeLike(query.Email?.Trim());
+        var phone = EscapeLike(query.PhoneNumber?.Trim());
 
         var prefiltered = q.Where(c =>
             (name != null && EF.Functions.ILike(
-                c.FirstName + " " + c.LastName, $"%{name}%"))
-            || (email != null && EF.Functions.ILike(c.Email, $"%{email}%"))
-            || (phone != null && EF.Functions.ILike(c.PhoneNumber, $"%{phone}%")));
+                c.FirstName + " " + c.LastName, $"%{name}%", LikeEscape))
+            || (email != null && EF.Functions.ILike(c.Email, $"%{email}%", LikeEscape))
+            || (phone != null && EF.Functions.ILike(c.PhoneNumber, $"%{phone}%", LikeEscape)));
 
         // Ordered so the candidate pool is a stable subset. Without an order the trigram
         // prefilter's Take returns an arbitrary slice, and the same customer could match one
@@ -149,6 +151,11 @@ public sealed class CustomerRepository(
             IsDefault = scored[0].Address.IsDefault,
         };
     }
+
+    private const string LikeEscape = "\\";
+
+    private static string? EscapeLike(string? value) =>
+        value?.Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_");
 
     private static string Flatten(Address a) =>
         string.Join(

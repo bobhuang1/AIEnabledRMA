@@ -456,9 +456,20 @@ if (addressId is { } address)
         // an out-of-warranty repair actually carries is the one the fee-quoting tool reports.
         if (request.Kind == RmaRequestKind.PaidRepair)
         {
-            var repairFee = request.Lines.Sum(l => _policy.PriceForRepair(l.Device?.Product));
+            // The currency is the price table's, never the caller's: a fee is a number in a
+            // specific currency, and accepting a client-chosen code would let "69 USD" be
+            // authorised as "69 JPY".
+            var prices = request.Lines.Select(l => _policy.RepairPrice(l.Device?.Product)).ToList();
+            var currencies = prices.Select(p => p.CurrencyCode.ToUpperInvariant()).Distinct().ToList();
+            if (currencies.Count > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Repair prices on one request use different currencies ({string.Join(", ", currencies)}); configure Policy:RepairPrices in a single currency.");
+            }
+
+            request.CurrencyCode = currencies.Count == 1 ? currencies[0] : request.CurrencyCode;
             request.ShippingCharge = 0m;
-            request.DepositAmount = repairFee;
+            request.DepositAmount = prices.Sum(p => p.Fee);
         }
         else
         {

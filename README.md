@@ -263,6 +263,17 @@ session or a customer-ownership check. The product decision is that the GUID is 
 capability: a 122-bit unguessable token plays the role a session would play, so a bookmarked
 step works across browsers, and a shareable link lets a second device finish a return.
 Accepted trade-off: anyone holding a request URL can drive that return until it is confirmed.
+
+Because the wizard is anonymous, it never shows another customer's details in full:
+
+- A customer is attached directly only when the visitor types the exact email or full
+  phone number on file. A weaker (fuzzy) match lists candidates **masked** (`Jane S.`,
+  `j•••@e•••.com`, `••• 77`), and only an account from that server-issued list can be
+  picked.
+- Stored addresses are shown masked (label plus `•••, 62••• US`) on the shipping and
+  confirmation steps.
+- The payment currency comes from the price table (`Policy:RepairPrices`), never from
+  the browser.
 Revisit before the wizard gains authenticated pages, an operator portal, or multiple users
 per return.
 

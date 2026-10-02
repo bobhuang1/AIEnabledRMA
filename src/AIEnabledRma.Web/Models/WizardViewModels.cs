@@ -23,10 +23,6 @@ public sealed class StartReturnForm
     [Display(Name = "Country or region code")]
     public string? RegionCode { get; set; }
 
-    [StringLength(3, MinimumLength = 3)]
-    [Display(Name = "Currency")]
-    public string CurrencyCode { get; set; } = "USD";
-
     public IReadOnlyList<string> IdentifierLines() =>
         Identifiers
             .Split(['\r', '\n', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)

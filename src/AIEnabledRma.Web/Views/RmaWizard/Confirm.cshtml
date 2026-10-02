@@ -35,15 +35,13 @@
 {
     <div class="card">
         <h3>Shipping to</h3>
+        @* Masked: this page is reachable by anyone holding the request link. *@
         <p>
-            @address.Line1@if (!string.IsNullOrWhiteSpace(address.Line2))
+            @if (!string.IsNullOrWhiteSpace(address.Label))
             {
-                <text>, @address.Line2</text>
-            }<br />
-            @address.City@if (!string.IsNullOrWhiteSpace(address.StateOrProvince))
-            {
-                <text>, @address.StateOrProvince</text>
-            }, @address.PostalCode, @address.CountryCode
+                <strong>@address.Label</strong><br />
+            }
+            @AIEnabledRma.Web.Controllers.RmaWizardController.MaskAddress(address)
         </p>
     </div>
 }

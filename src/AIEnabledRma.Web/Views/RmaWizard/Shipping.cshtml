@@ -1,8 +1,8 @@
 @model ShippingForm
-@using AIEnabledRma.Domain.Customers
+@using AIEnabledRma.Web.Controllers
 @{
     ViewData["Title"] = "Where should we send it?";
-    var addresses = ViewBag.Addresses as ICollection<Address>;
+    var addresses = ViewBag.Addresses as IReadOnlyCollection<RmaWizardController.MaskedAddressView>;
 }
 
 <ol class="steps">
@@ -39,15 +39,7 @@
                         <strong>@address.Label</strong>
                         <br />
                     }
-                    @address.Line1@if (!string.IsNullOrWhiteSpace(address.Line2))
-                    {
-                        <text>, @address.Line2</text>
-                    }
-                    <br />
-                    @address.City@if (!string.IsNullOrWhiteSpace(address.StateOrProvince))
-                    {
-                        <text>, @address.StateOrProvince</text>
-                    }, @address.PostalCode, @address.CountryCode
+                    @address.Masked
                     @if (address.IsDefault)
                     {
                         <br />

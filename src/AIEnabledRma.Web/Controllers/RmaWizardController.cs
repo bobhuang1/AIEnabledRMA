@@ -1,4 +1,5 @@
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Domain.Rules;
 using AIEnabledRma.Domain.Triage;
@@ -65,13 +66,23 @@ public sealed class RmaWizardController(
             },
             cancellationToken);
 
-        if (customerMatches.Count > 1)
+        // The wizard is anonymous, so a fuzzy hit must not reveal anything about the
+        // matched customers. An exact email or phone match (the visitor already knows the
+        // contact detail on file) attaches directly; anything weaker is shown only as masked
+        // candidates, and the pick is checked against that server-issued list.
+        var exact = customerMatches.Where(c => IsExactContactMatch(form.Customer, c)).ToList();
+        if (exact.Count == 1)
+        {
+            customerMatches = exact;
+        }
+        else if (customerMatches.Count > 0)
         {
             TempData["AmbiguousCustomer"] = form.Customer;
             TempData["AmbiguousMatches"] = System.Text.Json.JsonSerializer.Serialize(
                 customerMatches
-                    .Select(c => new CustomerMatchView(c.Id, c.FullName, c.Email, c.PhoneNumber))
+                    .Select(c => new CustomerMatchView(c.Id, MaskName(c.FirstName, c.LastName), MaskEmail(c.Email), MaskPhone(c.PhoneNumber)))
                     .ToList());
+            TempData["AmbiguousIds"] = string.Join('|', customerMatches.Select(c => c.Id));
 
             return RedirectToAction(nameof(ChooseCustomer), new { identifiers = string.Join('|', identifiers) });
         }
@@ -91,7 +102,6 @@ public sealed class RmaWizardController(
                 Today = today,
                 CustomerId = customerMatches.Count == 1 ? customerMatches[0].Id : null,
                 RegionCode = NullIfBlank(form.RegionCode),
-                CurrencyCode = string.IsNullOrWhiteSpace(form.CurrencyCode) ? "USD" : form.CurrencyCode.Trim().ToUpperInvariant(),
             },
             cancellationToken);
 
@@ -138,6 +148,14 @@ public sealed class RmaWizardController(
     public async Task<IActionResult> ChooseCustomer(string customerId, string identifiers, CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(customerId, out var id))
+        {
+            return RedirectToAction(nameof(Start));
+        }
+
+        // Only an account from the list this visitor was shown may be attached; a GUID typed
+        // into the form must not attach (and later display) an arbitrary customer.
+        var offered = TempData["AmbiguousIds"] as string ?? string.Empty;
+        if (!offered.Split('|', StringSplitOptions.RemoveEmptyEntries).Contains(id.ToString(), StringComparer.OrdinalIgnoreCase))
         {
             return RedirectToAction(nameof(Start));
         }
@@ -354,10 +372,14 @@ public sealed class RmaWizardController(
         if (request.CustomerId is { } customerId)
         {
             var customer = await customers.GetByIdAsync(customerId, cancellationToken);
+            // Anyone holding the request link can open this page, so stored addresses are
+            // shown masked: enough for the owner to recognise, not enough to learn them.
             ViewBag.CustomerName = customer is null
                 ? null
-                : $"{customer.FullName}";
-            ViewBag.Addresses = customer?.Addresses ?? [];
+                : MaskName(customer.FirstName, customer.LastName);
+            ViewBag.Addresses = (customer?.Addresses ?? [])
+                .Select(a => new MaskedAddressView(a.Id, a.Label, MaskAddress(a), a.IsDefault))
+                .ToList();
         }
 
         return View(new ShippingForm { RmaId = request.Id, RmaNumber = request.RmaNumber });
@@ -515,4 +537,57 @@ public sealed class RmaWizardController(
     /// a safe shape to push through that round trip in every TempDataProvider.
     /// </summary>
     public sealed record CustomerMatchView(Guid Id, string Name, string? Email, string? PhoneNumber);
+
+    public sealed record MaskedAddressView(Guid Id, string? Label, string Masked, bool IsDefault);
+
+    public static bool IsExactContactMatch(string? typed, Customer c)
+    {
+        if (string.IsNullOrWhiteSpace(typed))
+        {
+            return false;
+        }
+
+        var value = typed.Trim();
+        if (!string.IsNullOrEmpty(c.Email) && string.Equals(value, c.Email.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var typedDigits = new string(value.Where(char.IsAsciiDigit).ToArray());
+        var phoneDigits = new string((c.PhoneNumber ?? string.Empty).Where(char.IsAsciiDigit).ToArray());
+        return typedDigits.Length >= 7 && typedDigits == phoneDigits;
+    }
+
+    public static string MaskName(string? first, string? last)
+    {
+        var f = string.IsNullOrWhiteSpace(first) ? "?" : first.Trim();
+        var l = string.IsNullOrWhiteSpace(last) ? string.Empty : $" {last.Trim()[0]}.";
+        return f + l;
+    }
+
+    public static string? MaskEmail(string? email)
+    {
+        if (string.IsNullOrWhiteSpace(email) || email.IndexOf('@') is var at && at <= 0)
+        {
+            return null;
+        }
+
+        var domain = email[(at + 1)..];
+        var dot = domain.LastIndexOf('.');
+        var maskedDomain = dot > 0 ? $"{domain[0]}•••{domain[dot..]}" : "•••";
+        return $"{email[0]}•••@{maskedDomain}";
+    }
+
+    public static string? MaskPhone(string? phone)
+    {
+        var digits = new string((phone ?? string.Empty).Where(char.IsAsciiDigit).ToArray());
+        return digits.Length < 4 ? null : $"••• {digits[^2..]}";
+    }
+
+    public static string MaskAddress(Address a)
+    {
+        var postal = string.IsNullOrWhiteSpace(a.PostalCode) ? string.Empty : a.PostalCode.Trim();
+        var postalMasked = postal.Length <= 2 ? "•••" : postal[..2] + new string('•', postal.Length - 2);
+        return $"•••, {postalMasked} {a.CountryCode}".Trim();
+    }
 }
