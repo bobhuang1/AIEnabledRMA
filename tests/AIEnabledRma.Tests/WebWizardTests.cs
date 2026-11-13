@@ -54,6 +54,11 @@ public sealed class WebWizardTests : IAsyncLifetime
     private const string ExcludedSerial = "BX1-0003-0001";
 
     /// <summary>
+    /// Seeded with an open return already, so intake stops for a person instead of creating one.
+    /// </summary>
+    private const string DuplicateSerial = "AX2-0001-0002";
+
+    /// <summary>
     /// Intake asks who is returning the item as well as what it is, and the customer field is
     /// required. A seeded email is used rather than an arbitrary string so the fuzzy matcher
     /// resolves to exactly one customer; an ambiguous identity diverts to ChooseCustomer, which
@@ -597,6 +602,39 @@ public sealed class WebWizardTests : IAsyncLifetime
         // so the only way out of that loop was to abandon the return and start again.
         Assert.Contains($"/RmaWizard/{expectedStep}/{rmaId}", html, StringComparison.Ordinal);
         Assert.DoesNotContain($"/RmaWizard/Triage/{rmaId}", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_return_held_for_review_offers_no_link_into_a_step_that_would_refuse_it()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        // AX2-0001-0002 already carries an open return in the seed, so intake stops for a person.
+        var start = await client.GetAsync("/RmaWizard/Start", ct);
+        var startStep = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            TokenOf(await start.Content.ReadAsStringAsync(ct)),
+            [
+                ("Customer", CustomerEmail),
+                ("Identifiers", DuplicateSerial),
+                ("CurrencyCode", CurrencyCode),
+            ],
+            ct);
+
+        Assert.Equal("/RmaWizard/Start", startStep.Path);
+
+        var html = await startStep.Page.Content.ReadAsStringAsync(ct);
+        Assert.Contains("A person will take a look", html, StringComparison.Ordinal);
+
+        // A review-pending return has no step the customer may open: triage is Draft-only and
+        // every later step refuses a request that has not reached it, so "Continue this return"
+        // led to a second page saying the step was out of order. Hiding it is the product call —
+        // a person owns this return now, and offering a step back into it would be a loop.
+        Assert.DoesNotContain("Continue this return", html, StringComparison.Ordinal);
+        Assert.DoesNotContain($"/RmaWizard/Triage/", html, StringComparison.Ordinal);
+        Assert.Contains("Start another return", html, StringComparison.Ordinal);
     }
 
     [Fact]
