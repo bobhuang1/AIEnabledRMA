@@ -687,6 +687,33 @@ public sealed class RmaWorkflowTests
     }
 
     [Fact]
+    public async Task A_draft_cannot_reach_awaiting_shipment_by_authorising_zero_then_confirming()
+    {
+        // The historical hole, asserted on the final state rather than on each step: a draft's
+        // stored total is zero, the payment step used to authorise whatever it found, and
+        // confirmation then walked the return to AwaitingShipment with no triage, no shipping and
+        // no money taken. A guard on either step alone would leave the other path open.
+        var (wf, rmas, devices, payments, _) = Build();
+        var device = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        devices.Devices.Add(device);
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
+
+        Assert.Equal(RmaRequestStatus.Draft, rmas.Requests[0].Status);
+        Assert.Equal(0m, rmas.Requests[0].DepositAmount);
+
+        var payment = await wf.AuthorizePaymentAsync(start.RmaId!.Value, "tok", CancellationToken.None);
+        var confirmation = await wf.ConfirmAsync(start.RmaId!.Value, CancellationToken.None);
+
+        Assert.Equal(StepOutcome.InvalidTransition, payment.Outcome);
+        Assert.Equal(StepOutcome.InvalidTransition, confirmation.Outcome);
+
+        Assert.Equal(RmaRequestStatus.Draft, rmas.Requests[0].Status);
+        Assert.Empty(payments.Authorizations);
+    }
+
+    [Fact]
     public async Task A_paid_repair_is_priced_when_the_request_is_created()
     {
         var (wf, rmas, devices, _, _) = Build();
@@ -863,6 +890,57 @@ public sealed class RmaWorkflowTests
     }
 
     // ---------- confirmation ----------
+
+    [Fact]
+    public async Task Payment_and_confirmation_refuse_a_return_that_is_not_at_that_step()
+    {
+        // The guards are what stop a hand-crafted or stale post skipping a step. Payment on an
+        // approved return would authorise money nobody is waiting for, and confirmation on a
+        // return still awaiting payment would ship a repair that was never paid for.
+        var (wf, rmas, devices, payments, _) = Build();
+
+        var covered = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        var expired = TestData.Device(serial: "OLD-1", end: Today.AddYears(-2));
+        expired.Product = Product("AX-200", "AX-200 Terminal");
+        devices.Devices.AddRange([covered, expired]);
+
+        // A covered return is approved by shipping alone, so nothing is pending at the gateway.
+        payments.PaymentRequired = false;
+        var free = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(covered)], Today = Today }, CancellationToken.None);
+
+        await wf.SetShippingAsync(free.RmaId!.Value, Guid.NewGuid(), CancellationToken.None);
+
+        var approved = rmas.Requests.Single(r => r.Id == free.RmaId!.Value);
+        Assert.Equal(RmaRequestStatus.Approved, approved.Status);
+
+        var latePayment = await wf.AuthorizePaymentAsync(free.RmaId!.Value, "tok", CancellationToken.None);
+
+        Assert.Equal(StepOutcome.InvalidTransition, latePayment.Outcome);
+        Assert.Equal(RmaRequestStatus.Approved, rmas.Requests.Single(r => r.Id == free.RmaId!.Value).Status);
+        Assert.Empty(payments.Authorizations);
+
+        // The paid path: priced at creation, so shipping can put it into PendingPayment with a
+        // real amount instead of a zero the payment step would cheerfully authorise.
+        payments.PaymentRequired = true;
+        var paid = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(expired)], Today = Today }, CancellationToken.None);
+
+        WithProducts(rmas.Requests.Single(r => r.Id == paid.RmaId!.Value), expired);
+        Assert.Equal(149m, rmas.Requests.Single(r => r.Id == paid.RmaId!.Value).DepositAmount);
+
+        await wf.SetShippingAsync(paid.RmaId!.Value, Guid.NewGuid(), CancellationToken.None);
+        Assert.Equal(
+            RmaRequestStatus.PendingPayment,
+            rmas.Requests.Single(r => r.Id == paid.RmaId!.Value).Status);
+
+        var earlyConfirmation = await wf.ConfirmAsync(paid.RmaId!.Value, CancellationToken.None);
+
+        Assert.Equal(StepOutcome.InvalidTransition, earlyConfirmation.Outcome);
+        Assert.Equal(
+            RmaRequestStatus.PendingPayment,
+            rmas.Requests.Single(r => r.Id == paid.RmaId!.Value).Status);
+    }
 
     [Fact]
     public async Task A_draft_cannot_be_confirmed()
@@ -1156,6 +1234,65 @@ public sealed class RmaWorkflowTests
         Assert.Equal(
             "I spilled coffee on it.",
             request.Lines.Single(l => l.DeviceId == spilled.Id).ProblemDescription);
+    }
+
+    [Fact]
+    public async Task An_excluded_cause_that_needs_a_person_at_the_problems_step_routes_the_return_to_review()
+    {
+        // The two halves of the problems-step re-evaluation were covered apart: a refused line in
+        // a mixed batch, and review mapping from the triage statement. Neither covers a rule
+        // configured to send the customer to a person, fired by the description recorded here.
+        // "Excluded cause" is a category, not an outcome, so the status must follow what the rule
+        // is configured to result in rather than the fact that it matched.
+        var options = DefaultOptions();
+        options.ExcludedCauses.Single(c => c.RuleId == "cause.liquid").ResultingEligibility =
+            RmaEligibility.RequiresHumanReview;
+
+        var (wf, rmas, devices, _, _) = Build(
+            new RmaPolicyEvaluator(Microsoft.Extensions.Options.Options.Create(options)));
+
+        var clean = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        var spilled = TestData.Device(serial: "AX-2", end: Today.AddMonths(3));
+        devices.Devices.AddRange([clean, spilled]);
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(clean), Found(spilled)], Today = Today },
+            CancellationToken.None);
+
+        WithProducts(rmas.Requests[0], clean, spilled);
+
+        // Nothing for triage to act on: the damage is described one step later.
+        var triaged = await wf.ApplyTriageAsync(
+            start.RmaId!.Value,
+            Triage(resolved: false),
+            "The screen stays black.",
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.Continue, triaged.Outcome);
+
+        var result = await wf.RecordProblemsAsync(
+            start.RmaId!.Value,
+            [
+                new ProblemEntry { DeviceId = clean.Id, Description = "The screen stays black." },
+                new ProblemEntry { DeviceId = spilled.Id, Description = "I spilled coffee on it." },
+            ],
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.RequiresHumanReview, result.Outcome);
+
+        var request = rmas.Requests[0];
+        Assert.Equal(RmaRequestStatus.NeedsReview, request.Status);
+        Assert.Equal(nameof(RmaDecisionReason.ExcludedCause), request.EligibilityReason);
+        Assert.Contains("cause.liquid", request.PolicyRuleTrace);
+
+        // Review, not refusal: the line that described liquid damage is kept for the person who
+        // picks this up, and the untouched line keeps its own description.
+        Assert.Equal(
+            "I spilled coffee on it.",
+            request.Lines.Single(l => l.DeviceId == spilled.Id).ProblemDescription);
+        Assert.Equal(
+            "The screen stays black.",
+            request.Lines.Single(l => l.DeviceId == clean.Id).ProblemDescription);
     }
 
     [Fact]

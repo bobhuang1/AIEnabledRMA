@@ -18,10 +18,19 @@ public interface IRmaWorkflow
 {
     Task<StepResult> StartAsync(StartRmaCommand command, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Records the triage verdict and re-runs the policy against <paramref name="customerStatement"/>.
+    /// </summary>
+    /// <remarks>
+    /// The statement is required rather than optional: it is the only place a fault description
+    /// exists at this stage, and an omitted one would silently disable every excluded-cause rule,
+    /// so the liquid and impact exclusions would never fire. It is the customer's own words, never
+    /// the model's output — the AI may not influence eligibility in either direction.
+    /// </remarks>
     Task<StepResult> ApplyTriageAsync(
         Guid rmaId,
         TriageResult triage,
-        string? customerStatement,
+        string customerStatement,
         CancellationToken cancellationToken);
 
     Task<StepResult> RecordProblemsAsync(Guid rmaId, IReadOnlyList<ProblemEntry> problems, CancellationToken cancellationToken);
@@ -365,7 +374,7 @@ public sealed partial class RmaWorkflow(
     public async Task<StepResult> ApplyTriageAsync(
         Guid rmaId,
         TriageResult triage,
-        string? customerStatement,
+        string customerStatement,
         CancellationToken cancellationToken)
     {
         var request = await LoadAsync(rmaId, cancellationToken);
@@ -421,24 +430,12 @@ public sealed partial class RmaWorkflow(
 
         // The customer's description of the fault only exists from this step onward, which is
         // exactly why the excluded-cause rules could never fire: intake evaluates a device, not
-        // a statement. The same deterministic policy runs again here, with that statement as
-        // its input, before the request is allowed to continue.
-        var decision = ReEvaluate(request, _ => customerStatement);
-
-        if (decision is not null && !decision.AllowsRmaCreation)
+        // a statement. The same deterministic policy runs again here, with that statement as its
+        // input, before the request is allowed to continue.
+        if (await ApplyPolicyDecisionAsync(request, _ => customerStatement, cancellationToken)
+            is { } refusedTriage)
         {
-            return await RefuseAsync(request, decision, cancellationToken);
-        }
-
-        // A cause the deployment prices as a paid repair (cosmetic wear, say) changes what the
-        // customer owes, so the request becomes a paid repair and is priced here, before the
-        // shipping and payment steps can ask for money against a stale zero.
-        if (decision is { Eligibility: RmaEligibility.EligibleForPaidRepair }
-            && request.Kind != RmaRequestKind.PaidRepair)
-        {
-            request.Kind = RmaRequestKind.PaidRepair;
-            request.EligibilityReason = Truncate(decision.Reason.ToString(), 64);
-            ApplyPricing(request, request.Lines.Select(l => l.Device?.Product));
+            return refusedTriage;
         }
 
         await rmaRepository.UpdateAsync(request, cancellationToken);
@@ -491,6 +488,48 @@ public sealed partial class RmaWorkflow(
         }
 
         return Aggregate(decisions);
+    }
+
+    /// <summary>
+    /// Turns a policy decision about the customer's own words into state: refuse the return, or
+    /// promote it to a paid repair and price it.
+    /// </summary>
+    /// <remarks>
+    /// Triage and the problems step are the two places a description exists, and both run this
+    /// one method so they cannot drift apart. They did: the problems step once re-evaluated for
+    /// refusals only, so the same fault typed one step later was ignored and a covered fault at
+    /// triage followed by cosmetic wear at problems went through as a free repair.
+    /// </remarks>
+    /// <returns>The refusal to return as the step's result, or null when the request may continue.</returns>
+    private async Task<StepResult?> ApplyPolicyDecisionAsync(
+        RmaRequest request,
+        Func<RmaLine, string?> statementOf,
+        CancellationToken cancellationToken)
+    {
+        var decision = ReEvaluate(request, statementOf);
+
+        if (decision is null)
+        {
+            return null;
+        }
+
+        if (!decision.AllowsRmaCreation)
+        {
+            return await RefuseAsync(request, decision, cancellationToken);
+        }
+
+        // A cause the deployment prices as a paid repair (cosmetic wear, say) changes what the
+        // customer owes, so the request becomes a paid repair and is priced here, before the
+        // shipping and payment steps can ask for money against a stale zero.
+        if (decision is { Eligibility: RmaEligibility.EligibleForPaidRepair }
+            && request.Kind != RmaRequestKind.PaidRepair)
+        {
+            request.Kind = RmaRequestKind.PaidRepair;
+            request.EligibilityReason = Truncate(decision.Reason.ToString(), 64);
+            ApplyPricing(request, request.Lines.Select(l => l.Device?.Product));
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -585,24 +624,10 @@ public sealed partial class RmaWorkflow(
         // The same excluded-cause rules, now against what the customer wrote here. Leaving this
         // to triage alone let a customer dodge them by describing a screen fault in the triage
         // statement and the spilled drink only in the per-line description below it.
-        var decision = ReEvaluate(request, line => line.ProblemDescription);
-
-        if (decision is not null && !decision.AllowsRmaCreation)
+        if (await ApplyPolicyDecisionAsync(request, line => line.ProblemDescription, cancellationToken)
+            is { } refusedProblems)
         {
-            return await RefuseAsync(request, decision, cancellationToken);
-        }
-
-        // The other half of what triage does with the description: a cause this deployment prices
-        // as a paid repair changes what the customer owes, so the request becomes a paid repair
-        // and is priced before shipping and payment can ask for money against a free repair.
-        // Without this, the same fault typed one step later than triage was ignored, and a
-        // covered fault described at triage followed by cosmetic wear here went through free.
-        if (decision is { Eligibility: RmaEligibility.EligibleForPaidRepair }
-            && request.Kind != RmaRequestKind.PaidRepair)
-        {
-            request.Kind = RmaRequestKind.PaidRepair;
-            request.EligibilityReason = Truncate(decision.Reason.ToString(), 64);
-            ApplyPricing(request, request.Lines.Select(l => l.Device?.Product));
+            return refusedProblems;
         }
 
         request.UpdatedAtUtc = clock.UtcNow;
@@ -855,10 +880,11 @@ public sealed partial class RmaWorkflow(
     }
 
     /// <summary>
-    /// Applies the per-product repair price table to the request: at creation, from triage when
-    /// a cause turns the return into a paid repair, and again when shipping is set. Pricing at
-    /// intake is what stops the payment step authorising a stale zero; re-pricing later keeps
-    /// the stored amount current if the table changed while the request sat in the database.
+    /// Applies the per-product repair price table to the request: at creation, from triage or the
+    /// problems step when a cause turns the return into a paid repair, and again when shipping is
+    /// set. Pricing at intake is what stops the payment step authorising a stale zero; re-pricing
+    /// later keeps the stored amount current if the table changed while the request sat in the
+    /// database.
     /// </summary>
     private void ApplyPricing(RmaRequest request, IEnumerable<Product?> products)
     {
@@ -876,16 +902,16 @@ public sealed partial class RmaWorkflow(
         // The currency is the price table's, never the caller's: a fee is a number in a
         // specific currency, and accepting a client-chosen code would let "69 USD" be
         // authorised as "69 JPY".
-        var currencies = prices.Select(p => p.CurrencyCode.ToUpperInvariant()).Distinct().ToList();
-        if (currencies.Count > 1)
+        var currencies = prices.Select(p => p.CurrencyCode.ToUpperInvariant()).Distinct().ToArray();
+
+        if (currencies is [var currency])
+        {
+            request.CurrencyCode = currency;
+        }
+        else if (currencies.Length > 1)
         {
             throw new InvalidOperationException(
-                $"Repair prices on one request use different currencies ({string.Join(", ", currencies)}); configure Policy:RepairPrices in a single currency.");
-        }
-
-        if (currencies.Count == 1)
-        {
-            request.CurrencyCode = currencies[0];
+                $"Repair prices on one request use different currencies ({string.Join(", ", currencies)}); configure RmaPolicy:RepairPrices in a single currency.");
         }
 
         request.DepositAmount = prices.Sum(p => p.Fee);
