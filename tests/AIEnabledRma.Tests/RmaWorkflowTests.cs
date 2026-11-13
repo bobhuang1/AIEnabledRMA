@@ -247,7 +247,7 @@ public sealed class RmaWorkflowTests
         var (workflow, rmas, devices, _, _) = Build();
         var device = TestData.Device(serial: "BUSY-1", end: Today.AddMonths(3));
         devices.Devices.Add(device);
-        devices.OpenRequestByDevice[device.Id] = true;
+        devices.ReturnInProgressByDevice[device.Id] = true;
 
         var result = await workflow.StartAsync(
             new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
@@ -329,7 +329,7 @@ public sealed class RmaWorkflowTests
         var covered = TestData.Device(serial: "GOOD-1", end: Today.AddMonths(3));
         var busy = TestData.Device(serial: "BUSY-1", end: Today.AddMonths(3));
         devices.Devices.AddRange([covered, busy]);
-        devices.OpenRequestByDevice[busy.Id] = true;
+        devices.ReturnInProgressByDevice[busy.Id] = true;
 
         var result = await workflow.StartAsync(
             new StartRmaCommand { Devices = [Found(covered), Found(busy)], Today = Today },
@@ -989,6 +989,38 @@ public sealed class RmaWorkflowTests
 
         Assert.Equal(StepOutcome.Completed, result.Outcome);
         Assert.Equal(RmaRequestStatus.AwaitingShipment, rmas.Requests[0].Status);
+    }
+
+    [Fact]
+    public async Task Confirmation_refuses_a_unit_another_return_has_already_committed()
+    {
+        var (wf, rmas, devices, payments, _) = Build();
+        var device = TestData.Device(serial: "TAKEN-1", end: Today.AddMonths(3));
+        devices.Devices.Add(device);
+        payments.PaymentRequired = false;
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
+
+        // Shipping is what moves a covered return to Approved, so this is also the precondition
+        // for confirmation being legal at all. Asserting it keeps a failure about the duplicate
+        // rule from reading like a failure about status.
+        var shipped = await wf.SetShippingAsync(
+            start.RmaId!.Value, Guid.NewGuid(), CancellationToken.None);
+        Assert.Equal(RmaRequestStatus.Approved, shipped.Status);
+
+        // A second return for the unit reached AwaitingShipment while this one was being filled
+        // in. Intake no longer catches that (it would have let anyone hold the unit with an
+        // abandoned draft), so confirmation is where the two meet.
+        devices.ReturnInProgressByDevice[device.Id] = true;
+
+        var result = await wf.ConfirmAsync(start.RmaId!.Value, CancellationToken.None);
+
+        Assert.Equal(StepOutcome.RequiresHumanReview, result.Outcome);
+
+        // Persisted, not just reported: a refusal that left the request Approved would let the
+        // same customer confirm it again.
+        Assert.Equal(RmaRequestStatus.NeedsReview, rmas.Requests[0].Status);
     }
 
     [Fact]

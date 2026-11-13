@@ -212,14 +212,30 @@ public sealed class DeviceRepository(
         return BuildResult(best.Device, today, trimmed, "fuzzy", best.Score);
     }
 
-    public async Task<bool> HasOpenRequestAsync(Guid deviceId, CancellationToken cancellationToken) =>
-        await _db.RmaLines
-            .AnyAsync(
-                l => l.DeviceId == deviceId
-                     && l.RmaRequest!.Status != RmaRequestStatus.Cancelled
-                     && l.RmaRequest.Status != RmaRequestStatus.Closed
-                     && l.RmaRequest.Status != RmaRequestStatus.Rejected,
-                cancellationToken);
+    public async Task<bool> HasReturnInProgressAsync(
+        Guid deviceId,
+        Guid? excludingRequestId,
+        CancellationToken cancellationToken)
+    {
+        // Only the statuses where the unit is on its way to us or already here. Earlier ones are
+        // returns somebody is still filling in, and counting those would let an anonymous visitor
+        // hold any unit whose serial they know by starting a return they never finish.
+        var lines = _db.RmaLines.Where(
+            l => l.DeviceId == deviceId
+                 && (l.RmaRequest!.Status == RmaRequestStatus.AwaitingShipment
+                     || l.RmaRequest.Status == RmaRequestStatus.Received
+                     || l.RmaRequest.Status == RmaRequestStatus.InRepair
+                     || l.RmaRequest.Status == RmaRequestStatus.Repaired));
+
+        // Written as a separate filter rather than `!=` against a nullable id, because an equality
+        // against NULL in SQL matches nothing and would turn every answer into "no" at intake.
+        if (excludingRequestId is { } excluded)
+        {
+            lines = lines.Where(l => l.RmaRequestId != excluded);
+        }
+
+        return await lines.AnyAsync(cancellationToken);
+    }
 
     private static double ScoreDevice(string query, Device device)
     {

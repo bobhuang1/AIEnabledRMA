@@ -85,7 +85,8 @@ public sealed class PolicyTools(
         // value still wins when it explicitly supplies one, so a caller holding fresher
         // information than this database (an in-flight session, say) can override it.
         var hasOpen = hasOpenReturn
-            ?? await devices.HasOpenRequestAsync(lookup.Device.Id, cancellationToken);
+            ?? await devices.HasReturnInProgressAsync(
+                lookup.Device.Id, excludingRequestId: null, cancellationToken);
 
         var decision = eligibility.Evaluate(new RmaPolicyRequest
         {
@@ -93,7 +94,7 @@ public sealed class PolicyTools(
             Today = asOf,
             RegionCode = regionCode,
             ProblemDescription = problemDescription,
-            HasOpenRequestForDevice = hasOpen,
+            HasReturnInProgress = hasOpen,
             ProofOfPurchaseOnFile = proof,
 
             // Never passed. The policy ignores AI confidence while AiIsAdvisoryOnly is true,

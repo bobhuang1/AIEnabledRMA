@@ -168,7 +168,7 @@ public sealed class RmaPolicyEvaluatorTests
         {
             Device = device,
             Today = Today,
-            HasOpenRequestForDevice = true,
+            HasReturnInProgress = true,
         });
 
         // Escalate, not deny: the customer may already be mid-return and deserves an answer.

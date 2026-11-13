@@ -19,7 +19,13 @@ public sealed record RmaPolicyRequest
     /// <summary>Customer- or AI-supplied problem text, used for excluded-cause matching.</summary>
     public string? ProblemDescription { get; init; }
 
-    public bool HasOpenRequestForDevice { get; init; }
+    /// <summary>
+    /// True when another return for this unit has already committed to receiving it. A return
+    /// someone is still filling in does not count — see
+    /// <c>IDeviceRepository.HasReturnInProgressAsync</c> for why an abandoned draft must not hold
+    /// a unit.
+    /// </summary>
+    public bool HasReturnInProgress { get; init; }
 
     /// <summary>Purchase proof the deployment requires. Nullable so "not required" is explicit.</summary>
     public bool? ProofOfPurchaseOnFile { get; init; }
@@ -80,14 +86,14 @@ public sealed class RmaPolicyEvaluator(IOptions<RmaPolicyOptions> options)
             };
         }
 
-        // 3. One open RMA per device. Idempotent: the customer is sent to the existing one.
-        if (request.HasOpenRequestForDevice)
+        // 3. One in-flight RMA per device. Idempotent: the customer is sent to the existing one.
+        if (request.HasReturnInProgress)
         {
             return new RmaEligibilityDecision
             {
                 Eligibility = RmaEligibility.RequiresHumanReview,
                 Reason = RmaDecisionReason.DuplicateOpenRequest,
-                Explanation = "There is already an open return for this item. "
+                Explanation = "A return for this item is already on its way to us. "
                               + "A specialist will confirm its status for you.",
                 MatchedRuleIds = fired,
             };

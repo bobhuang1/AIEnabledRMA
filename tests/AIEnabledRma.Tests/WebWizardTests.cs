@@ -700,6 +700,42 @@ public sealed class WebWizardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_draft_left_behind_does_not_hold_the_unit_for_its_owner()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        // Starting a return only needs the serial, so intake treating a draft as an open return
+        // was a lock anyone could place in two form posts and never lift: the owner then met the
+        // duplicate rule on their own unit. Only a return that has reached AwaitingShipment counts
+        // as in progress now, and confirmation re-checks the unit with its own id excluded.
+        var squatterStep = await StartReturnAsync(CreateClient());
+        Assert.StartsWith("/RmaWizard/Triage/", squatterStep.Path, StringComparison.Ordinal);
+
+        var ownerStep = await StartReturnAsync(CreateClient());
+
+        // The review outcome renders at /RmaWizard/Start, so reaching triage is what says intake
+        // did not refuse. The second assertion keeps the fix honest: the owner gets a return of
+        // their own instead of being handed the squatter's to edit.
+        Assert.StartsWith("/RmaWizard/Triage/", ownerStep.Path, StringComparison.Ordinal);
+        Assert.NotEqual(IdFromPath(squatterStep.Path), IdFromPath(ownerStep.Path));
+
+        async Task<StepOutcome> StartReturnAsync(HttpClient client)
+        {
+            var start = await client.GetAsync("/RmaWizard/Start", ct);
+            return await PostStepAsync(
+                client,
+                "/RmaWizard/Start",
+                TokenOf(await start.Content.ReadAsStringAsync(ct)),
+                [
+                    ("Customer", CustomerEmail),
+                    ("Identifiers", PaidRepairSerial),
+                    ("CurrencyCode", CurrencyCode),
+                ],
+                ct);
+        }
+    }
+
+    [Fact]
     public async Task A_liquid_damage_description_at_the_problems_step_is_refused()
     {
         var ct = TestContext.Current.CancellationToken;

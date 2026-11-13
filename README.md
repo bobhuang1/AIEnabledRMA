@@ -25,7 +25,7 @@ policy outcome:
 | `AX2-0001-0001` | In warranty | Free replacement, no payment step |
 | `AX2-0001-0005` | Expired, in window | **Paid repair — walks the payment step, $69.00** (`AX-200-HS`) |
 | `BX1-0003-0001` | Shipped 1,200 days ago | Refused: outside the return window |
-| `AX2-0001-0002` | Has an open RMA | Human review: duplicate request |
+| `AX2-0001-0002` | Return already on its way | Human review: duplicate request |
 | `NO-SUCH-SERIAL-0000` | Unknown | Refused: not in the catalog |
 
 Use customer `j.smith@example.com` (a seeded account). Typing just `Smyth` exercises the
@@ -54,7 +54,7 @@ ambiguous-identity path; `j.smith@example.com` resolves to exactly one customer.
 | `src/AIEnabledRma.Mcp` | MCP tool server: the same policy and lookups exposed to an agent. |
 | `src/AIEnabledRma.Web` | Customer-facing return wizard (ASP.NET Core MVC). |
 | `tools/DbAdmin` | Migrate, seed, reset, and inspect the database from the command line. |
-| `tests/AIEnabledRma.Tests` | 249 tests, incl. live PostgreSQL sequence and end-to-end wizard suites. |
+| `tests/AIEnabledRma.Tests` | 251 tests, incl. live PostgreSQL sequence and end-to-end wizard suites. |
 
 The Web and MCP hosts call the same `AddRmaData` registration, so the fuzzy-match thresholds an
 agent's lookup tool uses cannot drift apart from the ones the tests exercise. The RAG host
@@ -64,7 +64,13 @@ The customer wizard is the deliberate exception. Its intake calls `LookupExactAs
 accepts only a serial number or alternate identifier (MAC, IMEI) the caller typed in full — no
 fuzzy scoring, no catalog scan. Fuzzy intake was an enumeration oracle: an anonymous visitor
 could walk the catalog a serial prefix at a time, and every hit opened a return against the
-real unit, which then blocked its owner as a duplicate. Agent paths (`lookup_device`,
+real unit, which then blocked its owner as a duplicate.
+
+Intake also counts only returns that have actually committed the unit — `AwaitingShipment`
+through `Repaired`. A return someone is still filling in used to count, which meant anyone who
+knew a serial could hold a unit by starting a return and walking away; the owner was then turned
+away as a duplicate. Confirmation re-checks the unit with its own id excluded, so two returns for
+one unit cannot both reach `AwaitingShipment`. Agent paths (`lookup_device`,
 `check_coverage`, `get_fee_quote`) keep fuzzy resolution, because that caller is supposed to
 already hold partial information.
 

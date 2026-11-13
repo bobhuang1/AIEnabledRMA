@@ -143,7 +143,8 @@ internal sealed class FakeDeviceRepository : IDeviceRepository
 {
     public List<Device> Devices { get; } = [];
 
-    public Dictionary<Guid, bool> OpenRequestByDevice { get; } = [];
+    /// <summary>Device ids whose unit already has a return in progress, as the real query means it.</summary>
+    public Dictionary<Guid, bool> ReturnInProgressByDevice { get; } = [];
 
     public DeviceLookupResult? LookupResult { get; set; }
 
@@ -186,8 +187,11 @@ internal sealed class FakeDeviceRepository : IDeviceRepository
         return Task.FromResult(LookupResult ?? new DeviceLookupResult { MatchScore = 0d });
     }
 
-    public Task<bool> HasOpenRequestAsync(Guid deviceId, CancellationToken cancellationToken = default) =>
-        Task.FromResult(OpenRequestByDevice.TryGetValue(deviceId, out var has) && has);
+    public Task<bool> HasReturnInProgressAsync(
+        Guid deviceId,
+        Guid? excludingRequestId = null,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(ReturnInProgressByDevice.TryGetValue(deviceId, out var inProgress) && inProgress);
 }
 
 internal sealed class FakeCustomerRepository : ICustomerRepository

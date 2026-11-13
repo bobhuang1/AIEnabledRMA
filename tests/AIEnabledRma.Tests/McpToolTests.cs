@@ -80,7 +80,7 @@ public sealed class McpPolicyToolTests
         var clean = TestData.Device(serial: "CLEAN", end: Today.AddMonths(3));
         var busy = TestData.Device(serial: "BUSY", end: Today.AddMonths(3));
         devices.Devices.AddRange([clean, busy]);
-        devices.OpenRequestByDevice[busy.Id] = true;
+        devices.ReturnInProgressByDevice[busy.Id] = true;
 
         devices.LookupResult = new DeviceLookupResult { Device = clean };
         var cleanResponse = await tools.CheckCoverageAsync("CLEAN", "2026-09-29", cancellationToken: TestContext.Current.CancellationToken);

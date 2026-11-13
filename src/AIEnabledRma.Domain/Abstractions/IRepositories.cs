@@ -49,7 +49,22 @@ public interface IDeviceRepository
         DateOnly today,
         CancellationToken cancellationToken);
 
-    Task<bool> HasOpenRequestAsync(Guid deviceId, CancellationToken cancellationToken);
+    /// <summary>
+    /// Whether another return for this unit has reached the point where the unit is expected
+    /// back — AwaitingShipment through Repaired — ignoring <paramref name="excludingRequestId"/>.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately narrower than "not cancelled, closed or rejected". A return in Draft,
+    /// PendingPayment, Approved or NeedsReview is still being filled in, and the wizard is
+    /// anonymous, so counting those let any visitor hold a unit by starting a return and walking
+    /// away from it: the owner then met the duplicate rule instead. Intake asks this with nothing
+    /// excluded, and confirmation asks it again with its own id excluded, because that is the
+    /// moment the request joins the set.
+    /// </remarks>
+    Task<bool> HasReturnInProgressAsync(
+        Guid deviceId,
+        Guid? excludingRequestId,
+        CancellationToken cancellationToken);
 }
 
 public sealed record DeviceSearchQuery

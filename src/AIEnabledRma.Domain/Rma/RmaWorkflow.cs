@@ -200,8 +200,9 @@ public sealed partial class RmaWorkflow(
                 continue;
             }
 
-            var hasOpen = await deviceRepository.HasOpenRequestAsync(
+            var hasReturnInProgress = await deviceRepository.HasReturnInProgressAsync(
                 device.Device.Id,
+                excludingRequestId: null,
                 cancellationToken);
 
             var decision = eligibilityService.Evaluate(new RmaPolicyRequest
@@ -210,7 +211,7 @@ public sealed partial class RmaWorkflow(
                 Today = command.Today,
                 RegionCode = command.RegionCode,
                 ProblemDescription = command.ProblemDescription,
-                HasOpenRequestForDevice = hasOpen,
+                HasReturnInProgress = hasReturnInProgress,
             });
 
             decisions.Add((device, decision));
@@ -469,8 +470,9 @@ public sealed partial class RmaWorkflow(
     /// Three inputs are deliberately not resupplied. The region is not re-applied because a
     /// unit that needed review for its region never became a line at intake, so omitting it
     /// cannot relax anything. The duplicate check is not re-asked because this request's own
-    /// line is open, and the repository would report every in-flight return as a duplicate of
-    /// itself. AI confidence is never passed, because the AI is advisory and may not move
+    /// line is in progress, and the repository would report it as a duplicate of itself; the
+    /// confirmation step asks it again with this id excluded, which is where a second return for
+    /// the same unit is caught. AI confidence is never passed, because the AI is advisory and may not move
     /// eligibility in either direction.
     ///
     /// The description is chosen per line because the two callers have different numbers of
@@ -496,7 +498,7 @@ public sealed partial class RmaWorkflow(
                 Device = device,
                 Today = clock.Today,
                 ProblemDescription = statementOf(line),
-                HasOpenRequestForDevice = false,
+                HasReturnInProgress = false,
             }));
         }
 
@@ -809,6 +811,27 @@ public sealed partial class RmaWorkflow(
         if (RefuseUnless(request, [RmaRequestStatus.Approved], "confirmation") is { } cannotConfirm)
         {
             return cannotConfirm;
+        }
+
+        // The duplicate rule lives here rather than only at intake. Intake used to count any
+        // return that was not cancelled or closed, which meant a visitor could hold a unit by
+        // starting a return and abandoning it — the serial only had to be known once, and the
+        // owner was then told there was already an open return. Confirmation is where this
+        // return joins the in-flight set, so it is where the unit is checked for another one
+        // that got there first.
+        foreach (var deviceId in request.Lines.Select(l => l.DeviceId).Distinct())
+        {
+            if (await deviceRepository.HasReturnInProgressAsync(
+                    deviceId, request.Id, cancellationToken))
+            {
+                return await RefuseAsync(
+                    request,
+                    Denied(
+                        RmaDecisionReason.DuplicateOpenRequest,
+                        "Another return for this item is already on its way to us, so a specialist "
+                        + "will confirm which one to use."),
+                    cancellationToken);
+            }
         }
 
         request.Status = RmaRequestStatus.AwaitingShipment;
