@@ -153,6 +153,57 @@ public sealed class AiProviderRegistrationTests
         Assert.Contains("TimeoutSeconds", Failure(() => Validate(services)).Failures.Single());
     }
 
+    // ---------- payment gateway ----------
+
+    [Fact]
+    public void The_fake_payment_gateway_refuses_to_register_outside_development()
+    {
+        // The bundled gateway accepts every positive amount. Registering it in production would
+        // approve every charge while still looking like a working payment step, so the composition
+        // root has to fail at startup rather than ship one.
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+
+        var error = Assert.Throws<InvalidOperationException>(
+            () => services.AddFakePaymentGateway(configuration, isDevelopment: false));
+
+        Assert.Contains("Development", error.Message);
+        Assert.Contains($"{FakePaymentGatewayOptions.SectionName}:AllowInProduction", error.Message);
+    }
+
+    [Fact]
+    public void The_fake_payment_gateway_registers_in_development_or_when_explicitly_allowed()
+    {
+        var development = new ServiceCollection();
+        development.AddLogging();
+        development.AddFakePaymentGateway(new ConfigurationBuilder().Build(), isDevelopment: true);
+
+        using (var provider = development.BuildServiceProvider())
+        {
+            // Qualified: the test project has its own FakePaymentGateway double, and this asserts
+            // the production one was registered.
+            Assert.IsType<AIEnabledRma.Ai.FakePaymentGateway>(
+                provider.GetRequiredService<IPaymentGateway>());
+        }
+
+        // The escape hatch is for a deployment that genuinely wants the demo gateway, and has to
+        // say so by name rather than inherit it from a missing setting.
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{FakePaymentGatewayOptions.SectionName}:AllowInProduction"] = "true",
+            })
+            .Build();
+
+        var explicitlyAllowed = new ServiceCollection();
+        explicitlyAllowed.AddLogging();
+        explicitlyAllowed.AddFakePaymentGateway(configuration, isDevelopment: false);
+
+        using var allowed = explicitlyAllowed.BuildServiceProvider();
+        Assert.IsType<AIEnabledRma.Ai.FakePaymentGateway>(
+            allowed.GetRequiredService<IPaymentGateway>());
+    }
+
     // ---------- provider selection ----------
 
     [Fact]

@@ -42,16 +42,13 @@ public static class AiServiceCollectionExtensions
 
         services.AddOptions<OpenAiCompatibleOptions>()
             .Bind(configuration.GetSection(OpenAiCompatibleOptions.SectionName))
+            // Missing and malformed are one rule rather than two: a blank BaseUrl is simply not
+            // a URL, and two rules for one field would report the same configuration mistake
+            // twice and send the operator looking for a second fault.
             .Validate(
-                o => !needsBaseUrl || !string.IsNullOrWhiteSpace(o.BaseUrl),
-                "Ai:OpenAiCompatible:BaseUrl is required when Ai:Provider is '"
-                + OpenAiCompatibleProviderName + "'.")
-            .Validate(
-                o => !needsBaseUrl
-                     || string.IsNullOrWhiteSpace(o.BaseUrl)
-                     || IsHttpUrl(o.BaseUrl),
-                "Ai:OpenAiCompatible:BaseUrl must be an absolute URL with an http or https "
-                + "scheme, for example 'https://api.example.com/v1' or "
+                o => !needsBaseUrl || IsHttpUrl(o.BaseUrl),
+                "Ai:OpenAiCompatible:BaseUrl must be set to an absolute URL with an http or "
+                + "https scheme, for example 'https://api.example.com/v1' or "
                 + "'http://localhost:11434/v1'.")
             .Validate(
                 o => o.TimeoutSeconds > 0,
@@ -150,7 +147,7 @@ public static class AiServiceCollectionExtensions
     }
 
     /// <summary>
-    /// True only for an absolute URL that uses http or https.
+    /// True only for a non-blank absolute URL that uses http or https.
     /// </summary>
     /// <remarks>
     /// <see cref="Uri.TryCreate(string, UriKind, out Uri)"/> alone is not enough, because what
@@ -158,9 +155,14 @@ public static class AiServiceCollectionExtensions
     /// <c>file:///v1/chat</c>, so a relative path passed this check and failed only when the
     /// first request was made — and only on machines other than the one it was written on.
     /// Rejecting schemes up front makes the rule the same everywhere.
+    ///
+    /// Blank is handled here too, and the parameter accepts null: the binder leaves an absent
+    /// BaseUrl null despite the property's non-nullable annotation, and trimming that would
+    /// throw out of option validation rather than report a configuration error.
     /// </remarks>
-    private static bool IsHttpUrl(string value) =>
-        Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)
+    private static bool IsHttpUrl(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)
         && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
     private static IReadOnlyList<string> BuildDiagnosticNotes(string provider) => provider switch
