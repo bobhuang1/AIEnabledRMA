@@ -480,25 +480,29 @@ public sealed partial class RmaWorkflow(
     /// </remarks>
     private RmaEligibilityDecision? ReEvaluate(RmaRequest request, Func<RmaLine, string?> statementOf)
     {
-        var decisions = request.Lines
-            .Where(l => l.Device is not null)
-            .Select(l => eligibilityService.Evaluate(new RmaPolicyRequest
-            {
-                Device = l.Device!,
-                Today = clock.Today,
-                ProblemDescription = statementOf(l),
-                HasOpenRequestForDevice = false,
-            }))
-            .ToList();
+        var decisions = new List<RmaEligibilityDecision>();
 
-        if (decisions.Count == 0)
+        foreach (var line in request.Lines)
         {
-            // Nothing to evaluate against. Inventing a decision here would be worse than
-            // leaving intake's on the record.
-            return null;
+            // A line without its device loaded cannot be evaluated, and there is nothing useful
+            // to say about it here: see the remark above about not inventing a decision.
+            if (line.Device is not { } device)
+            {
+                continue;
+            }
+
+            decisions.Add(eligibilityService.Evaluate(new RmaPolicyRequest
+            {
+                Device = device,
+                Today = clock.Today,
+                ProblemDescription = statementOf(line),
+                HasOpenRequestForDevice = false,
+            }));
         }
 
-        return Aggregate(decisions);
+        // Nothing to evaluate against. Inventing a decision here would be worse than leaving
+        // intake's on the record.
+        return decisions.Count == 0 ? null : Aggregate(decisions);
     }
 
     /// <summary>
@@ -531,9 +535,10 @@ public sealed partial class RmaWorkflow(
 
         // A cause the deployment prices as a paid repair (cosmetic wear, say) changes what the
         // customer owes, so the request becomes a paid repair and is priced here, before the
-        // shipping and payment steps can ask for money against a stale zero.
-        if (decision is { Eligibility: RmaEligibility.EligibleForPaidRepair }
-            && request.Kind != RmaRequestKind.PaidRepair)
+        // shipping and payment steps can ask for money against a stale zero. Pricing on every
+        // such decision rather than only on the first is what keeps a fee quoted from an older
+        // price table from surviving an edit to the description it was quoted against.
+        if (decision.Eligibility == RmaEligibility.EligibleForPaidRepair)
         {
             request.Kind = RmaRequestKind.PaidRepair;
             request.EligibilityReason = Truncate(decision.Reason.ToString(), 64);
@@ -558,9 +563,12 @@ public sealed partial class RmaWorkflow(
         RmaEligibilityDecision decision,
         CancellationToken cancellationToken)
     {
-        request.Status = decision.Eligibility == RmaEligibility.NotEligible
-            ? RmaRequestStatus.Rejected
-            : RmaRequestStatus.NeedsReview;
+        // One flag, because the status and the outcome are the same decision told twice: a rule
+        // that says "no" rejects the return, and a rule that says "a person decides" parks it
+        // for review. Deriving both from one expression keeps them from disagreeing.
+        var rejected = decision.Eligibility == RmaEligibility.NotEligible;
+
+        request.Status = rejected ? RmaRequestStatus.Rejected : RmaRequestStatus.NeedsReview;
 
         request.EligibilityReason = Truncate(decision.Reason.ToString(), 64);
 
@@ -580,9 +588,7 @@ public sealed partial class RmaWorkflow(
 
         return new StepResult
         {
-            Outcome = decision.Eligibility == RmaEligibility.NotEligible
-                ? StepOutcome.NotEligible
-                : StepOutcome.RequiresHumanReview,
+            Outcome = rejected ? StepOutcome.NotEligible : StepOutcome.RequiresHumanReview,
             RmaId = request.Id,
             RmaNumber = request.RmaNumber,
             Message = decision.Explanation,
@@ -823,16 +829,17 @@ public sealed partial class RmaWorkflow(
     private Task<RmaRequest?> LoadAsync(Guid rmaId, CancellationToken cancellationToken) =>
         rmaRepository.GetByIdAsync(rmaId, cancellationToken);
 
-    private static RmaEligibilityDecision Aggregate(IEnumerable<RmaEligibilityDecision> decisions)
-    {
-        var list = decisions.ToList();
-        if (list.Count == 0)
-        {
-            return Denied(RmaDecisionReason.DeviceNotFound, "No items were supplied.");
-        }
-
-        // Worst-first ordering. This is the only place outcome precedence is defined.
-        return list
+    /// <summary>
+    /// The one decision that governs a batch: worst first, then the one that fired the most rules.
+    /// </summary>
+    /// <remarks>
+    /// Callers always have at least one decision — intake refuses an empty device list before
+    /// reaching here, and re-evaluation returns null rather than aggregating nothing — so this
+    /// does not invent a decision for an empty batch. That case used to be handled here as well
+    /// as in the two callers, which is three places to keep one rule true.
+    /// </remarks>
+    private static RmaEligibilityDecision Aggregate(IEnumerable<RmaEligibilityDecision> decisions) =>
+        decisions
             .OrderBy(d => d.Eligibility switch
             {
                 RmaEligibility.RequiresHumanReview => 0,
@@ -843,7 +850,6 @@ public sealed partial class RmaWorkflow(
             })
             .ThenByDescending(d => d.MatchedRuleIds.Count)
             .First();
-    }
 
     private static RmaEligibilityDecision Denied(RmaDecisionReason reason, string explanation) => new()
     {
