@@ -160,11 +160,6 @@ public sealed class DeviceRepository(
 
         // Fuzzy from here on. Trigram similarity is computed in the database; the in-memory
         // scorer then re-ranks the shortlist so a coincidental trigram hit cannot win.
-        if (!_options.AllowFuzzyMatch)
-        {
-            return exact;
-        }
-
         var trimmed = identifier.Trim();
         var needle = trimmed.ToUpperInvariant();
         var unpunctuated = trimmed.Replace(":", string.Empty).Replace("-", string.Empty);
@@ -261,7 +256,9 @@ public sealed class DeviceLookupOptions
 {
     public const string SectionName = "DeviceLookup";
 
-    public bool AllowFuzzyMatch { get; set; } = true;
+    // Whether fuzzy matching happens is a choice of method - LookupExactAsync or LookupAsync -
+    // not a setting. A flag here could only turn LookupAsync into LookupExactAsync at runtime,
+    // which silently degrades every agent tool while leaving the code that calls it unchanged.
 
     /// <summary>Minimum in-memory score for a fuzzy hit to be accepted.</summary>
     public double MinimumMatchScore { get; set; } = 0.72;
