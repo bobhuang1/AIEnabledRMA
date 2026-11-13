@@ -7,6 +7,17 @@
     var review = Model.Outcome == StepOutcome.RequiresHumanReview;
     var invalid = Model.Outcome == StepOutcome.InvalidTransition;
     var refused = Model.Outcome == StepOutcome.NotEligible;
+
+    // Where the customer can actually continue. Every step refuses a request that has already
+    // passed it, so the fixed link to triage sent a return that was at payment or approved
+    // straight back into another refusal. Null means there is no step left to open.
+    var resumeAction = Model.Status switch
+    {
+        RmaRequestStatus.Draft => "Triage",
+        RmaRequestStatus.PendingPayment => "Payment",
+        RmaRequestStatus.Approved => "Confirm",
+        _ => null,
+    };
 }
 
 @if (completed)
@@ -148,9 +159,10 @@ else
 <div class="actions">
     @* A refused return has nothing left to continue, so offering the link would send the
        customer back into a step the policy has already stopped. *@
-    @if (!completed && !resolved && !refused && !string.IsNullOrEmpty(Model.RmaNumber) && Model.RmaId != Guid.Empty)
+    @if (!completed && !resolved && !refused && resumeAction is not null
+        && !string.IsNullOrEmpty(Model.RmaNumber) && Model.RmaId != Guid.Empty)
     {
-        <a class="btn" asp-controller="RmaWizard" asp-action="Triage" asp-route-id="@Model.RmaId">
+        <a class="btn" asp-controller="RmaWizard" asp-action="@resumeAction" asp-route-id="@Model.RmaId">
             Continue this return
         </a>
     }

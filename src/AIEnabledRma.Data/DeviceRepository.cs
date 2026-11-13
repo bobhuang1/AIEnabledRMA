@@ -34,9 +34,11 @@ public sealed class DeviceRepository(
     {
         var normalized = identifier.Trim().ToUpperInvariant();
 
-        // A MAC may arrive with or without separators, and in any case, so both the
-        // normalized and unpunctuated forms are compared.
-        var mac = identifier.Trim().Replace(":", string.Empty).Replace("-", string.Empty);
+        // A MAC may arrive with or without separators, and in any case, so both the normalized and
+        // unpunctuated forms are compared. Upper-cased like every other form below: the column is
+        // compared with ToUpper(), so a lower-case MAC would otherwise never match.
+        var mac = identifier.Trim().Replace(":", string.Empty).Replace("-", string.Empty)
+            .ToUpperInvariant();
 
         var byIdentifier = _db.Devices
             .Include(d => d.Product)
@@ -162,7 +164,8 @@ public sealed class DeviceRepository(
         // scorer then re-ranks the shortlist so a coincidental trigram hit cannot win.
         var trimmed = identifier.Trim();
         var needle = trimmed.ToUpperInvariant();
-        var unpunctuated = trimmed.Replace(":", string.Empty).Replace("-", string.Empty);
+        var unpunctuated = trimmed.Replace(":", string.Empty).Replace("-", string.Empty)
+            .ToUpperInvariant();
 
         var candidates = await _db.Devices
             .Include(d => d.Product)

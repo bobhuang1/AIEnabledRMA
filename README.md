@@ -54,7 +54,7 @@ ambiguous-identity path; `j.smith@example.com` resolves to exactly one customer.
 | `src/AIEnabledRma.Mcp` | MCP tool server: the same policy and lookups exposed to an agent. |
 | `src/AIEnabledRma.Web` | Customer-facing return wizard (ASP.NET Core MVC). |
 | `tools/DbAdmin` | Migrate, seed, reset, and inspect the database from the command line. |
-| `tests/AIEnabledRma.Tests` | 237 tests, incl. live PostgreSQL sequence and end-to-end wizard suites. |
+| `tests/AIEnabledRma.Tests` | 248 tests, incl. live PostgreSQL sequence and end-to-end wizard suites. |
 
 The Web and MCP hosts call the same `AddRmaData` registration, so the fuzzy-match thresholds an
 agent's lookup tool uses cannot drift apart from the ones the tests exercise. The RAG host

@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text.RegularExpressions;
 using AIEnabledRma.Ai;
 using AIEnabledRma.Data;
@@ -11,7 +11,6 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using Npgsql;
 
 namespace AIEnabledRma.Tests;
 
@@ -33,11 +32,6 @@ namespace AIEnabledRma.Tests;
 /// </remarks>
 public sealed class WebWizardTests : IAsyncLifetime
 {
-    private const string AdminConnectionStringVariable = "RMA_TEST_CONNECTION";
-
-    private const string DefaultAdminConnectionString =
-        "Host=localhost;Port=5432;Database=postgres;Username=rmauser;Password=placeholder";
-
     /// <summary>A serial the seeder creates and that no other test in this class consumes.</summary>
     private const string EligibleSerial = "AX2-0001-0001";
 
@@ -45,10 +39,11 @@ public sealed class WebWizardTests : IAsyncLifetime
     private const string IneligibleSerial = "NO-SUCH-SERIAL-0000";
 
     /// <summary>
-    /// Seeded with its warranty expired two years before <see cref="SeedAnchor"/> and shipped
-    /// 500 days before it, so at the anchored date it is out of warranty but still inside the
-    /// 730-day return window: the wizard offers a paid repair, and that is what walks the
-    /// payment step.
+    /// Seeded with its warranty over 90 days before <see cref="SeedAnchor"/> and shipped 365 days
+    /// before it, so at the anchored date it is out of warranty but well inside the 730-day return
+    /// window: the wizard offers a paid repair, and that is what walks the payment step. These are
+    /// the seeder's offsets, restated here so a change to them has to be a deliberate change to
+    /// this test as well.
     /// </summary>
     private const string PaidRepairSerial = "AX2-0001-0005";
 
@@ -69,57 +64,23 @@ public sealed class WebWizardTests : IAsyncLifetime
     private const string CurrencyCode = "USD";
 
     /// <summary>
-    /// The fixture's reference date. The seeder writes every warranty and shipping date as an
-    /// offset from it, and the host clock is pinned to it, so which devices are in warranty, in
-    /// grace, or inside the return window does not depend on when the suite runs.
+    /// The fixture's reference date: today, read once, then pinned into the host clock.
     /// </summary>
-    private static readonly DateOnly SeedAnchor = new(2026, 3, 1);
+    /// <remarks>
+    /// The seeder writes every warranty and shipping date as an offset from it and the host's
+    /// clock is frozen at it, so the data and the wizard agree whatever the calendar says. A
+    /// literal date was the wrong kind of stability: it held the fixture still relative to a day
+    /// that keeps receding, and once the suite's own run date passed the window the fixture
+    /// described, the paid-repair test failed for a reason unrelated to the code under test.
+    /// </remarks>
+    private static readonly DateOnly SeedAnchor = DateOnly.FromDateTime(DateTime.UtcNow);
 
-    private string _databaseName = string.Empty;
-    private string _adminConnectionString = string.Empty;
-    private string _applicationConnectionString = string.Empty;
+    private readonly LiveDatabase _database = new("rma_web_test");
     private WebApplicationFactory<global::WebAppAnchor>? _factory;
 
     public async ValueTask InitializeAsync()
     {
-        _adminConnectionString = new NpgsqlConnectionStringBuilder(
-            Environment.GetEnvironmentVariable(AdminConnectionStringVariable)
-            ?? DefaultAdminConnectionString)
-        {
-            // Provisioning creates and drops a database per test. On a workstation whose
-            // PostgreSQL data directory is a bind-mounted volume — the docker-compose setup
-            // this repository documents — CREATE DATABASE spends tens of seconds on fsync
-            // alone, and Npgsql's 30-second default command timeout cancels it mid-copy. That
-            // surfaces as "Exception while reading from stream" in InitializeAsync, which reads
-            // like a broken wizard rather than a slow disk.
-            CommandTimeout = 120,
-        }.ConnectionString;
-
-        try
-        {
-            await using var probe = new NpgsqlConnection(_adminConnectionString);
-            await probe.OpenAsync();
-        }
-        catch (Exception ex)
-        {
-            Assert.Skip($"PostgreSQL is not reachable: {ex.GetType().Name}: {ex.Message}");
-        }
-
-        _databaseName = $"rma_web_test_{Guid.NewGuid():N}";
-        _applicationConnectionString = new NpgsqlConnectionStringBuilder(_adminConnectionString)
-        {
-            Database = _databaseName,
-        }.ConnectionString;
-
-        await using (var create = new NpgsqlConnection(_adminConnectionString))
-        {
-            await create.OpenAsync();
-
-            // The name comes from a GUID above, so there is nothing to inject here.
-            await using var command = create.CreateCommand();
-            command.CommandText = $"CREATE DATABASE \"{_databaseName}\"";
-            await command.ExecuteNonQueryAsync();
-        }
+        await _database.InitializeAsync();
 
         // Migrate and seed before the host starts, exactly as the deployment runbook does, so
         // the test exercises the same starting state an operator would produce.
@@ -129,7 +90,7 @@ public sealed class WebWizardTests : IAsyncLifetime
             await DemoDataSeeder.SeedAsync(db, TestContext.Current.CancellationToken, SeedAnchor);
         }
 
-        _factory = new WizardFactory(_applicationConnectionString, SeedAnchor);
+        _factory = new WizardFactory(_database.ConnectionString, SeedAnchor);
     }
 
     public async ValueTask DisposeAsync()
@@ -139,27 +100,7 @@ public sealed class WebWizardTests : IAsyncLifetime
             await _factory.DisposeAsync();
         }
 
-        if (_databaseName.Length == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            // The host's pooled connections would keep the database busy and make the drop fail.
-            NpgsqlConnection.ClearAllPools();
-
-            await using var drop = new NpgsqlConnection(_adminConnectionString);
-            await drop.OpenAsync();
-
-            await using var command = drop.CreateCommand();
-            command.CommandText = $"DROP DATABASE IF EXISTS \"{_databaseName}\" WITH (FORCE)";
-            await command.ExecuteNonQueryAsync();
-        }
-        catch (NpgsqlException)
-        {
-            // A leaked throwaway database is untidy but must never fail an otherwise green run.
-        }
+        await _database.DisposeAsync();
     }
 
     [Fact]
@@ -609,6 +550,55 @@ public sealed class WebWizardTests : IAsyncLifetime
         Assert.Null(request.PaymentTransactionId);
     }
 
+    [Theory]
+    [InlineData(RmaRequestStatus.Approved, "Payment", "Confirm")]
+    [InlineData(RmaRequestStatus.PendingPayment, "Confirm", "Payment")]
+    public async Task An_out_of_order_step_links_to_where_the_return_actually_is(
+        RmaRequestStatus status,
+        string postedStep,
+        string expectedStep)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        var start = await client.GetAsync("/RmaWizard/Start", ct);
+        var startStep = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            TokenOf(await start.Content.ReadAsStringAsync(ct)),
+            [("Customer", CustomerEmail), ("Identifiers", EligibleSerial)],
+            ct);
+
+        var rmaId = IdFromPath(startStep.Path);
+
+        // Put the return where a customer with two tabs open would have it: the guards then
+        // refuse the stale step, and the page it shows must offer the step the return is at.
+        await using (var db = CreateContext())
+        {
+            var request = await db.RmaRequests.SingleAsync(r => r.Id == rmaId, ct);
+            request.Status = status;
+            await db.SaveChangesAsync(ct);
+        }
+
+        var stalePage = await client.GetAsync($"/RmaWizard/{postedStep}/{rmaId}", ct);
+        var refused = await PostStepAsync(
+            client,
+            $"/RmaWizard/{postedStep}/{rmaId}",
+            TokenOf(await stalePage.Content.ReadAsStringAsync(ct)),
+            postedStep == "Payment"
+                ? [("RmaId", rmaId.ToString()), ("PaymentMethodToken", "tok_test")]
+                : [("RmaId", rmaId.ToString())],
+            ct);
+
+        var html = await refused.Page.Content.ReadAsStringAsync(ct);
+        Assert.Contains("That step is out of order", html, StringComparison.Ordinal);
+
+        // The old page offered triage for every refusal. A return past Draft refuses triage too,
+        // so the only way out of that loop was to abandon the return and start again.
+        Assert.Contains($"/RmaWizard/{expectedStep}/{rmaId}", html, StringComparison.Ordinal);
+        Assert.DoesNotContain($"/RmaWizard/Triage/{rmaId}", html, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_partial_serial_is_not_resolved_into_a_return_line()
     {
@@ -723,6 +713,11 @@ public sealed class WebWizardTests : IAsyncLifetime
         var request = await db.RmaRequests.SingleAsync(r => r.Id == rmaId, ct);
 
         Assert.Equal(RmaRequestStatus.Rejected, request.Status);
+        Assert.Equal(nameof(RmaDecisionReason.ExcludedCause), request.EligibilityReason);
+
+        // Both decisions are on the record: intake cleared the unit and triage cleared the
+        // statement, so the trace has to show the rule that fired here rather than replace them.
+        Assert.Contains("cause.liquid", request.PolicyRuleTrace, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -747,6 +742,33 @@ public sealed class WebWizardTests : IAsyncLifetime
         var exact = await devices.LookupExactAsync("AX2-0001", today, ct);
 
         Assert.Null(exact.Device);
+    }
+
+    [Theory]
+    [InlineData("ax2-0001-0001")]
+    [InlineData("a4:c1:f2:e3:00:01")]
+    public async Task An_exact_identifier_resolves_whatever_its_case_or_separator(string identifier)
+    {
+        // Exact is not literal. A serial in lower case, and the same unit's MAC with colons, are
+        // both things a customer can read off the label and type in full; refusing them would
+        // make the exact-only rule a usability trap rather than an anti-enumeration measure.
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        var start = await client.GetAsync("/RmaWizard/Start", ct);
+
+        var startStep = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            TokenOf(await start.Content.ReadAsStringAsync(ct)),
+            [
+                ("Customer", CustomerEmail),
+                ("Identifiers", identifier),
+                ("CurrencyCode", CurrencyCode),
+            ],
+            ct);
+
+        Assert.StartsWith("/RmaWizard/Triage/", startStep.Path, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -917,6 +939,16 @@ public sealed class WebWizardTests : IAsyncLifetime
             ct);
 
         Assert.Equal(HttpStatusCode.TooManyRequests, chooseCustomer.StatusCode);
+
+        // Triage is the step that spends a model call, so it shares the same bucket rather than
+        // getting its own. The limiter runs before the action, so the request id does not have to
+        // exist for the refusal to happen.
+        var triage = await client.PostAsync(
+            $"/RmaWizard/Triage/{Guid.NewGuid()}",
+            new FormUrlEncodedContent(values),
+            ct);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, triage.StatusCode);
     }
 
     private HttpClient CreateClient()
@@ -1034,16 +1066,7 @@ public sealed class WebWizardTests : IAsyncLifetime
         return device.Id;
     }
 
-    private RmaDbContext CreateContext()
-    {
-        var options = new DbContextOptionsBuilder<RmaDbContext>()
-            .UseNpgsql(_applicationConnectionString, npgsql => npgsql.MigrationsAssembly(
-                typeof(RmaDbContext).Assembly.FullName))
-            .UseSnakeCaseNamingConvention()
-            .Options;
-
-        return new RmaDbContext(options);
-    }
+    private RmaDbContext CreateContext() => _database.CreateContext();
 
     /// <summary>
     /// The anti-forgery tag is the one place the markup is inspected, because a post without a
