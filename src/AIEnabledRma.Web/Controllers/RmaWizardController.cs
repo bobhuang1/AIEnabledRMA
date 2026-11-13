@@ -340,6 +340,7 @@ public sealed class RmaWizardController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [EnableRateLimiting(RateLimitPolicies.WizardWrites)]
     public async Task<IActionResult> Problems(ProblemsForm form, CancellationToken cancellationToken)
     {
         // Only lines belonging to this return may be written. Without this check the posted
@@ -421,6 +422,7 @@ public sealed class RmaWizardController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [EnableRateLimiting(RateLimitPolicies.WizardWrites)]
     public async Task<IActionResult> Shipping(ShippingForm form, CancellationToken cancellationToken)
     {
         if (!ModelState.IsValid)
@@ -490,6 +492,7 @@ public sealed class RmaWizardController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [EnableRateLimiting(RateLimitPolicies.WizardWrites)]
     public async Task<IActionResult> Payment(PaymentForm form, CancellationToken cancellationToken)
     {
         var result = await workflow.AuthorizePaymentAsync(
@@ -533,6 +536,7 @@ public sealed class RmaWizardController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [EnableRateLimiting(RateLimitPolicies.WizardWrites)]
     public async Task<IActionResult> Confirm(ConfirmForm form, CancellationToken cancellationToken)
     {
         var result = await workflow.ConfirmAsync(form.RmaId, cancellationToken);

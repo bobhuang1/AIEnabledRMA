@@ -12,9 +12,21 @@ namespace AIEnabledRma.Web;
 public static class RateLimitPolicies
 {
     /// <summary>
-    /// The anonymous wizard writes: <c>POST /RmaWizard/Start</c>,
-    /// <c>POST /RmaWizard/ChooseCustomer</c> and <c>POST /RmaWizard/Triage</c>. They share one
-    /// bucket, so a caller cannot multiply its allowance by walking from step to step.
+    /// Every anonymous wizard write: the POST actions for Start, ChooseCustomer, Triage,
+    /// Problems, Shipping, Payment and Confirm. They share one bucket, so a caller cannot
+    /// multiply its allowance by walking from step to step.
     /// </summary>
+    /// <remarks>
+    /// All seven are limited, and none is exempt. Each creates or mutates a return, so an
+    /// unlimited one is a write amplifier whether or not it costs a model call: Problems
+    /// rewrites the descriptions the policy is decided on, Shipping and Payment are the steps
+    /// that quote and capture money, and Confirm is the commit. Limiting only Start and Triage
+    /// left a caller with one successful Start free to hammer the rest as fast as the socket
+    /// allowed.
+    ///
+    /// The budget is per client address and shared across the steps, which is the point: a
+    /// customer walks the wizard in seven posts and stays far inside 30 a minute, including a
+    /// retry after a declined card, while a script gets one burst and then nothing.
+    /// </remarks>
     public const string WizardWrites = "wizard-writes";
 }

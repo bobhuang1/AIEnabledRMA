@@ -995,6 +995,28 @@ public sealed class WebWizardTests : IAsyncLifetime
             ct);
 
         Assert.Equal(HttpStatusCode.TooManyRequests, triage.StatusCode);
+
+        // Every later write shares the bucket too. Limiting only Start and Triage left a caller
+        // with one successful Start free to hammer these as fast as the socket allowed, and they
+        // are the steps that rewrite the descriptions policy is decided on, quote and capture
+        // money, and commit the return.
+        string[] laterSteps =
+        [
+            "/RmaWizard/Problems",
+            "/RmaWizard/Shipping",
+            "/RmaWizard/Payment",
+            "/RmaWizard/Confirm",
+        ];
+
+        foreach (var laterStep in laterSteps)
+        {
+            var refused = await client.PostAsync(
+                laterStep,
+                new FormUrlEncodedContent(values),
+                ct);
+
+            Assert.Equal(HttpStatusCode.TooManyRequests, refused.StatusCode);
+        }
     }
 
     private HttpClient CreateClient()
