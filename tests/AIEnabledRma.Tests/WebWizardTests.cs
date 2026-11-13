@@ -638,6 +638,53 @@ public sealed class WebWizardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_refused_step_on_a_review_pending_return_offers_no_step_to_continue()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        var start = await client.GetAsync("/RmaWizard/Start", ct);
+        var startStep = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            TokenOf(await start.Content.ReadAsStringAsync(ct)),
+            [("Customer", CustomerEmail), ("Identifiers", EligibleSerial)],
+            ct);
+
+        var rmaId = IdFromPath(startStep.Path);
+
+        // A specialist owns this return, so the only page it can show is the outcome. This is the
+        // case the intake-stop test cannot reach: that refusal writes no request, so its id is
+        // empty and the button is hidden for the wrong reason. Here the id is real, and what has
+        // to hold the button back is the status itself.
+        await using (var db = CreateContext())
+        {
+            var request = await db.RmaRequests.SingleAsync(r => r.Id == rmaId, ct);
+            request.Status = RmaRequestStatus.NeedsReview;
+            await db.SaveChangesAsync(ct);
+        }
+
+        var stalePage = await client.GetAsync($"/RmaWizard/Confirm/{rmaId}", ct);
+        var refused = await PostStepAsync(
+            client,
+            $"/RmaWizard/Confirm/{rmaId}",
+            TokenOf(await stalePage.Content.ReadAsStringAsync(ct)),
+            [("RmaId", rmaId.ToString())],
+            ct);
+
+        var html = await refused.Page.Content.ReadAsStringAsync(ct);
+        Assert.Contains("That step is out of order", html, StringComparison.Ordinal);
+
+        // Triage is Draft-only, and Payment and Confirm refuse this status too, so every link the
+        // page could offer would land on a second refusal. The customer starts again instead.
+        Assert.DoesNotContain("Continue this return", html, StringComparison.Ordinal);
+        Assert.DoesNotContain($"/RmaWizard/Triage/{rmaId}", html, StringComparison.Ordinal);
+        Assert.DoesNotContain($"/RmaWizard/Payment/{rmaId}", html, StringComparison.Ordinal);
+        Assert.DoesNotContain($"/RmaWizard/Confirm/{rmaId}", html, StringComparison.Ordinal);
+        Assert.Contains("Start another return", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_partial_serial_is_not_resolved_into_a_return_line()
     {
         var ct = TestContext.Current.CancellationToken;
