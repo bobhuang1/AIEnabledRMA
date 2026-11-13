@@ -136,17 +136,17 @@ public sealed class DeviceRepository(
         var device = await GetBySerialAsync(trimmed, cancellationToken);
         if (device is not null)
         {
-            return BuildResult(device, today, "serial", 1d);
+            return BuildResult(device, today, trimmed, "serial", 1d);
         }
 
         // Then exact alternate-identifier match (MAC, IMEI, host serial).
         var alternates = await FindByIdentifierAsync(trimmed, cancellationToken);
         if (alternates.Count > 0)
         {
-            return BuildResult(alternates[0], today, "alternate-identifier", 0.98d);
+            return BuildResult(alternates[0], today, trimmed, "alternate-identifier", 0.98d);
         }
 
-        return new DeviceLookupResult { MatchScore = 0d };
+        return new DeviceLookupResult { MatchScore = 0d, Identifier = trimmed };
     }
 
     public async Task<DeviceLookupResult> LookupAsync(
@@ -206,10 +206,10 @@ public sealed class DeviceRepository(
 
         if (best.Device is null || best.Score < _options.MinimumMatchScore)
         {
-            return new DeviceLookupResult { MatchScore = best.Score };
+            return new DeviceLookupResult { MatchScore = best.Score, Identifier = trimmed };
         }
 
-        return BuildResult(best.Device, today, "fuzzy", best.Score);
+        return BuildResult(best.Device, today, trimmed, "fuzzy", best.Score);
     }
 
     public async Task<bool> HasOpenRequestAsync(Guid deviceId, CancellationToken cancellationToken) =>
@@ -234,6 +234,7 @@ public sealed class DeviceRepository(
     private static DeviceLookupResult BuildResult(
         Device device,
         DateOnly today,
+        string identifier,
         string matchedOn,
         double score)
     {
@@ -247,6 +248,7 @@ public sealed class DeviceRepository(
         return new DeviceLookupResult
         {
             Device = device,
+            Identifier = identifier,
             GoverningWarranty = governing,
             IsInWarranty = governing is not null,
             MatchedOn = matchedOn,

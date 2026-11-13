@@ -628,6 +628,14 @@ public sealed class WebWizardTests : IAsyncLifetime
         var html = await startStep.Page.Content.ReadAsStringAsync(ct);
         Assert.Contains("cannot take this return", html, StringComparison.OrdinalIgnoreCase);
 
+        // A mistyped serial is a lookup failure, not a policy refusal, and the page has to read
+        // that way: it names what was typed and tells the customer to check it. Wording that
+        // says the item is not in the catalogue leaves them believing the return was judged and
+        // turned down, with nothing to act on.
+        Assert.Contains("could not find an item with the identifier", html, StringComparison.Ordinal);
+        Assert.Contains("AX2-0001", html, StringComparison.Ordinal);
+        Assert.Contains("Check what you typed", html, StringComparison.Ordinal);
+
         Assert.Equal(requestsBefore, await db.RmaRequests.CountAsync(ct));
         Assert.Equal(linesBefore, await db.RmaLines.CountAsync(ct));
 

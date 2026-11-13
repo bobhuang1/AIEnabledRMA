@@ -374,7 +374,16 @@ public sealed class RmaWorkflowTests
         var result = await workflow.StartAsync(
             new StartRmaCommand
             {
-                Devices = [Found(covered), new DeviceLookupResult { MatchScore = 0d, MatchedOn = "serial" }],
+                Devices =
+                [
+                    Found(covered),
+                    new DeviceLookupResult
+                    {
+                        MatchScore = 0d,
+                        Identifier = "AX2-0001-00O1",
+                        MatchedOn = "serial",
+                    },
+                ],
                 Today = Today,
             },
             CancellationToken.None);
@@ -386,6 +395,14 @@ public sealed class RmaWorkflowTests
         Assert.Equal(RmaDecisionReason.DeviceNotFound, excluded.Reason);
         Assert.Equal(Guid.Empty, excluded.DeviceId);
         Assert.Equal("serial", excluded.MatchedOn);
+
+        // A miss is a lookup failure, not a policy decision, and the message has to say so and
+        // give the customer something to do about it. It names the identifier back so they can
+        // see which line was wrong — with exact matching, a single wrong character is the whole
+        // explanation for the miss.
+        Assert.Contains("AX2-0001-00O1", excluded.Explanation, StringComparison.Ordinal);
+        Assert.Contains("Check what you typed", excluded.Explanation, StringComparison.Ordinal);
+        Assert.DoesNotContain("product catalog", excluded.Explanation, StringComparison.Ordinal);
     }
 
     [Fact]

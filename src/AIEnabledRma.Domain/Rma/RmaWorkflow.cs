@@ -183,9 +183,20 @@ public sealed partial class RmaWorkflow(
         {
             if (device.Device is null)
             {
+                // Nothing was looked up, so nothing was refused: an identifier that resolves to
+                // no unit is the customer's typo, not the company turning the return down. "Not
+                // in our product catalog" read like a policy answer and offered no next step,
+                // and it matters more now that intake matches exact identifiers only — a missing
+                // character is the likeliest reason for a miss. Units we do know still get their
+                // policy explanation, which is the only place catalogue wording belongs.
+                var typed = string.IsNullOrWhiteSpace(device.Identifier)
+                    ? "that identifier"
+                    : $"'{Truncate(device.Identifier.Trim(), 60)}'";
+
                 decisions.Add((device, Denied(
                     RmaDecisionReason.DeviceNotFound,
-                    "That item is not in our product catalog.")));
+                    $"We could not find an item with the identifier {typed}. "
+                    + "Check what you typed and try again.")));
                 continue;
             }
 

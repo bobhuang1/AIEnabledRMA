@@ -77,6 +77,13 @@ public sealed record DeviceLookupResult
 
     public bool IsInWarranty { get; init; }
 
+    /// <summary>
+    /// The identifier the caller supplied, trimmed, as typed. Carried on a miss as well as a
+    /// hit, because a refusal can only tell the customer to check their typing if it can name
+    /// what they typed.
+    /// </summary>
+    public string? Identifier { get; init; }
+
     public string? MatchedOn { get; init; }
 
     public double MatchScore { get; init; }
