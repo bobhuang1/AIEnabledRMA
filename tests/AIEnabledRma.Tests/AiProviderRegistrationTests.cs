@@ -86,10 +86,15 @@ public sealed class AiProviderRegistrationTests
     [Theory]
     [InlineData("not a url")]
 
-    // On Linux this parses as the absolute URI file:///v1/chat, so Uri.TryCreate on its own
-    // accepted it and the misconfiguration surfaced as a failed request instead of a refusal.
+    // On Linux "/v1/chat" parses as the absolute URI file:///v1/chat, and "//api.example.com/v1"
+    // parses as file://api.example.com/v1 with a real host. Uri.TryCreate on its own accepted
+    // both, so the misconfiguration surfaced as a failed request instead of a refusal.
     [InlineData("/v1/chat")]
+    [InlineData("//api.example.com/v1")]
     [InlineData("api.example.com/v1")]
+
+    // Absolute in syntax but lacking an authority, so there is nothing to connect to.
+    [InlineData("http://")]
 
     // Absolute, but not something HttpClient will talk to. The scheme is the rule, not just
     // absoluteness.
