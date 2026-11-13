@@ -74,7 +74,8 @@ switch (command)
         break;
 
     case "seed":
-        await SchemaBootstrapper.InitializeAsync(db, DemoDataSeeder.SeedAsync);
+        await SchemaBootstrapper.InitializeAsync(
+            db, (context, token) => DemoDataSeeder.SeedAsync(context, token));
         await PrintStatsAsync(db);
         break;
 
@@ -97,7 +98,7 @@ switch (command)
 
         await db.Database.ExecuteSqlRawAsync("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
         await db.Database.MigrateAsync();
-        await DemoDataSeeder.SeedAsync(db);
+        await DemoDataSeeder.SeedAsync(db, CancellationToken.None);
 
         // A dropped schema takes the sequence with it, and seeding writes RMA-2026-00001, so
         // the counter has to be put back in step or the first new return collides.

@@ -11,20 +11,19 @@ namespace AIEnabledRma.Data;
 /// </summary>
 public static class DemoDataSeeder
 {
-    public static Task SeedAsync(RmaDbContext db, CancellationToken cancellationToken) =>
-        DemoDataSeederCore.SeedAsync(db, cancellationToken, anchor: null);
-
     /// <summary>
-    /// Seeds with a caller-chosen reference date, so a test can pin every window in the fixture
-    /// instead of depending on the calendar.
+    /// Seeds the demo catalogue.
     /// </summary>
+    /// <param name="anchor">
+    /// The date every warranty and shipping window is measured from; null means today, which is
+    /// what a deployment wants. A test passes a fixed date and pins the host clock to the same
+    /// one, so its fixture never drifts with the calendar.
+    /// </param>
     public static Task SeedAsync(
         RmaDbContext db,
         CancellationToken cancellationToken,
-        DateOnly anchor) =>
+        DateOnly? anchor = null) =>
         DemoDataSeederCore.SeedAsync(db, cancellationToken, anchor);
-
-    public static Task SeedAsync(RmaDbContext db) => SeedAsync(db, CancellationToken.None);
 }
 
 internal static class DemoDataSeederCore
@@ -44,6 +43,25 @@ internal static class DemoDataSeederCore
     private const int WarrantyDaysLeft = 45;
     private const int GraceDaysPastEnd = 10;
     private const int DaysPastGrace = 60;
+
+    /// <summary>
+    /// How long ago the paid-repair unit shipped.
+    /// </summary>
+    /// <remarks>
+    /// This offset is the one that decides how long the demo keeps offering the paid-repair
+    /// path, because the return window is measured from the ship date and is 730 days wide. At
+    /// 500 days the fixture had 230 days of headroom and aged out within eight months of seeding,
+    /// which is what turned the documented outcome into a refusal. A year of drift now leaves the
+    /// unit inside the window with 365 days to spare.
+    /// </remarks>
+    private const int PaidRepairDaysSinceShip = 365;
+
+    /// <summary>
+    /// How long the paid-repair unit's warranty has been over: past the 30-day grace period, so
+    /// it is a paid repair rather than a covered return, and after the ship date, so its own
+    /// warranty does not claim to have ended before the unit shipped.
+    /// </summary>
+    private const int PaidRepairDaysSinceWarrantyEnd = 90;
 
     /// <summary>
     /// Seeds every window in the fixture as an offset from <paramref name="anchor"/>, or from
@@ -251,7 +269,7 @@ internal static class DemoDataSeederCore
         Add(ax200, "AX2-0001-0004", "A4C1F2E30004", "356938035643812", null, 380, "3.1.8", "C1");
         // Warranty expired well beyond the grace period, but still inside the return window,
         // so the wizard offers a paid repair rather than refusing it.
-        Add(ax200, "AX2-0001-0005", "A4C1F2E30005", "356938035643813", null, 500, "3.0.4", "C1");
+        Add(ax200, "AX2-0001-0005", "A4C1F2E30005", "356938035643813", null, PaidRepairDaysSinceShip, "3.0.4", "C1");
         // Extended-tier coverage still running.
         Add(ax400, "AX4-0002-0001", "B7D2A1C00001", "356938035643820", "HOST-88431", 400, "5.0.2", "D4");
         Add(ax400, "AX4-0002-0002", "B7D2A1C00002", "356938035643821", null, 60, "5.0.2", "D4");
@@ -302,8 +320,16 @@ internal static class DemoDataSeederCore
         // Ended GraceDaysPastEnd days ago: inside the 30-day grace period with 20 days to spare,
         // so the grace demo survives a week of drift instead of flipping the day after seeding.
         Add(bySerial["AX2-0001-0004"], "Standard Coverage", "standard", anchor.AddYears(-2), anchor.AddDays(-GraceDaysPastEnd));
-        // Ended long ago.
-        Add(bySerial["AX2-0001-0005"], "Standard Coverage", "standard", anchor.AddYears(-4), anchor.AddYears(-2));
+        // Over, but not long over: PaidRepairDaysSinceWarrantyEnd puts it well outside the grace
+        // period while staying after its ship date. The two offsets together are what make this
+        // unit a paid repair rather than a free one or a refusal, and the margin to each edge is
+        // spelled out above rather than left as two numbers that happen to work today.
+        Add(
+            bySerial["AX2-0001-0005"],
+            "Standard Coverage",
+            "standard",
+            anchor.AddYears(-3),
+            anchor.AddDays(-PaidRepairDaysSinceWarrantyEnd));
 
         // Extended tier still running on a four-year-old unit.
         Add(bySerial["AX4-0002-0001"], "Extended Coverage Plus", "extended", anchor.AddYears(-4), anchor.AddMonths(10));

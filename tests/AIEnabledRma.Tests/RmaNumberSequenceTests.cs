@@ -1,7 +1,5 @@
-using System.Data;
 using AIEnabledRma.Data;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 
 namespace AIEnabledRma.Tests;
 
@@ -17,77 +15,11 @@ namespace AIEnabledRma.Tests;
 /// </remarks>
 public sealed class RmaNumberSequenceTests : IAsyncLifetime
 {
-    private const string AdminConnectionStringVariable = "RMA_TEST_CONNECTION";
+    private readonly LiveDatabase _database = new("rma_seq_test");
 
-    private const string DefaultAdminConnectionString =
-        "Host=localhost;Port=5432;Database=postgres;Username=rmauser;Password=placeholder";
+    public async ValueTask InitializeAsync() => await _database.InitializeAsync();
 
-    private string _databaseName = string.Empty;
-    private string _adminConnectionString = string.Empty;
-
-    public async ValueTask InitializeAsync()
-    {
-        _adminConnectionString = new NpgsqlConnectionStringBuilder(
-            Environment.GetEnvironmentVariable(AdminConnectionStringVariable)
-            ?? DefaultAdminConnectionString)
-        {
-            // Same reason as WebWizardTests: CREATE DATABASE on a bind-mounted data directory
-            // takes tens of seconds, and the 30-second default would cancel it.
-            CommandTimeout = 120,
-        }.ConnectionString;
-
-        try
-        {
-            await using var probe = new NpgsqlConnection(_adminConnectionString);
-            await probe.OpenAsync();
-        }
-        catch (Exception ex)
-        {
-            // A developer without the docker-compose database running should not see a red
-            // build for a behaviour that is exercised correctly elsewhere. Set
-            // RMA_TEST_CONNECTION to point at a real server to run these.
-            Assert.Skip($"PostgreSQL is not reachable: {ex.GetType().Name}: {ex.Message}");
-        }
-
-        _databaseName = $"rma_seq_test_{Guid.NewGuid():N}";
-
-        await using (var create = new NpgsqlConnection(_adminConnectionString))
-        {
-            await create.OpenAsync();
-
-            // CREATE DATABASE cannot run inside a transaction, and cannot be parameterised.
-            // The name is generated above from a GUID, so there is nothing to inject.
-            await using var command = create.CreateCommand();
-            command.CommandText = $"CREATE DATABASE \"{_databaseName}\"";
-            await command.ExecuteNonQueryAsync();
-        }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_databaseName.Length == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            // Pooled connections would keep the database busy and make the drop fail.
-            NpgsqlConnection.ClearAllPools();
-
-            await using var drop = new NpgsqlConnection(_adminConnectionString);
-            await drop.OpenAsync();
-
-            await using var command = drop.CreateCommand();
-            command.CommandText = $"DROP DATABASE IF EXISTS \"{_databaseName}\" WITH (FORCE)";
-            await command.ExecuteNonQueryAsync();
-        }
-        catch (Exception)
-        {
-            // A leaked scratch database must never fail an otherwise green run. It is named
-            // rma_seq_test_* and is safe to delete by hand.
-        }
-    }
+    public async ValueTask DisposeAsync() => await _database.DisposeAsync();
 
     [Fact]
     public async Task Concurrent_callers_are_never_handed_the_same_reference()
@@ -177,19 +109,5 @@ public sealed class RmaNumberSequenceTests : IAsyncLifetime
         Assert.Equal("RMA-2026-00002", second);
     }
 
-    private RmaDbContext CreateContext()
-    {
-        var builder = new NpgsqlConnectionStringBuilder(_adminConnectionString)
-        {
-            Database = _databaseName,
-        };
-
-        var options = new DbContextOptionsBuilder<RmaDbContext>()
-            .UseNpgsql(builder.ConnectionString, npgsql => npgsql.MigrationsAssembly(
-                typeof(RmaDbContext).Assembly.FullName))
-            .UseSnakeCaseNamingConvention()
-            .Options;
-
-        return new RmaDbContext(options);
-    }
+    private RmaDbContext CreateContext() => _database.CreateContext();
 }
