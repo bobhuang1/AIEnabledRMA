@@ -49,9 +49,10 @@ public static class AiServiceCollectionExtensions
             .Validate(
                 o => !needsBaseUrl
                      || string.IsNullOrWhiteSpace(o.BaseUrl)
-                     || Uri.TryCreate(o.BaseUrl.Trim(), UriKind.Absolute, out _),
-                "Ai:OpenAiCompatible:BaseUrl must be an absolute URL, for example "
-                + "'https://api.example.com/v1' or 'http://localhost:11434/v1'.")
+                     || IsHttpUrl(o.BaseUrl),
+                "Ai:OpenAiCompatible:BaseUrl must be an absolute URL with an http or https "
+                + "scheme, for example 'https://api.example.com/v1' or "
+                + "'http://localhost:11434/v1'.")
             .Validate(
                 o => o.TimeoutSeconds > 0,
                 "Ai:OpenAiCompatible:TimeoutSeconds must be greater than zero.")
@@ -90,6 +91,49 @@ public static class AiServiceCollectionExtensions
         return services;
     }
 
+    /// <summary>
+    /// Registers the bundled <see cref="FakePaymentGateway"/>, which accepts every positive
+    /// amount and holds authorisations in memory.
+    ///
+    /// This is development plumbing, not a payment provider, so registering it outside
+    /// Development throws at startup: the alternative is a deployment that silently approves
+    /// every charge. A deployment that genuinely wants it elsewhere has to say so explicitly
+    /// with <c>Payments:Fake:AllowInProduction=true</c>.
+    /// </summary>
+    /// <param name="isDevelopment">
+    /// Whether the host is in the Development environment. Passed as a bool rather than an
+    /// <c>IHostEnvironment</c> so this project keeps its provider-selection concerns free of a
+    /// hosting dependency.
+    /// </param>
+    public static IServiceCollection AddFakePaymentGateway(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        bool isDevelopment)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        services.AddOptions<FakePaymentGatewayOptions>()
+            .Bind(configuration.GetSection(FakePaymentGatewayOptions.SectionName))
+            .ValidateOnStart();
+
+        var allowedOutsideDevelopment = configuration.GetValue<bool>(
+            $"{FakePaymentGatewayOptions.SectionName}:{nameof(FakePaymentGatewayOptions.AllowInProduction)}");
+
+        if (!isDevelopment && !allowedOutsideDevelopment)
+        {
+            throw new InvalidOperationException(
+                "The bundled fake payment gateway accepts every positive amount and is only "
+                + "registered in Development. Replace IPaymentGateway with a real provider, or "
+                + $"set {FakePaymentGatewayOptions.SectionName}:AllowInProduction=true if you "
+                + "genuinely intend to run it outside Development.");
+        }
+
+        services.AddSingleton<IPaymentGateway, FakePaymentGateway>();
+
+        return services;
+    }
+
     public const string ExampleLocalProviderName = "example-local";
     public const string OpenAiCompatibleProviderName = "openai-compatible";
 
@@ -104,6 +148,20 @@ public static class AiServiceCollectionExtensions
 
         return string.IsNullOrWhiteSpace(configured) ? ExampleLocalProviderName : configured.Trim();
     }
+
+    /// <summary>
+    /// True only for an absolute URL that uses http or https.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Uri.TryCreate(string, UriKind, out Uri)"/> alone is not enough, because what
+    /// counts as absolute is platform-dependent: on Linux "/v1/chat" parses cleanly as
+    /// <c>file:///v1/chat</c>, so a relative path passed this check and failed only when the
+    /// first request was made — and only on machines other than the one it was written on.
+    /// Rejecting schemes up front makes the rule the same everywhere.
+    /// </remarks>
+    private static bool IsHttpUrl(string value) =>
+        Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)
+        && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
     private static IReadOnlyList<string> BuildDiagnosticNotes(string provider) => provider switch
     {

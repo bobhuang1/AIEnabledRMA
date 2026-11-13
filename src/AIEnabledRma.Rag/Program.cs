@@ -8,15 +8,28 @@ builder.Services.AddRag(builder.Configuration);
 
 var app = builder.Build();
 
+// Stays open: a liveness probe that says nothing about the corpus. Everything else below is
+// operational, and sits behind RagAdminGate.
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
+// The key is read once at startup. Rotating it means restarting the host, which is the same
+// operation that already applies a knowledge-base change, so it adds no new procedure.
+var adminKey = app.Configuration[RagAdminGate.ApiKeyConfigurationKey];
+
+var operations = app.MapGroup(string.Empty)
+    .AddEndpointFilter(async (context, next) =>
+        RagAdminGate.IsAllowed(context.HttpContext, adminKey)
+            ? await next(context)
+            : Results.NotFound());
 
 // Reports what the retriever would actually load, and any per-file load errors. This is the
 // first thing to check when retrieval looks wrong, because a silently empty corpus produces
-// a confidently unhelpful assistant rather than an error.
+// a confidently unhelpful assistant rather than an error. It names the directory it read and
+// every file that failed to parse, which is why it is gated.
 // Injects the holder rather than KnowledgeIndex itself. A KnowledgeIndex registered in DI
 // would be captured once and never refreshed, so after a reload these endpoints would keep
 // reporting the old corpus while the reload endpoint claimed success.
-app.MapGet("/diagnostics", (KnowledgeIndexHolder holder) =>
+operations.MapGet("/diagnostics", (KnowledgeIndexHolder holder) =>
 {
     var index = holder.Current;
 
@@ -41,7 +54,7 @@ app.MapGet("/diagnostics", (KnowledgeIndexHolder holder) =>
 
 // Performs a real retrieval and returns the ranked, scoped result. Deterministic, so it is
 // usable as a test surface as well as an operational check.
-app.MapPost("/retrieve", (RetrieveRequest request, KnowledgeIndexHolder holder) =>
+operations.MapPost("/retrieve", (RetrieveRequest request, KnowledgeIndexHolder holder) =>
 {
     var result = holder.Current.Search(new KnowledgeRetrievalQuery
     {
@@ -68,7 +81,7 @@ app.MapPost("/retrieve", (RetrieveRequest request, KnowledgeIndexHolder holder) 
 // Rebuilds the index from disk. Refuses to publish a corpus that produced load errors, so a
 // broken article can never replace a working one. Intended for development and for an
 // operator applying a reviewed knowledge-base change; it is not a file watcher.
-app.MapPost("/rag/reload", async (
+operations.MapPost("/rag/reload", async (
     IServiceProvider services,
     CancellationToken cancellationToken) =>
 {
@@ -100,4 +113,16 @@ internal sealed record RetrieveRequest
 public partial class Program
 {
     protected Program() { }
+}
+
+/// <summary>
+/// Anchor type for <c>WebApplicationFactory&lt;RagAppAnchor&gt;</c>.
+/// </summary>
+/// <remarks>
+/// The factory only needs a public type from the assembly under test to locate its content root
+/// and entry point. This project cannot be identified by its generated <c>Program</c>, because
+/// the RAG, MCP and Web projects each declare one and the test project references all three.
+/// </remarks>
+public sealed class RagAppAnchor
+{
 }

@@ -173,6 +173,19 @@ internal sealed class FakeDeviceRepository : IDeviceRepository
         return Task.FromResult(LookupResult ?? new DeviceLookupResult { MatchScore = 0d });
     }
 
+    /// <summary>
+    /// The fake returns whatever <see cref="LookupResult"/> it was given, because a fake that
+    /// re-implemented exact-versus-fuzzy semantics would let the tests agree with the code for
+    /// the wrong reason. Whether a partial serial actually resolves is asserted against
+    /// PostgreSQL in <c>WebWizardTests</c>, which uses the real repository.
+    /// </summary>
+    public Task<DeviceLookupResult> LookupExactAsync(
+        string identifier, DateOnly today, CancellationToken cancellationToken = default)
+    {
+        LookupCallCount++;
+        return Task.FromResult(LookupResult ?? new DeviceLookupResult { MatchScore = 0d });
+    }
+
     public Task<bool> HasOpenRequestAsync(Guid deviceId, CancellationToken cancellationToken = default) =>
         Task.FromResult(OpenRequestByDevice.TryGetValue(deviceId, out var has) && has);
 }

@@ -77,6 +77,12 @@ public sealed class RmaRepository(RmaDbContext db) : IRmaRepository
             .Include(r => r.Lines)
                 .ThenInclude(l => l.Device)
                     .ThenInclude(d => d!.Product)
+            // Warranties come with the device because the triage step re-runs the policy
+            // against the recorded fault description. Without them every re-evaluation would
+            // see an uncovered unit and turn a free return into a paid repair.
+            .Include(r => r.Lines)
+                .ThenInclude(l => l.Device)
+                    .ThenInclude(d => d!.Warranties)
             .Include(r => r.Customer)
             .Include(r => r.ShipToAddress)
             .Include(r => r.Exclusions.OrderBy(e => e.SortOrder))

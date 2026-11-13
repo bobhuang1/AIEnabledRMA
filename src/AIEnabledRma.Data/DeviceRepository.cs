@@ -123,7 +123,7 @@ public sealed class DeviceRepository(
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<DeviceLookupResult> LookupAsync(
+    public async Task<DeviceLookupResult> LookupExactAsync(
         string identifier,
         DateOnly today,
         CancellationToken cancellationToken)
@@ -144,13 +144,28 @@ public sealed class DeviceRepository(
             return BuildResult(alternates[0], today, "alternate-identifier", 0.98d);
         }
 
-        // Finally fuzzy. Trigram similarity is computed in the database; the in-memory
+        return new DeviceLookupResult { MatchScore = 0d };
+    }
+
+    public async Task<DeviceLookupResult> LookupAsync(
+        string identifier,
+        DateOnly today,
+        CancellationToken cancellationToken)
+    {
+        var exact = await LookupExactAsync(identifier, today, cancellationToken);
+        if (exact.Device is not null)
+        {
+            return exact;
+        }
+
+        // Fuzzy from here on. Trigram similarity is computed in the database; the in-memory
         // scorer then re-ranks the shortlist so a coincidental trigram hit cannot win.
         if (!_options.AllowFuzzyMatch)
         {
-            return new DeviceLookupResult { MatchScore = 0d };
+            return exact;
         }
 
+        var trimmed = identifier.Trim();
         var needle = trimmed.ToUpperInvariant();
         var unpunctuated = trimmed.Replace(":", string.Empty).Replace("-", string.Empty);
 

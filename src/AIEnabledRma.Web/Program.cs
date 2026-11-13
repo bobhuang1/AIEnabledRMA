@@ -1,9 +1,12 @@
+using System.Threading.RateLimiting;
 using AIEnabledRma.Ai;
 using AIEnabledRma.Data;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Domain.Triage;
 using AIEnabledRma.Rag;
+using AIEnabledRma.Web;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -28,17 +31,34 @@ builder.Services.AddSingleton(TimeProvider.System);
 
 // The bundled gateway keeps its authorisations in memory, because the wizard authorises on the
 // payment step and captures or voids on a later request. Scoping it to the request would throw
-// those authorisations away in between, so it is a singleton. Replace this registration with a
+// those authorisations away in between, so it is a singleton. It accepts every positive amount,
+// so AddFakePaymentGateway refuses to register it outside Development; replace this call with a
 // real provider to charge anything.
-builder.Services.AddSingleton<IPaymentGateway, FakePaymentGateway>();
+builder.Services.AddFakePaymentGateway(
+    builder.Configuration,
+    builder.Environment.IsDevelopment());
 
-// ScopeGuard takes its options by value rather than IOptions, so it is registered over the
-// bound options instance. It is stateless and therefore shared.
+// Only the thresholds are configuration. The topic vocabulary itself is not: it is read from
+// the corpus on first use, because every article already declares the words it is about, and a
+// hand-maintained word list is a second description of the domain that drifts from the corpus
+// silently — the guard simply starts refusing ordinary phrasings. The guard holds the words it
+// was built with, so this runs once per process and is shared.
 builder.Services.AddOptions<ScopeGuardOptions>()
     .Bind(builder.Configuration.GetSection(ScopeGuardOptions.SectionName))
+    .Validate(
+        o => o.MinimumTopicTokenRatio is > 0 and <= 1,
+        $"{ScopeGuardOptions.SectionName}:MinimumTopicTokenRatio must be greater than zero and "
+        + "at most 1.")
     .ValidateOnStart();
-builder.Services.AddSingleton<IScopeGuard, ScopeGuard>(sp =>
-    new ScopeGuard(sp.GetRequiredService<IOptions<ScopeGuardOptions>>().Value));
+builder.Services.AddSingleton<IScopeGuard>(sp => new ScopeGuard(
+    sp.GetRequiredService<IOptions<ScopeGuardOptions>>().Value,
+    ScopeGuardVocabulary.Derive(
+        sp.GetRequiredService<KnowledgeIndexHolder>().Current.Articles
+            .Select(article => new ScopeVocabularyArticle
+            {
+                Category = article.Category,
+                Keywords = article.Keywords,
+            }))));
 
 builder.Services.AddOptions<TriagePipelineOptions>()
     .Bind(builder.Configuration.GetSection(TriagePipelineOptions.SectionName))
@@ -48,7 +68,54 @@ builder.Services.AddOptions<TriagePipelineOptions>()
 // [ValidateAntiForgeryToken] attributes on the POST actions enforce it.
 builder.Services.AddControllersWithViews();
 
+// Abuse control for the POSTs an anonymous visitor can drive over and over: Start writes a
+// request and consumes a reference from the sequence, Triage spends a model call, and
+// ChooseCustomer runs the device lookups and can create the request. Without a limit, one script
+// turns an anonymous form into a free triage API and a way to fill the database. A partition per
+// client address with a small fixed window is the cheapest thing that stops that, and the
+// allowance is far above anything a person filling in a form produces.
+//
+// All three share this policy deliberately. A bucket per endpoint would multiply the writes a
+// caller gets by the number of steps, and ChooseCustomer is not a cheaper operation to abuse
+// than Start: it resolves the same identifiers and can write the same request, so its own
+// allowance would only widen the hole.
+//
+// 30 writes a minute is one every two seconds. A customer needs a page load and a read between
+// steps; a script does not. Requests are not queued, so a refused caller finds out immediately
+// rather than being parked, and callers behind one NAT address share a partition. That shared
+// partition is the known trade-off: the alternative is a global limit, which one caller could
+// use to shut the wizard down for everyone.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // QueueLimit keeps its default of zero, which is why a refused caller is turned away rather
+    // than parked.
+    options.AddPolicy(RateLimitPolicies.WizardWrites, context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+            }));
+});
+
 var app = builder.Build();
+
+// First in the pipeline, because everything that cares about the caller's address reads
+// Connection.RemoteIpAddress and the write limiter partitions on it. Behind a reverse proxy that
+// address is the proxy, so without this every customer shares one partition and 30 writes a
+// minute throttle the whole site. Only a peer named in ReverseProxy:TrustedProxies may set the
+// client address: a caller that sends X-Forwarded-For itself is ignored and limited on its own
+// address, which is what stops the header becoming a way to evade the limit.
+var trustedProxies = new TrustedProxyOptions();
+builder.Configuration.GetSection(TrustedProxyOptions.SectionName).Bind(trustedProxies);
+
+if (trustedProxies.IsConfigured)
+{
+    app.UseForwardedHeaders(trustedProxies.ToForwardedHeadersOptions());
+}
 
 if (!app.Environment.IsDevelopment())
 {
@@ -58,17 +125,25 @@ if (!app.Environment.IsDevelopment())
 
 app.UseStaticFiles();
 app.UseRouting();
+
+// After routing, because the limiter reads the endpoint's policy metadata, and before
+// antiforgery, so a refused request stops before any of the work it was trying to make us do.
+app.UseRateLimiter();
 app.UseAntiforgery();
 
 app.MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}");
 
-// Startup diagnostics, mirroring the RAG service. The wizard depends on three things that can
-// each fail independently and all of which look like "the assistant is useless" from the
-// customer's side: the corpus, the AI provider, and the database.
+// Startup diagnostics, mirroring the RAG service. The wizard depends on two things that can
+// each fail independently and both of which look like "the assistant is useless" from the
+// customer's side: the corpus and the AI provider.
+//
+// This endpoint answers without authentication on the customer-facing host, so it reports
+// counts and nothing that describes the deployment: no path on disk, and no per-file load
+// error text, which names files and parse positions. An operator who needs that detail has
+// GET /diagnostics on the RAG host, which is behind RagAdminGate.
 app.MapGet("/health", (
     KnowledgeIndexHolder holder,
-    IChatModel chatModel,
-    RmaDbContext db) =>
+    IChatModel chatModel) =>
 {
     var index = holder.Current;
 
@@ -77,9 +152,8 @@ app.MapGet("/health", (
         status = "ok",
         knowledgeBase = new
         {
-            path = index.RootPath,
             articleCount = index.Articles.Count,
-            loadErrors = index.LoadErrors,
+            loadErrorCount = index.LoadErrors.Count,
         },
         ai = new { provider = chatModel.ProviderName },
     });

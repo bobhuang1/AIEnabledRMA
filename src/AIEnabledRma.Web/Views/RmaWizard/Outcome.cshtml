@@ -5,6 +5,8 @@
     var resolved = Model.Outcome == StepOutcome.ResolvedByTroubleshooting;
     var completed = Model.Outcome == StepOutcome.Completed;
     var review = Model.Outcome == StepOutcome.RequiresHumanReview;
+    var invalid = Model.Outcome == StepOutcome.InvalidTransition;
+    var refused = Model.Outcome == StepOutcome.NotEligible;
 }
 
 @if (completed)
@@ -26,6 +28,13 @@ else if (resolved)
 else if (review)
 {
     <h1>A person will take a look</h1>
+    <div class="alert alert-warn">
+        <p>@Model.Message</p>
+    </div>
+}
+else if (invalid)
+{
+    <h1>That step is out of order</h1>
     <div class="alert alert-warn">
         <p>@Model.Message</p>
     </div>
@@ -137,7 +146,9 @@ else
 }
 
 <div class="actions">
-    @if (!completed && !resolved && !string.IsNullOrEmpty(Model.RmaNumber) && Model.RmaId != Guid.Empty)
+    @* A refused return has nothing left to continue, so offering the link would send the
+       customer back into a step the policy has already stopped. *@
+    @if (!completed && !resolved && !refused && !string.IsNullOrEmpty(Model.RmaNumber) && Model.RmaId != Guid.Empty)
     {
         <a class="btn" asp-controller="RmaWizard" asp-action="Triage" asp-route-id="@Model.RmaId">
             Continue this return

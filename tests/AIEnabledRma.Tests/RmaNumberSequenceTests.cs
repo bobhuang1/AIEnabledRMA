@@ -27,9 +27,14 @@ public sealed class RmaNumberSequenceTests : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        _adminConnectionString =
+        _adminConnectionString = new NpgsqlConnectionStringBuilder(
             Environment.GetEnvironmentVariable(AdminConnectionStringVariable)
-            ?? DefaultAdminConnectionString;
+            ?? DefaultAdminConnectionString)
+        {
+            // Same reason as WebWizardTests: CREATE DATABASE on a bind-mounted data directory
+            // takes tens of seconds, and the 30-second default would cancel it.
+            CommandTimeout = 120,
+        }.ConnectionString;
 
         try
         {

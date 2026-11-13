@@ -35,6 +35,27 @@ public sealed class RmaWorkflowTests
             new WarrantyTierPolicy { Name = "standard", IsCovered = true },
             new WarrantyTierPolicy { Name = "no-service", IsCovered = false },
         ],
+        // Mirrors the shipped appsettings. Without these, a test could not tell a policy that
+        // reads the fault description from one that ignores it.
+        ExcludedCauses =
+        [
+            new ProblemCauseRule
+            {
+                RuleId = "cause.liquid",
+                Description = "Liquid ingress is not covered under any warranty tier.",
+                Terms = ["liquid", "water", "spilled", "soaked"],
+                ResultingEligibility = RmaEligibility.NotEligible,
+                ResultingReason = RmaDecisionReason.ExcludedCause,
+            },
+            new ProblemCauseRule
+            {
+                RuleId = "cause.impact",
+                Description = "Physical impact damage is not covered.",
+                Terms = ["dropped", "fell", "smashed"],
+                ResultingEligibility = RmaEligibility.NotEligible,
+                ResultingReason = RmaDecisionReason.ExcludedCause,
+            },
+        ],
     };
 
     private static (RmaWorkflow Workflow, FakeRmaRepository Rmas, FakeDeviceRepository Devices,
@@ -433,7 +454,7 @@ public sealed class RmaWorkflowTests
             new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
 
         var result = await workflow.ApplyTriageAsync(
-            start.RmaId!.Value, Triage(resolved: false), CancellationToken.None);
+            start.RmaId!.Value, Triage(resolved: false), "It will not power on.", CancellationToken.None);
 
         Assert.Equal(StepOutcome.Continue, result.Outcome);
         Assert.Equal(RmaRequestStatus.Draft, result.Status);
@@ -456,7 +477,7 @@ public sealed class RmaWorkflowTests
             new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
 
         var result = await workflow.ApplyTriageAsync(
-            start.RmaId!.Value, Triage(resolved: true), CancellationToken.None);
+            start.RmaId!.Value, Triage(resolved: true), "It works now.", CancellationToken.None);
 
         // Cancelled, not completed and not approved. Support must still be able to audit it.
         Assert.Equal(StepOutcome.ResolvedByTroubleshooting, result.Outcome);
@@ -470,7 +491,7 @@ public sealed class RmaWorkflowTests
         var (workflow, _, _, _, _) = Build();
 
         var result = await workflow.ApplyTriageAsync(
-            Guid.NewGuid(), Triage(resolved: true), CancellationToken.None);
+            Guid.NewGuid(), Triage(resolved: true), "It works now.", CancellationToken.None);
 
         Assert.Equal(StepOutcome.NotEligible, result.Outcome);
     }
@@ -486,7 +507,10 @@ public sealed class RmaWorkflowTests
             new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
 
         await workflow.ApplyTriageAsync(
-            start.RmaId!.Value, Triage(resolved: false, new string('s', 10_000)), CancellationToken.None);
+            start.RmaId!.Value,
+            Triage(resolved: false, new string('s', 10_000)),
+            "The screen stays black.",
+            CancellationToken.None);
 
         Assert.True(rmas.Requests[0].TroubleshootingSummary!.Length <= 2000);
     }
@@ -632,11 +656,56 @@ public sealed class RmaWorkflowTests
         var start = await wf.StartAsync(
             new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
 
+        // Payment is legal only from PendingPayment. A zero total still needs that state set,
+        // because the guard — not the amount — is what stops a draft being authorised.
+        rmas.Requests[0].Status = RmaRequestStatus.PendingPayment;
+
         var result = await wf.AuthorizePaymentAsync(start.RmaId!.Value, "tok", CancellationToken.None);
 
         Assert.Equal(RmaRequestStatus.Approved, result.Status);
         Assert.Empty(payments.Authorizations);
         Assert.NotNull(rmas.Requests[0]);
+    }
+
+    [Fact]
+    public async Task A_draft_cannot_authorise_payment()
+    {
+        var (wf, rmas, devices, payments, _) = Build();
+        var device = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        devices.Devices.Add(device);
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
+
+        var result = await wf.AuthorizePaymentAsync(start.RmaId!.Value, "tok", CancellationToken.None);
+
+        // The hole this closes: a draft posted straight to Payment had a zero total, so it was
+        // moved to Approved with no triage, no shipping, and no charge — and then confirmed.
+        Assert.Equal(StepOutcome.InvalidTransition, result.Outcome);
+        Assert.Equal(RmaRequestStatus.Draft, rmas.Requests[0].Status);
+        Assert.Empty(payments.Authorizations);
+    }
+
+    [Fact]
+    public async Task A_paid_repair_is_priced_when_the_request_is_created()
+    {
+        var (wf, rmas, devices, _, _) = Build();
+        var device = TestData.Device(serial: "OLD-1", end: Today.AddYears(-2));
+        device.Product = Product("AX-200", "AX-200 Terminal");
+        devices.Devices.Add(device);
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
+
+        var request = Assert.Single(rmas.Requests);
+
+        // The payment step authorises whatever is stored, so the price has to exist before the
+        // customer can reach that step. Pricing only at shipping left a window in which the
+        // payment step authorised $0.00 for a real repair.
+        Assert.Equal(start.RmaId, request.Id);
+        Assert.Equal(RmaRequestKind.PaidRepair, request.Kind);
+        Assert.Equal(149m, request.DepositAmount);
+        Assert.Equal("USD", request.CurrencyCode);
     }
 
     [Fact]
@@ -647,6 +716,9 @@ public sealed class RmaWorkflowTests
         var start = await wf.StartAsync(
             new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
 
+        // Reaching the payment step is what sets this in the real flow; set it directly here so
+        // the test is about the gateway's answer, not about the step guard.
+        rmas.Requests[0].Status = RmaRequestStatus.PendingPayment;
         rmas.Requests[0].DepositAmount = 89m;
         payments.AuthorizeResult = Result<PaymentReceipt>.Failure(
             "card_declined", "card declined");
@@ -667,6 +739,7 @@ public sealed class RmaWorkflowTests
         var start = await wf.StartAsync(
             new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
 
+        rmas.Requests[0].Status = RmaRequestStatus.PendingPayment;
         rmas.Requests[0].DepositAmount = 89m;
         payments.AuthorizeResult = Result<PaymentReceipt>.Success(new PaymentReceipt
         {
@@ -695,6 +768,7 @@ public sealed class RmaWorkflowTests
         var start = await wf.StartAsync(
             new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
 
+        rmas.Requests[0].Status = RmaRequestStatus.PendingPayment;
         rmas.Requests[0].ShippingCharge = 12m;
         rmas.Requests[0].DepositAmount = 0m;
         payments.AuthorizeResult = Result<PaymentReceipt>.Success(new PaymentReceipt
@@ -720,6 +794,7 @@ public sealed class RmaWorkflowTests
         var start = await wf.StartAsync(
             new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
 
+        rmas.Requests[0].Status = RmaRequestStatus.PendingPayment;
         rmas.Requests[0].DepositAmount = 10m;
         payments.AuthorizeResult = Result<PaymentReceipt>.Success(new PaymentReceipt
         {
@@ -737,6 +812,56 @@ public sealed class RmaWorkflowTests
         Assert.Contains(device.Id.ToString(), authorization.ReferenceNumbers);
     }
 
+    [Fact]
+    public async Task A_confirmed_return_cannot_be_re_triaged_re_shipped_or_re_described()
+    {
+        var (wf, rmas, devices, payments, _) = Build();
+        var device = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        devices.Devices.Add(device);
+        payments.PaymentRequired = false;
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
+
+        // Recorded while the return was still a draft: this is the description every later
+        // decision was made on, so it is the one that must survive.
+        await wf.RecordProblemsAsync(
+            start.RmaId!.Value,
+            [new ProblemEntry { DeviceId = device.Id, Description = "The screen stays black." }],
+            CancellationToken.None);
+
+        await wf.SetShippingAsync(start.RmaId!.Value, Guid.NewGuid(), CancellationToken.None);
+        await wf.ConfirmAsync(start.RmaId!.Value, CancellationToken.None);
+        Assert.Equal(RmaRequestStatus.AwaitingShipment, rmas.Requests[0].Status);
+
+        // A replayed step used to rewrite the request: a "resolved" triage could cancel a
+        // return that was already confirmed, and shipping could re-approve it.
+        var triage = await wf.ApplyTriageAsync(
+            start.RmaId!.Value, Triage(resolved: true), "It works now.", CancellationToken.None);
+        Assert.Equal(StepOutcome.InvalidTransition, triage.Outcome);
+        Assert.Equal(RmaRequestStatus.AwaitingShipment, rmas.Requests[0].Status);
+
+        var shipping = await wf.SetShippingAsync(
+            start.RmaId!.Value, Guid.NewGuid(), CancellationToken.None);
+        Assert.Equal(StepOutcome.InvalidTransition, shipping.Outcome);
+        Assert.Equal(RmaRequestStatus.AwaitingShipment, rmas.Requests[0].Status);
+
+        // The problems step is the only writer of a line's description, so it is the one that
+        // could quietly rewrite the reason the return was approved after the fact.
+        var problems = await wf.RecordProblemsAsync(
+            start.RmaId!.Value,
+            [new ProblemEntry { DeviceId = device.Id, Description = "It was dropped in a puddle." }],
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.InvalidTransition, problems.Outcome);
+        Assert.Equal(RmaRequestStatus.AwaitingShipment, problems.Status);
+
+        // Nothing was written: the stored description is still the one the decision rested on.
+        Assert.Equal(
+            "The screen stays black.",
+            rmas.Requests[0].Lines.Single().ProblemDescription);
+    }
+
     // ---------- confirmation ----------
 
     [Fact]
@@ -751,7 +876,7 @@ public sealed class RmaWorkflowTests
 
         var result = await wf.ConfirmAsync(start.RmaId!.Value, CancellationToken.None);
 
-        Assert.Equal(StepOutcome.RequiresHumanReview, result.Outcome);
+        Assert.Equal(StepOutcome.InvalidTransition, result.Outcome);
         Assert.Equal(RmaRequestStatus.Draft, result.Status);
     }
 
@@ -779,11 +904,12 @@ public sealed class RmaWorkflowTests
         var start = await wf.StartAsync(
             new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
 
-        await wf.ApplyTriageAsync(start.RmaId!.Value, Triage(resolved: true), CancellationToken.None);
+        await wf.ApplyTriageAsync(
+            start.RmaId!.Value, Triage(resolved: true), "It works now.", CancellationToken.None);
         var result = await wf.ConfirmAsync(start.RmaId!.Value, CancellationToken.None);
 
         // The AI said "fixed". That must never become a completed return.
-        Assert.Equal(StepOutcome.RequiresHumanReview, result.Outcome);
+        Assert.Equal(StepOutcome.InvalidTransition, result.Outcome);
         Assert.Equal(RmaRequestStatus.Cancelled, rmas.Requests[0].Status);
     }
 
@@ -795,6 +921,328 @@ public sealed class RmaWorkflowTests
         Assert.Equal(
             StepOutcome.NotEligible,
             (await wf.ConfirmAsync(Guid.NewGuid(), CancellationToken.None)).Outcome);
+    }
+
+    // ---------- the fault description reaches the policy ----------
+
+    [Fact]
+    public async Task Intake_refuses_an_excluded_cause_the_caller_supplied()
+    {
+        var (wf, rmas, devices, _, _) = Build();
+        var device = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        devices.Devices.Add(device);
+
+        var result = await wf.StartAsync(
+            new StartRmaCommand
+            {
+                Devices = [Found(device)],
+                Today = Today,
+                ProblemDescription = "It was dropped down the stairs.",
+            },
+            CancellationToken.None);
+
+        // The statement used to be dropped on the floor: StartAsync never put it on the policy
+        // request, so an impact-damaged unit was created as a free warranty return.
+        Assert.Equal(StepOutcome.NotEligible, result.Outcome);
+        Assert.Equal(RmaDecisionReason.ExcludedCause, result.Decision!.Reason);
+        Assert.Empty(rmas.Requests);
+    }
+
+    [Fact]
+    public async Task A_liquid_damage_statement_rejects_the_request_at_triage()
+    {
+        var (wf, rmas, devices, _, _) = Build();
+        var device = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        devices.Devices.Add(device);
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
+
+        // The in-memory repository stores lines without their navigation, which the real
+        // include populates on read.
+        WithProducts(rmas.Requests[0], device);
+
+        var result = await wf.ApplyTriageAsync(
+            start.RmaId!.Value,
+            Triage(resolved: false),
+            "I spilled coffee on it and now it will not switch on.",
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.NotEligible, result.Outcome);
+
+        var request = rmas.Requests[0];
+        Assert.Equal(RmaRequestStatus.Rejected, request.Status);
+        Assert.Equal(nameof(RmaDecisionReason.ExcludedCause), request.EligibilityReason);
+
+        // Intake's trace survives and the rule that fired at triage is appended to it.
+        Assert.Contains("cause.liquid", request.PolicyRuleTrace);
+        Assert.Contains("warranty.active", request.PolicyRuleTrace);
+    }
+
+    [Fact]
+    public async Task A_liquid_damage_description_at_the_problems_step_rejects_the_request()
+    {
+        var (wf, rmas, devices, _, _) = Build();
+        var device = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        devices.Devices.Add(device);
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
+
+        WithProducts(rmas.Requests[0], device);
+
+        // An innocuous statement, so the excluded-cause rules have nothing to fire on yet.
+        var triaged = await wf.ApplyTriageAsync(
+            start.RmaId!.Value,
+            Triage(resolved: false),
+            "The screen stays black.",
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.Continue, triaged.Outcome);
+
+        // The damage appears only in the per-line description. If that field were not evaluated,
+        // the excluded-cause rules would be optional: describe a screen fault in one box, the
+        // spilled drink in another, and the return goes through either way.
+        var result = await wf.RecordProblemsAsync(
+            start.RmaId!.Value,
+            [new ProblemEntry { DeviceId = device.Id, Description = "I spilled coffee on it." }],
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.NotEligible, result.Outcome);
+
+        var request = rmas.Requests[0];
+        Assert.Equal(RmaRequestStatus.Rejected, request.Status);
+        Assert.Equal(nameof(RmaDecisionReason.ExcludedCause), request.EligibilityReason);
+        Assert.Contains("cause.liquid", request.PolicyRuleTrace);
+    }
+
+    [Fact]
+    public async Task A_paid_repair_description_at_the_problems_step_is_priced_like_one_at_triage()
+    {
+        // The description at this step can change what the customer owes, exactly as the triage
+        // statement can. Re-evaluating only for refusals left the paid-repair half of the
+        // decision unused: describe a covered fault at triage, the cosmetic wear below it, and
+        // the return continued as a free repair.
+        var options = DefaultOptions();
+        options.ExcludedCauses.Add(new ProblemCauseRule
+        {
+            RuleId = "cause.cosmetic",
+            Description = "Cosmetic wear is a paid repair, not a warranty claim.",
+            Terms = ["scratched", "scuffed"],
+            ResultingEligibility = RmaEligibility.EligibleForPaidRepair,
+            ResultingReason = RmaDecisionReason.ExcludedCause,
+        });
+
+        var (wf, rmas, devices, _, _) = Build(
+            new RmaPolicyEvaluator(Microsoft.Extensions.Options.Options.Create(options)));
+
+        var device = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        device.Product = Product("AX-200", "AX-200 Terminal");
+        devices.Devices.Add(device);
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
+
+        WithProducts(rmas.Requests[0], device);
+
+        // In warranty, so intake covers it and there is nothing to pay yet.
+        Assert.Equal(RmaRequestKind.Warranty, rmas.Requests[0].Kind);
+        Assert.Equal(0m, rmas.Requests[0].DepositAmount);
+
+        var triaged = await wf.ApplyTriageAsync(
+            start.RmaId!.Value,
+            Triage(resolved: false),
+            "The screen stays black.",
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.Continue, triaged.Outcome);
+        Assert.Equal(RmaRequestKind.Warranty, rmas.Requests[0].Kind);
+
+        var result = await wf.RecordProblemsAsync(
+            start.RmaId!.Value,
+            [new ProblemEntry { DeviceId = device.Id, Description = "The casing is scratched." }],
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.Continue, result.Outcome);
+
+        var request = rmas.Requests[0];
+        Assert.Equal(RmaRequestKind.PaidRepair, request.Kind);
+        Assert.Equal(nameof(RmaDecisionReason.ExcludedCause), request.EligibilityReason);
+        Assert.Equal(149m, request.DepositAmount);
+        Assert.Equal("USD", request.CurrencyCode);
+    }
+
+    [Fact]
+    public async Task An_excluded_cause_that_needs_a_person_maps_to_the_needs_review_status()
+    {
+        // "Excluded cause" is not a synonym for "rejected". A deployment can route liquid
+        // damage to a person instead of refusing it, and the request status has to follow the
+        // rule rather than the rule's category.
+        var options = DefaultOptions();
+        options.ExcludedCauses.Single(c => c.RuleId == "cause.liquid").ResultingEligibility =
+            RmaEligibility.RequiresHumanReview;
+
+        var (wf, rmas, devices, _, _) = Build(
+            new RmaPolicyEvaluator(Microsoft.Extensions.Options.Options.Create(options)));
+
+        var device = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        devices.Devices.Add(device);
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
+
+        WithProducts(rmas.Requests[0], device);
+
+        var result = await wf.ApplyTriageAsync(
+            start.RmaId!.Value,
+            Triage(resolved: false),
+            "I spilled coffee on it and now it will not switch on.",
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.RequiresHumanReview, result.Outcome);
+
+        var request = rmas.Requests[0];
+        Assert.Equal(RmaRequestStatus.NeedsReview, request.Status);
+        Assert.Equal(nameof(RmaDecisionReason.ExcludedCause), request.EligibilityReason);
+        Assert.Contains("cause.liquid", request.PolicyRuleTrace);
+    }
+
+    [Fact]
+    public async Task One_refused_line_stops_a_mixed_batch_at_the_problems_step()
+    {
+        var (wf, rmas, devices, _, _) = Build();
+
+        var clean = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        var spilled = TestData.Device(serial: "AX-2", end: Today.AddMonths(3));
+        devices.Devices.AddRange([clean, spilled]);
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(clean), Found(spilled)], Today = Today },
+            CancellationToken.None);
+
+        WithProducts(rmas.Requests[0], clean, spilled);
+
+        Assert.Equal(2, rmas.Requests[0].Lines.Count);
+
+        var triaged = await wf.ApplyTriageAsync(
+            start.RmaId!.Value,
+            Triage(resolved: false),
+            "The screen stays black.",
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.Continue, triaged.Outcome);
+
+        // One line describes a covered fault, the other describes liquid damage. It is one
+        // return, so the second line stops the whole request rather than half of it.
+        var result = await wf.RecordProblemsAsync(
+            start.RmaId!.Value,
+            [
+                new ProblemEntry { DeviceId = clean.Id, Description = "The screen stays black." },
+                new ProblemEntry { DeviceId = spilled.Id, Description = "I spilled coffee on it." },
+            ],
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.NotEligible, result.Outcome);
+
+        var request = rmas.Requests[0];
+        Assert.Equal(RmaRequestStatus.Rejected, request.Status);
+        Assert.Contains("cause.liquid", request.PolicyRuleTrace);
+
+        // Both descriptions are kept, so the bench can see what was claimed even though the
+        // return was refused.
+        Assert.Equal(
+            "The screen stays black.",
+            request.Lines.Single(l => l.DeviceId == clean.Id).ProblemDescription);
+        Assert.Equal(
+            "I spilled coffee on it.",
+            request.Lines.Single(l => l.DeviceId == spilled.Id).ProblemDescription);
+    }
+
+    [Fact]
+    public async Task An_impact_damage_statement_rejects_the_request_at_triage()
+    {
+        var (wf, rmas, devices, _, _) = Build();
+        var device = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        devices.Devices.Add(device);
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
+        WithProducts(rmas.Requests[0], device);
+
+        var result = await wf.ApplyTriageAsync(
+            start.RmaId!.Value,
+            Triage(resolved: false),
+            "It fell off the counter and the case cracked.",
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.NotEligible, result.Outcome);
+        Assert.Equal(RmaRequestStatus.Rejected, rmas.Requests[0].Status);
+        Assert.Contains("cause.impact", rmas.Requests[0].PolicyRuleTrace);
+    }
+
+    [Fact]
+    public async Task A_statement_outside_the_excluded_causes_keeps_the_return_in_draft()
+    {
+        var (wf, rmas, devices, _, _) = Build();
+        var device = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        devices.Devices.Add(device);
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
+        WithProducts(rmas.Requests[0], device);
+
+        var result = await wf.ApplyTriageAsync(
+            start.RmaId!.Value,
+            Triage(resolved: false),
+            "The trigger does not fire when I pull it.",
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.Continue, result.Outcome);
+        Assert.Equal(RmaRequestStatus.Draft, rmas.Requests[0].Status);
+        Assert.DoesNotContain("cause.", rmas.Requests[0].PolicyRuleTrace);
+    }
+
+    [Fact]
+    public async Task A_cause_priced_as_a_paid_repair_turns_the_request_into_one_at_triage()
+    {
+        var options = DefaultOptions();
+        options.ExcludedCauses.Add(new ProblemCauseRule
+        {
+            RuleId = "cause.cosmetic",
+            Description = "Cosmetic wear is a paid repair, not a warranty claim.",
+            Terms = ["scratched"],
+            ResultingEligibility = RmaEligibility.EligibleForPaidRepair,
+            ResultingReason = RmaDecisionReason.OutOfWarranty,
+        });
+
+        var (wf, rmas, devices, _, _) = Build(
+            new RmaPolicyEvaluator(Microsoft.Extensions.Options.Options.Create(options)));
+
+        var device = TestData.Device(serial: "AX-1", end: Today.AddMonths(3));
+        device.Product = Product("AX-200", "AX-200 Terminal");
+        devices.Devices.Add(device);
+
+        var start = await wf.StartAsync(
+            new StartRmaCommand { Devices = [Found(device)], Today = Today }, CancellationToken.None);
+        WithProducts(rmas.Requests[0], device);
+
+        Assert.Equal(RmaRequestKind.Warranty, rmas.Requests[0].Kind);
+        Assert.Equal(0m, rmas.Requests[0].DepositAmount);
+
+        var result = await wf.ApplyTriageAsync(
+            start.RmaId!.Value,
+            Triage(resolved: false),
+            "The back of the case is scratched.",
+            CancellationToken.None);
+
+        Assert.Equal(StepOutcome.Continue, result.Outcome);
+
+        // The cause changes what the customer owes, so the request is re-classified and priced
+        // from the product table rather than continuing as a free warranty return.
+        var request = rmas.Requests[0];
+        Assert.Equal(RmaRequestKind.PaidRepair, request.Kind);
+        Assert.Equal(149m, request.DepositAmount);
+        Assert.Equal(nameof(RmaDecisionReason.OutOfWarranty), request.EligibilityReason);
     }
 }
 

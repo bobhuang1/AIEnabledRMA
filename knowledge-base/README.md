@@ -27,7 +27,7 @@ Body in Markdown.
 | `title` | yes | Shown to the customer and used in relevance scoring. |
 | `category` | yes | Business grouping. A `category` with no matching article for a session's product family is a corpus-scope signal. |
 | `product_scope` | yes | `["*"]` means the article applies to every product family. Otherwise it lists the exact tokens that must match. |
-| `keywords` | no | Extra terms for lexical scoring, for concepts the body does not literally contain. |
+| `keywords` | no | Terms for lexical scoring, for concepts the body does not literally contain. These are also the triage scope guard's topic vocabulary, one vocabulary per category with English function words stripped, so the words an author lists here are the words a customer can ask with: a phrasing no keyword covers can be refused as off-topic before the model is called. |
 | `related` | no | Sibling article ids, used to expand a strong match with its neighbours. A sibling is still re-checked against the session's scope, so a cross-family link is followed for universal siblings only and never leaks another family's article. |
 
 `id` must be unique. The loader fails closed on duplicates rather than silently dropping one,
@@ -66,7 +66,9 @@ serve; the opt-in list decides *whether that product is being answered about at 
    ordered steps with recorded outcomes are what confirm a genuine fault.
 4. Set `product_scope` deliberately. `["*"]` for genuinely universal articles; a token list
    for anything specific to one product family.
-5. Restart the RAG server, or call `POST /rag/reload` in development.
+5. Restart the RAG server, or send `POST /rag/reload` to it. The operational endpoints
+   (`/diagnostics`, `/retrieve`, `/rag/reload`) are gated: loopback only when
+   `Rag:Admin:ApiKey` is unset, otherwise the `X-Rag-Admin-Key` header on every call.
 
 ## Test data
 

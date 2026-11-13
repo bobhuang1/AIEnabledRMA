@@ -1,7 +1,7 @@
+@using AIEnabledRma.Web.Controllers
+@model RmaWizardController.ChooseCustomerViewModel
 @{
     ViewData["Title"] = "Which account?";
-    var matches = ViewBag.Matches as IEnumerable<dynamic>;
-    var identifiers = ViewBag.Identifiers as string;
 }
 
 <h1>More than one account matches</h1>
@@ -11,20 +11,17 @@
 </p>
 
 <form method="post" asp-controller="RmaWizard" asp-action="ChooseCustomer">
-    <input name="identifiers" type="hidden" value="@identifiers" />
+    <input name="identifiers" type="hidden" value="@Model.Identifiers" />
 
-    @if (matches is not null)
+    @foreach (var match in Model.Matches)
     {
-        foreach (var match in matches)
-        {
-            <label class="radio-card">
-                <input type="radio" name="customerId" value="@match.Id" required />
-                <span>
-                    <strong>@match.Name</strong><br />
-                    <span class="muted">@match.Email &middot; @match.PhoneNumber</span>
-                </span>
-            </label>
-        }
+        <label class="radio-card">
+            <input type="radio" name="customerId" value="@match.Id" required />
+            <span>
+                <strong>@match.Name</strong><br />
+                <span class="muted">@match.Email &middot; @match.PhoneNumber</span>
+            </span>
+        </label>
     }
 
     <div class="actions">

@@ -31,9 +31,39 @@ public sealed record ScopeGuardResult
 /// a topic check (does the text relate to hardware, the catalog, or the RMA process) and a
 /// scope-token check (does it mention something the session's devices actually cover).
 /// </summary>
-public sealed partial class ScopeGuard(ScopeGuardOptions options) : IScopeGuard
+public sealed partial class ScopeGuard : IScopeGuard
 {
-    private readonly ScopeGuardOptions _options = options;
+    private readonly ScopeGuardOptions _options;
+    private readonly IReadOnlyList<IReadOnlyList<string>> _topicVocabulary;
+
+    /// <summary>
+    /// The topic vocabulary is a construction argument rather than an option, so the words the
+    /// guard recognises are supplied where they are known — from the knowledge base — and a
+    /// guard that recognises nothing cannot be built at all.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// No vocabulary contains a word, which would make every question off-topic.
+    /// </exception>
+    public ScopeGuard(
+        ScopeGuardOptions options,
+        IReadOnlyList<IReadOnlyList<string>> topicVocabulary)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(topicVocabulary);
+
+        // This used to be an option that could be empty, and the symptom was indistinguishable
+        // from a broken assistant: every question refused, nothing in the log to explain it.
+        if (!topicVocabulary.Any(vocabulary => vocabulary.Count > 0))
+        {
+            throw new ArgumentException(
+                "The scope guard needs at least one topic word; with an empty vocabulary it "
+                + "refuses every question as off-topic.",
+                nameof(topicVocabulary));
+        }
+
+        _options = options;
+        _topicVocabulary = topicVocabulary;
+    }
 
     [GeneratedRegex(@"[a-z0-9]+", RegexOptions.IgnoreCase)]
     private static partial Regex TokenRegex();
@@ -84,7 +114,7 @@ public sealed partial class ScopeGuard(ScopeGuardOptions options) : IScopeGuard
         }
 
         var topicHits = tokens.Count(t =>
-            _options.TopicVocabularies.Any(v => v.Contains(t, StringComparer.OrdinalIgnoreCase)));
+            _topicVocabulary.Any(v => v.Contains(t, StringComparer.OrdinalIgnoreCase)));
 
         var topicRatio = (double)topicHits / tokens.Length;
         if (topicRatio < _options.MinimumTopicTokenRatio)
@@ -131,9 +161,6 @@ public sealed class ScopeGuardOptions
 
     /// <summary>How many of the most recent customer turns feed the topic check.</summary>
     public int CustomerTurnsToConsider { get; set; } = 3;
-
-    /// <summary>Vocabularies that count as on-topic. Any one matching token is a hit.</summary>
-    public List<List<string>> TopicVocabularies { get; set; } = [];
 
     /// <summary>Phrases that immediately mark the request as out of domain.</summary>
     public List<string> DenyPhrases { get; set; } = [];

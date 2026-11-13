@@ -85,9 +85,17 @@ public sealed class AiProviderRegistrationTests
 
     [Theory]
     [InlineData("not a url")]
+
+    // On Linux this parses as the absolute URI file:///v1/chat, so Uri.TryCreate on its own
+    // accepted it and the misconfiguration surfaced as a failed request instead of a refusal.
     [InlineData("/v1/chat")]
     [InlineData("api.example.com/v1")]
-    public void A_relative_or_malformed_base_url_fails_at_startup(string baseUrl)
+
+    // Absolute, but not something HttpClient will talk to. The scheme is the rule, not just
+    // absoluteness.
+    [InlineData("ftp://api.example.com/v1")]
+    [InlineData("file:///srv/chat")]
+    public void A_relative_malformed_or_non_http_base_url_fails_at_startup(string baseUrl)
     {
         using var services = BuildProvider(
             ("Ai:Provider", AiServiceCollectionExtensions.OpenAiCompatibleProviderName),

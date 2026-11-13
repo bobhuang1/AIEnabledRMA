@@ -128,3 +128,18 @@ public sealed class FakePaymentGateway(
 
     private sealed record Authorization(PaymentReceipt Receipt, PaymentCaptureMode Mode);
 }
+
+/// <summary>
+/// Settings for the bundled development gateway, bound from <c>Payments:Fake</c>.
+/// </summary>
+public sealed class FakePaymentGatewayOptions
+{
+    public const string SectionName = "Payments:Fake";
+
+    /// <summary>
+    /// Allows the accept-everything gateway to be registered outside Development. Off by
+    /// default: a deployment that forgets to replace it must fail to start rather than run a
+    /// payment step that authorises every amount and collects nothing.
+    /// </summary>
+    public bool AllowInProduction { get; set; }
+}

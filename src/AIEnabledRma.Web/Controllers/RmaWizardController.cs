@@ -5,6 +5,7 @@ using AIEnabledRma.Domain.Rules;
 using AIEnabledRma.Domain.Triage;
 using AIEnabledRma.Web.Models;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace AIEnabledRma.Web.Controllers;
 
@@ -38,6 +39,7 @@ public sealed class RmaWizardController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [EnableRateLimiting(RateLimitPolicies.WizardWrites)]
     public async Task<IActionResult> Start(StartReturnForm form, CancellationToken cancellationToken)
     {
         if (!ModelState.IsValid)
@@ -92,7 +94,10 @@ public sealed class RmaWizardController(
 
         foreach (var identifier in identifiers)
         {
-            lookups.Add(await devices.LookupAsync(identifier, today, cancellationToken));
+            // Exact only: see LookupExactAsync. Fuzzy matching here let an anonymous visitor
+            // walk the catalog a prefix at a time, and each hit opened a return against a unit
+            // the visitor did not have.
+            lookups.Add(await devices.LookupExactAsync(identifier, today, cancellationToken));
         }
 
         var result = await workflow.StartAsync(
@@ -131,20 +136,21 @@ public sealed class RmaWizardController(
         // The match list crosses the redirect as a JSON string: cookie TempData round-trips
         // simple values dependably, and a structured list is pushed through the serializer
         // explicitly instead of being left to inference.
-        IReadOnlyList<CustomerMatchView>? matches = matchesJson is string json
+        var matches = matchesJson is string json
             ? System.Text.Json.JsonSerializer.Deserialize<List<CustomerMatchView>>(json)
             : null;
 
         TempData.Keep("AmbiguousMatches");
 
-        ViewBag.Identifiers = identifiers;
-        ViewBag.Matches = matches;
-
-        return View();
+        return View(new ChooseCustomerViewModel(matches ?? [], identifiers));
     }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    // Same bucket as Start and Triage: see RateLimitPolicies.WizardWrites. This step looks up
+    // identifiers and can create the request, so a separate allowance would just double the
+    // writes one caller can make.
+    [EnableRateLimiting(RateLimitPolicies.WizardWrites)]
     public async Task<IActionResult> ChooseCustomer(string customerId, string identifiers, CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(customerId, out var id))
@@ -169,7 +175,10 @@ public sealed class RmaWizardController(
 
         foreach (var identifier in identifierList)
         {
-            lookups.Add(await devices.LookupAsync(identifier, today, cancellationToken));
+            // Exact only: see LookupExactAsync. Fuzzy matching here let an anonymous visitor
+            // walk the catalog a prefix at a time, and each hit opened a return against a unit
+            // the visitor did not have.
+            lookups.Add(await devices.LookupExactAsync(identifier, today, cancellationToken));
         }
 
         var result = await workflow.StartAsync(
@@ -241,6 +250,7 @@ public sealed class RmaWizardController(
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [EnableRateLimiting(RateLimitPolicies.WizardWrites)]
     public async Task<IActionResult> Triage(Guid id, TriageForm form, CancellationToken cancellationToken)
     {
         if (!ModelState.IsValid)
@@ -278,9 +288,22 @@ public sealed class RmaWizardController(
             },
             cancellationToken);
 
-        var applied = await workflow.ApplyTriageAsync(id, triageResult, cancellationToken);
+        // The statement is passed on so the workflow can re-run the excluded-cause rules now
+        // that a fault description exists. It is the customer's own words, never the model's
+        // output: the AI may not influence eligibility in either direction.
+        var applied = await workflow.ApplyTriageAsync(
+            id,
+            triageResult,
+            form.Statement,
+            cancellationToken);
 
-        if (applied.Outcome == StepOutcome.ResolvedByTroubleshooting)
+        // A resolved verdict, a policy refusal, a request that needs a person, and an
+        // out-of-order step all end the wizard here rather than continuing to the problems
+        // step, which would collect details for a return that will not happen.
+        if (applied.Outcome is StepOutcome.ResolvedByTroubleshooting
+            or StepOutcome.InvalidTransition
+            or StepOutcome.NotEligible
+            or StepOutcome.RequiresHumanReview)
         {
             return View("Outcome", ToViewModel(applied, triageResult));
         }
@@ -353,7 +376,18 @@ public sealed class RmaWizardController(
             return View(form);
         }
 
-        await workflow.RecordProblemsAsync(form.RmaId, problems, cancellationToken);
+        var result = await workflow.RecordProblemsAsync(form.RmaId, problems, cancellationToken);
+
+        // Same as triage: the described fault can make the policy refuse the return, or hand it
+        // to a person, and either ends the wizard here instead of collecting shipping details
+        // for a return that will not happen. A return that has moved on is refused in place
+        // rather than redirected to the next page, which would only refuse it there.
+        if (result.Outcome is StepOutcome.NotEligible
+            or StepOutcome.RequiresHumanReview
+            or StepOutcome.InvalidTransition)
+        {
+            return View("Outcome", ToViewModel(result));
+        }
 
         return RedirectToAction(nameof(Shipping), new { id = form.RmaId });
     }
@@ -434,6 +468,11 @@ public sealed class RmaWizardController(
 
         var result = await workflow.SetShippingAsync(form.RmaId, chosen, cancellationToken);
 
+        if (result.Outcome == StepOutcome.InvalidTransition)
+        {
+            return View("Outcome", ToViewModel(result));
+        }
+
         if (result.Outcome == StepOutcome.AwaitingPayment)
         {
             return RedirectToAction(nameof(Payment), new { id = form.RmaId });
@@ -458,7 +497,7 @@ public sealed class RmaWizardController(
             NullIfBlank(form.PaymentMethodToken),
             cancellationToken);
 
-        if (result.Outcome == StepOutcome.RequiresHumanReview)
+        if (result.Outcome is StepOutcome.RequiresHumanReview or StepOutcome.InvalidTransition)
         {
             return View("Outcome", ToViewModel(result));
         }
@@ -537,6 +576,15 @@ public sealed class RmaWizardController(
     /// a safe shape to push through that round trip in every TempDataProvider.
     /// </summary>
     public sealed record CustomerMatchView(Guid Id, string Name, string? Email, string? PhoneNumber);
+
+    /// <summary>
+    /// What the ambiguity page renders. A model rather than ViewBag: a ViewBag value arrives at
+    /// the view as <c>object</c>, so recovering it needed a cast naming the exact runtime type,
+    /// and any mismatch failed silently by rendering an empty list.
+    /// </summary>
+    public sealed record ChooseCustomerViewModel(
+        IReadOnlyList<CustomerMatchView> Matches,
+        string? Identifiers);
 
     public sealed record MaskedAddressView(Guid Id, string? Label, string Masked, bool IsDefault);
 

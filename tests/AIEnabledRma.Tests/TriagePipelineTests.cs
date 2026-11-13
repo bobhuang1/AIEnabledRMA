@@ -51,7 +51,6 @@ public sealed class TriagePipelineTests
     private static (TriagePipeline Pipeline, StubChatModel Model) Build(
         string? modelOutput = null,
         IReadOnlyList<RetrievedArticle>? articles = null,
-        ScopeGuardOptions? guardOptions = null,
         Exception? throwFromModel = null)
     {
         var model = throwFromModel is not null
@@ -60,18 +59,16 @@ public sealed class TriagePipelineTests
 
         var retriever = new FakeRetriever { Articles = articles ?? [Article()] };
 
-        var effectiveGuard = guardOptions ?? new ScopeGuardOptions
-        {
-            TopicVocabularies =
-            [
-                ["indicator", "power", "turn", "won't", "wont", "dark", "unit", "light"],
-            ],
-        };
+        // The words this fixture treats as on-topic, spelled out so a pipeline test never
+        // depends on what the shipped corpus happens to contain.
+        var guard = new ScopeGuard(
+            new ScopeGuardOptions(),
+            [["indicator", "power", "turn", "won't", "wont", "dark", "unit", "light"]]);
 
         var pipeline = new TriagePipeline(
             model,
             retriever,
-            new ScopeGuard(effectiveGuard),
+            guard,
             Microsoft.Extensions.Options.Options.Create(new RmaPolicyOptions
             {
                 HumanReviewConfidenceThreshold = 0.45,

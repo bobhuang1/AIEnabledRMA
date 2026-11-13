@@ -31,10 +31,11 @@ policy outcome:
 Use customer `j.smith@example.com` (a seeded account). Typing just `Smyth` exercises the
 ambiguous-identity path; `j.smith@example.com` resolves to exactly one customer.
 
-> The seeder expresses warranty windows relative to a fixed reference date, so the
-> grace-period and boundary demos gradually age into "paid repair" as the wall clock moves.
-> The policy logic does not change; resetting the database does not move the seeder reference
-> date.
+> The seeder expresses every warranty and shipping window relative to the day it runs, so the
+> table above holds whenever the demo is seeded. These are stored dates, not rules, so a
+> database seeded months ago drifts as the wall clock moves — re-anchor it with
+> `dotnet run --project tools/DbAdmin -- reset --force`. The live wizard suite does not rely on
+> the calendar at all: it seeds from a fixed anchor and pins the host clock to it.
 
 ## Prerequisites
 
@@ -53,10 +54,19 @@ ambiguous-identity path; `j.smith@example.com` resolves to exactly one customer.
 | `src/AIEnabledRma.Mcp` | MCP tool server: the same policy and lookups exposed to an agent. |
 | `src/AIEnabledRma.Web` | Customer-facing return wizard (ASP.NET Core MVC). |
 | `tools/DbAdmin` | Migrate, seed, reset, and inspect the database from the command line. |
-| `tests/AIEnabledRma.Tests` | 190 tests, incl. live PostgreSQL sequence and end-to-end wizard suites. |
+| `tests/AIEnabledRma.Tests` | 237 tests, incl. live PostgreSQL sequence and end-to-end wizard suites. |
 
-All three hosts call the same `AddRmaData` registration, so the fuzzy-match thresholds a
-customer-facing wizard uses and the ones an agent's lookup tool uses cannot drift apart.
+The Web and MCP hosts call the same `AddRmaData` registration, so the fuzzy-match thresholds an
+agent's lookup tool uses cannot drift apart from the ones the tests exercise. The RAG host
+serves the knowledge index and references only the domain project, so it opens no database.
+
+The customer wizard is the deliberate exception. Its intake calls `LookupExactAsync`, which
+accepts only a serial number or alternate identifier (MAC, IMEI) the caller typed in full — no
+fuzzy scoring, no catalog scan. Fuzzy intake was an enumeration oracle: an anonymous visitor
+could walk the catalog a serial prefix at a time, and every hit opened a return against the
+real unit, which then blocked its owner as a duplicate. Agent paths (`lookup_device`,
+`check_coverage`, `get_fee_quote`) keep fuzzy resolution, because that caller is supposed to
+already hold partial information.
 
 ## Setup
 
@@ -114,8 +124,13 @@ Walk a return:
 
 1. **Start** (`/RmaWizard/Start`) — enter customer + serial(s), one per line.
 2. **Triage** (`/RmaWizard/Triage/{id}`) — describe the fault. A local `example-local` model
-   is the default AI provider, so no API key is needed.
-3. **Problems** (`/RmaWizard/Problems/{id}`) — per-line detail for the bench.
+   is the default AI provider, so no API key is needed. The description is also re-checked
+   against the deterministic excluded-cause rules (`RmaPolicy:ExcludedCauses` →
+   `RmaPolicyEvaluator`), so liquid or impact damage reported here is refused now rather than
+   covered, because intake runs before any fault description exists.
+3. **Problems** (`/RmaWizard/Problems/{id}`) — per-line detail for the bench. These descriptions
+   are re-evaluated by the same rules as the triage statement, so a cause that only appears
+   here can still refuse the return or turn it into a priced repair.
 4. **Shipping** (`/RmaWizard/Shipping/{id}`) — choose a stored address or type a free-text one
    (matched, falling back to the customer's default with a warning).
 5. **Payment** only when money is due (an out-of-warranty repair) — the fee is authorised for
@@ -143,7 +158,7 @@ Tools:
 | --- | --- |
 | `check_coverage` | Policy verdict for a serial on a given date (`Eligible`, `EligibleForPaidRepair`, `RequiresHumanReview`, `NotEligible`) + explanation + rule trace |
 | `get_fee_quote` | Repair price for a device from the same per-product price table the wizard bills from |
-| `lookup_device` / `lookup_customer` | Catalog and customer lookups through the same fuzzy matchers the wizard uses |
+| `lookup_device` / `lookup_customer` | Fuzzy catalog and customer lookups. The wizard's own intake is exact by design (see Repository layout); this tool is for a caller that already holds partial information |
 | `resolve_shipping_address` | Matches free text to a customer's stored addresses, never claiming a weak match is confident |
 
 Example agent question: *"AX2-0001-0005 is dead on arrival and out of warranty — what happens
@@ -180,10 +195,10 @@ docker run -p 8080:8080 -e ConnectionStrings__Rma="$ConnectionStrings__Rma" aien
 ## Configuration
 
 Bind via `IConfiguration`, i.e. `appsettings.json` or environment overrides
-(`Policy__...`). The important tree:
+(`RmaPolicy__...`). The important tree:
 
 ```
-Policy:
+RmaPolicy:
   ReturnWindowDays            # 730
   GracePeriodDays             # 30
   DefaultRepairFee            # fallback price when a product has no table entry (99.00)
@@ -211,7 +226,7 @@ Ai:
 
 Payments:
   Fake:
-    AcceptAllAmounts: true   # bundled dev gateway: authorise every positive amount
+    AllowInProduction: false # the accept-everything gateway exists for Development only
 ```
 
 ## Why the AI is advisory
@@ -225,7 +240,9 @@ that can approve a return is a model that can be talked into approving a return:
   advisory text.
 - A model timeout, malformed output, empty retrieval, or low confidence all fall back to
   `RequiresHumanReview`. There is no path where a model failure becomes an approval.
-- `ScopeGuard` refuses questions outside the configured scope rather than guessing.
+- `ScopeGuard` refuses questions outside the vocabulary its own corpus declares rather than
+  guessing: the topic words are derived from the knowledge base's categories and keywords, not
+  maintained as a second list that drifts from it.
 - When triage resolves the fault by troubleshooting, the RMA is **cancelled**, not approved.
 
 ## Paid repairs
@@ -235,7 +252,7 @@ repair** with its own wizard step. In-warranty units (including the grace period
 or repaired free. Refusal happens only outside the return window, on an excluded cause, or
 for an unknown device.
 
-- The charge comes from a per-product price table (`Policy:RepairPrices`), matched by SKU then
+- The charge comes from a per-product price table (`RmaPolicy:RepairPrices`), matched by SKU then
   product name, falling back to `DefaultRepairFee`. Prices are per product, not per tier: two
   units on one request each contribute their own price, summed once per request.
 - The table is the single source of truth for the wizard and the MCP `get_fee_quote` tool, so
@@ -272,7 +289,7 @@ Because the wizard is anonymous, it never shows another customer's details in fu
   picked.
 - Stored addresses are shown masked (label plus `•••, 62••• US`) on the shipping and
   confirmation steps.
-- The payment currency comes from the price table (`Policy:RepairPrices`), never from
+- The payment currency comes from the price table (`RmaPolicy:RepairPrices`), never from
   the browser.
 Revisit before the wizard gains authenticated pages, an operator portal, or multiple users
 per return.
@@ -289,9 +306,10 @@ and the sequence can never disagree.
 
 The bundled gateway (`FakePaymentGateway`) holds authorisations in memory, honours the
 immediate-versus-manual-capture split, and **accepts every positive amount** — the point is to
-exercise the payment plumbing, not simulate who gets approved. Resulting authorisations are
-exposed on the diagnostics endpoint. Replace the `IPaymentGateway` registration with a real
-provider before taking money.
+exercise the payment plumbing, not simulate who gets approved. It is registered only in
+Development: outside Development the host refuses to start unless
+`Payments:Fake:AllowInProduction` is explicitly set to `true`. Replace the `IPaymentGateway`
+registration with a real provider before taking money.
 
 ## Health
 

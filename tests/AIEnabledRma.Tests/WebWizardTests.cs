@@ -1,12 +1,16 @@
 using System.Net;
 using System.Text.RegularExpressions;
+using AIEnabledRma.Ai;
 using AIEnabledRma.Data;
 using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Domain.Rules;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Npgsql;
 
 namespace AIEnabledRma.Tests;
@@ -41,8 +45,10 @@ public sealed class WebWizardTests : IAsyncLifetime
     private const string IneligibleSerial = "NO-SUCH-SERIAL-0000";
 
     /// <summary>
-    /// Seeded 500 days past warranty but still inside the return window, so the policy no longer
-    /// refuses it: the wizard now offers a paid repair. This serial is what walks the payment step.
+    /// Seeded with its warranty expired two years before <see cref="SeedAnchor"/> and shipped
+    /// 500 days before it, so at the anchored date it is out of warranty but still inside the
+    /// 730-day return window: the wizard offers a paid repair, and that is what walks the
+    /// payment step.
     /// </summary>
     private const string PaidRepairSerial = "AX2-0001-0005";
 
@@ -62,6 +68,13 @@ public sealed class WebWizardTests : IAsyncLifetime
 
     private const string CurrencyCode = "USD";
 
+    /// <summary>
+    /// The fixture's reference date. The seeder writes every warranty and shipping date as an
+    /// offset from it, and the host clock is pinned to it, so which devices are in warranty, in
+    /// grace, or inside the return window does not depend on when the suite runs.
+    /// </summary>
+    private static readonly DateOnly SeedAnchor = new(2026, 3, 1);
+
     private string _databaseName = string.Empty;
     private string _adminConnectionString = string.Empty;
     private string _applicationConnectionString = string.Empty;
@@ -69,9 +82,18 @@ public sealed class WebWizardTests : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        _adminConnectionString =
+        _adminConnectionString = new NpgsqlConnectionStringBuilder(
             Environment.GetEnvironmentVariable(AdminConnectionStringVariable)
-            ?? DefaultAdminConnectionString;
+            ?? DefaultAdminConnectionString)
+        {
+            // Provisioning creates and drops a database per test. On a workstation whose
+            // PostgreSQL data directory is a bind-mounted volume — the docker-compose setup
+            // this repository documents — CREATE DATABASE spends tens of seconds on fsync
+            // alone, and Npgsql's 30-second default command timeout cancels it mid-copy. That
+            // surfaces as "Exception while reading from stream" in InitializeAsync, which reads
+            // like a broken wizard rather than a slow disk.
+            CommandTimeout = 120,
+        }.ConnectionString;
 
         try
         {
@@ -104,10 +126,10 @@ public sealed class WebWizardTests : IAsyncLifetime
         await using (var db = CreateContext())
         {
             await db.Database.MigrateAsync(TestContext.Current.CancellationToken);
-            await DemoDataSeeder.SeedAsync(db, TestContext.Current.CancellationToken);
+            await DemoDataSeeder.SeedAsync(db, TestContext.Current.CancellationToken, SeedAnchor);
         }
 
-        _factory = new WizardFactory(_applicationConnectionString);
+        _factory = new WizardFactory(_applicationConnectionString, SeedAnchor);
     }
 
     public async ValueTask DisposeAsync()
@@ -482,6 +504,252 @@ public sealed class WebWizardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_liquid_damage_statement_is_refused_by_the_policy_at_triage()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        var start = await client.GetAsync("/RmaWizard/Start", ct);
+        var startStep = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            TokenOf(await start.Content.ReadAsStringAsync(ct)),
+            [("Customer", CustomerEmail), ("Identifiers", EligibleSerial)],
+            ct);
+
+        Assert.StartsWith("/RmaWizard/Triage/", startStep.Path, StringComparison.Ordinal);
+        var rmaId = IdFromPath(startStep.Path);
+
+        var triagePage = await client.GetAsync($"/RmaWizard/Triage/{rmaId}", ct);
+
+        // The statement is the only place a fault description exists, so this is where the
+        // excluded-cause rules first have something to match against.
+        var triageStep = await PostStepAsync(
+            client,
+            $"/RmaWizard/Triage/{rmaId}",
+            TokenOf(await triagePage.Content.ReadAsStringAsync(ct)),
+            [("Statement", "I spilled water on it and now it will not power on.")],
+            ct);
+
+        // A refusal re-renders on the same URL instead of handing the customer to the problems
+        // step, which would collect details for a return that will not happen.
+        Assert.Equal($"/RmaWizard/Triage/{rmaId}", triageStep.Path);
+
+        var html = await triageStep.Page.Content.ReadAsStringAsync(ct);
+        Assert.Contains("We cannot take this return", html, StringComparison.Ordinal);
+        Assert.Contains("Liquid ingress is not covered", html, StringComparison.Ordinal);
+
+        // Persisted, and carrying the rule that produced it, so support can see why.
+        await using var db = CreateContext();
+        var refused = await db.RmaRequests.SingleAsync(r => r.Id == rmaId, ct);
+        Assert.Equal(RmaRequestStatus.Rejected, refused.Status);
+        Assert.Equal(nameof(RmaDecisionReason.ExcludedCause), refused.EligibilityReason);
+        Assert.Contains("cause.liquid", refused.PolicyRuleTrace, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_draft_cannot_be_paid_for_and_confirmed_into_awaiting_shipment()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        var start = await client.GetAsync("/RmaWizard/Start", ct);
+        var startStep = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            TokenOf(await start.Content.ReadAsStringAsync(ct)),
+            [("Customer", CustomerEmail), ("Identifiers", EligibleSerial)],
+            ct);
+
+        Assert.StartsWith("/RmaWizard/Triage/", startStep.Path, StringComparison.Ordinal);
+        var rmaId = IdFromPath(startStep.Path);
+
+        // A covered return is a Draft with nothing to pay. That zero total is what made the
+        // original bypass work: the payment step authorised it and moved the request to
+        // Approved, without triage, problems, shipping, or money.
+        await using (var before = CreateContext())
+        {
+            var draft = await before.RmaRequests.SingleAsync(r => r.Id == rmaId, ct);
+            Assert.Equal(RmaRequestStatus.Draft, draft.Status);
+            Assert.Equal(0m, draft.ShippingCharge + draft.DepositAmount);
+        }
+
+        var paymentPage = await client.GetAsync($"/RmaWizard/Payment/{rmaId}", ct);
+        var paymentStep = await PostStepAsync(
+            client,
+            $"/RmaWizard/Payment/{rmaId}",
+            TokenOf(await paymentPage.Content.ReadAsStringAsync(ct)),
+            [("RmaId", rmaId.ToString()), ("PaymentMethodToken", "tok_test")],
+            ct);
+
+        // Refused in place, not redirected to the confirmation page.
+        Assert.Equal($"/RmaWizard/Payment/{rmaId}", paymentStep.Path);
+        Assert.Contains(
+            "That step is out of order",
+            await paymentStep.Page.Content.ReadAsStringAsync(ct),
+            StringComparison.Ordinal);
+
+        // And the confirmation step cannot turn the untouched draft into a committed return.
+        var confirmPage = await client.GetAsync($"/RmaWizard/Confirm/{rmaId}", ct);
+        var confirmStep = await PostStepAsync(
+            client,
+            "/RmaWizard/Confirm",
+            TokenOf(await confirmPage.Content.ReadAsStringAsync(ct)),
+            [("RmaId", rmaId.ToString())],
+            ct);
+
+        Assert.Contains(
+            "That step is out of order",
+            await confirmStep.Page.Content.ReadAsStringAsync(ct),
+            StringComparison.Ordinal);
+
+        await using var db = CreateContext();
+        var request = await db.RmaRequests.SingleAsync(r => r.Id == rmaId, ct);
+        Assert.Equal(RmaRequestStatus.Draft, request.Status);
+        Assert.Null(request.PaymentTransactionId);
+    }
+
+    [Fact]
+    public async Task A_partial_serial_is_not_resolved_into_a_return_line()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        // Counted before the attempt, because the claim under test is that nothing at all was
+        // written: not a return, not a line. Naming a device instead would make the assertion
+        // depend on which of the AX2-0001-* units a fuzzy matcher happened to score first.
+        await using var db = CreateContext();
+        var requestsBefore = await db.RmaRequests.CountAsync(ct);
+        var linesBefore = await db.RmaLines.CountAsync(ct);
+
+        var start = await client.GetAsync("/RmaWizard/Start", ct);
+
+        // A prefix of a real serial, not a serial: fuzzy intake matching scored this 0.90
+        // against AX2-0001-0001 and opened a return for a unit the visitor does not have.
+        var startStep = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            TokenOf(await start.Content.ReadAsStringAsync(ct)),
+            [("Customer", CustomerEmail), ("Identifiers", "AX2-0001")],
+            ct);
+
+        Assert.DoesNotContain("/RmaWizard/Triage/", startStep.Path, StringComparison.Ordinal);
+
+        var html = await startStep.Page.Content.ReadAsStringAsync(ct);
+        Assert.Contains("cannot take this return", html, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Equal(requestsBefore, await db.RmaRequests.CountAsync(ct));
+        Assert.Equal(linesBefore, await db.RmaLines.CountAsync(ct));
+
+        // The consequence that actually hurts a customer: a line created here would sit against
+        // the real unit, and the owner's own return would then be refused as a duplicate. So the
+        // unit the prefix pointed at must still start a return normally.
+        var ownerStart = await client.GetAsync("/RmaWizard/Start", ct);
+        var ownerStep = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            TokenOf(await ownerStart.Content.ReadAsStringAsync(ct)),
+            [
+                ("Customer", CustomerEmail),
+                ("Identifiers", EligibleSerial),
+                ("CurrencyCode", CurrencyCode),
+            ],
+            ct);
+
+        Assert.StartsWith("/RmaWizard/Triage/", ownerStep.Path, StringComparison.Ordinal);
+
+        // And the owner's attempt is the only thing that wrote a row.
+        Assert.Equal(requestsBefore + 1, await db.RmaRequests.CountAsync(ct));
+        Assert.Equal(linesBefore + 1, await db.RmaLines.CountAsync(ct));
+    }
+
+    [Fact]
+    public async Task A_liquid_damage_description_at_the_problems_step_is_refused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        var start = await client.GetAsync("/RmaWizard/Start", ct);
+        var startStep = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            TokenOf(await start.Content.ReadAsStringAsync(ct)),
+            [
+                ("Customer", CustomerEmail),
+                ("Identifiers", EligibleSerial),
+                ("CurrencyCode", CurrencyCode),
+            ],
+            ct);
+
+        var rmaId = IdFromPath(startStep.Path);
+        var triagePage = await client.GetAsync($"/RmaWizard/Triage/{rmaId}", ct);
+
+        // An innocuous statement, so triage has nothing to refuse.
+        var triageStep = await PostStepAsync(
+            client,
+            $"/RmaWizard/Triage/{rmaId}",
+            TokenOf(await triagePage.Content.ReadAsStringAsync(ct)),
+            [("Statement", "The screen stays black although the fan is running.")],
+            ct);
+
+        Assert.Equal($"/RmaWizard/Problems/{rmaId}", triageStep.Path);
+
+        var problemsPage = await client.GetAsync($"/RmaWizard/Problems/{rmaId}", ct);
+
+        // The damage is described only here. It has to stop the return all the same, or one
+        // unwatched field is all it takes to skip the excluded-cause rules.
+        var problemsStep = await PostStepAsync(
+            client,
+            "/RmaWizard/Problems",
+            TokenOf(await problemsPage.Content.ReadAsStringAsync(ct)),
+            [
+                ("RmaId", rmaId.ToString()),
+                ("Lines[0].DeviceId", (await DeviceIdAsync(EligibleSerial, ct)).ToString()),
+                ("Lines[0].SerialNumber", EligibleSerial),
+                ("Lines[0].Description", "I spilled coffee on it and now it will not switch on."),
+                ("Lines[0].WhatCustomerTried", "Dried it out and left it overnight."),
+            ],
+            ct);
+
+        // Refused in place rather than handed to the shipping step, which would have collected
+        // an address for a return that will not happen.
+        Assert.Equal("/RmaWizard/Problems", problemsStep.Path);
+        Assert.Contains(
+            "cannot take this return",
+            await problemsStep.Page.Content.ReadAsStringAsync(ct),
+            StringComparison.OrdinalIgnoreCase);
+
+        await using var db = CreateContext();
+        var request = await db.RmaRequests.SingleAsync(r => r.Id == rmaId, ct);
+
+        Assert.Equal(RmaRequestStatus.Rejected, request.Status);
+    }
+
+    [Fact]
+    public async Task A_partial_serial_still_resolves_on_the_fuzzy_path_the_agent_tools_use()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        await using var db = CreateContext();
+        var devices = new DeviceRepository(db, Options.Create(new DeviceLookupOptions()));
+        var today = SeedAnchor;
+
+        // Intake is exact-only, but the MCP tools (lookup_device, check_coverage, get_fee_quote)
+        // still resolve a truncated serial. An operator or agent that already holds partial
+        // information is not the enumeration risk an anonymous wizard visitor is: the tool call
+        // needs a tool server, and it does not open a return against whatever it finds.
+        var fuzzy = await devices.LookupAsync("AX2-0001", today, ct);
+
+        Assert.Equal("fuzzy", fuzzy.MatchedOn);
+        Assert.NotNull(fuzzy.Device);
+
+        // The same identifier on the intake path resolves nothing at all.
+        var exact = await devices.LookupExactAsync("AX2-0001", today, ct);
+
+        Assert.Null(exact.Device);
+    }
+
+    [Fact]
     public async Task An_ambiguous_customer_is_handed_to_them_to_choose_rather_than_guessed()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -510,8 +778,15 @@ public sealed class WebWizardTests : IAsyncLifetime
         // Both candidates survive the redirect onto the chooser, so the posted choice is
         // genuinely informed and no return has been created for either account yet.
         var chooserHtml = await startStep.Page.Content.ReadAsStringAsync(ct);
-        Assert.Contains("j.smith@example.com", chooserHtml, StringComparison.Ordinal);
-        Assert.Contains("am.obrien@example.com", chooserHtml, StringComparison.Ordinal);
+
+        // Both candidates are listed, and both are masked. The list used to be empty: the view
+        // cast the controller's List<CustomerMatchView> with `as IEnumerable<dynamic>`, which
+        // is IEnumerable<object> and therefore always null. Names prove the list rendered;
+        // the full contact details prove masking still holds on the page.
+        Assert.Contains("Josephine S.", chooserHtml, StringComparison.Ordinal);
+        Assert.Contains("Anne-Marie O.", chooserHtml, StringComparison.Ordinal);
+        Assert.DoesNotContain("j.smith@example.com", chooserHtml, StringComparison.Ordinal);
+        Assert.DoesNotContain("am.obrien@example.com", chooserHtml, StringComparison.Ordinal);
         Assert.Contains(EligibleSerial, chooserHtml, StringComparison.Ordinal);
 
         await using var db = CreateContext();
@@ -587,6 +862,61 @@ public sealed class WebWizardTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains("\"status\":\"ok\"", body, StringComparison.Ordinal);
         Assert.Contains("articleCount", body, StringComparison.Ordinal);
+
+        // Counts only. This endpoint answers without authentication on the customer-facing
+        // host, so where the corpus lives and which of its files failed to parse are operator
+        // detail: they belong to the RAG host's gated /diagnostics, not here.
+        Assert.DoesNotContain("path", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("loadErrors", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_anonymous_wizard_writes_share_one_rate_limit_per_client()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        var page = await client.GetAsync("/RmaWizard/Start", ct);
+        var token = TokenOf(await page.Content.ReadAsStringAsync(ct));
+
+        // An empty form, so every allowed request is a validation error: no request is created,
+        // no customer is looked up, and nothing is spent. What is measured is the limiter.
+        var values = new List<KeyValuePair<string, string>>
+        {
+            new("__RequestVerificationToken", token),
+            new("Customer", string.Empty),
+            new("Identifiers", string.Empty),
+        };
+
+        // The policy allows 30 writes a minute per client address.
+        for (var allowed = 0; allowed < 30; allowed++)
+        {
+            var permitted = await client.PostAsync(
+                "/RmaWizard/Start",
+                new FormUrlEncodedContent(values),
+                ct);
+
+            Assert.Equal(HttpStatusCode.OK, permitted.StatusCode);
+        }
+
+        // The 31st is refused before the action runs, which is what stops a script from
+        // treating an anonymous form as a free triage API.
+        var limited = await client.PostAsync(
+            "/RmaWizard/Start",
+            new FormUrlEncodedContent(values),
+            ct);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+
+        // And the allowance is the caller's, not the endpoint's. ChooseCustomer resolves the
+        // same identifiers and can create the same request, so a bucket of its own would double
+        // what one script can do per minute.
+        var chooseCustomer = await client.PostAsync(
+            "/RmaWizard/ChooseCustomer",
+            new FormUrlEncodedContent(values),
+            ct);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, chooseCustomer.StatusCode);
     }
 
     private HttpClient CreateClient()
@@ -771,16 +1101,50 @@ public sealed class WebWizardTests : IAsyncLifetime
     private sealed class WizardFactory : WebApplicationFactory<global::WebAppAnchor>
     {
         private readonly string _connectionString;
+        private readonly DateOnly _anchor;
 
-        public WizardFactory(string connectionString) => _connectionString = connectionString;
+        public WizardFactory(string connectionString, DateOnly anchor)
+        {
+            _connectionString = connectionString;
+            _anchor = anchor;
+        }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseSetting("ConnectionStrings:Rma", _connectionString);
 
+            builder.ConfigureTestServices(services =>
+            {
+                // Every date in the fixture is an offset from the anchor, so the host's clock is
+                // pinned to it as well: the wizard's "today" is the day the data was authored
+                // for, not whatever day the suite happens to run. Without this, a unit seeded 500
+                // days before the anchor walks out of the 730-day return window as the calendar
+                // advances, and the paid-repair test turns red for a reason that has nothing to do
+                // with the code under test.
+                var at = new DateTimeOffset(
+                    _anchor.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
+
+                services.AddSingleton<TimeProvider>(new FrozenTimeProvider(at));
+                services.AddSingleton<IClock>(new FakeClock(at));
+            });
+
             // The checked-in configuration carries a placeholder connection string, so without
             // this the host would start and then fail on its first query instead of at startup.
             builder.UseEnvironment("Testing");
+
+            // This host runs as "Testing" so the production error page is exercised, and the
+            // bundled accept-everything gateway refuses to register outside Development. The
+            // explicit opt-in is the supported escape hatch; widening the guard to a list of
+            // environment names would make "anything not named Production" quietly acceptable.
+            builder.UseSetting(
+                $"{FakePaymentGatewayOptions.SectionName}:{nameof(FakePaymentGatewayOptions.AllowInProduction)}",
+                "true");
+        }
+
+        /// <summary>A <see cref="TimeProvider"/> that always reports the anchor instant.</summary>
+        private sealed class FrozenTimeProvider(DateTimeOffset now) : TimeProvider
+        {
+            public override DateTimeOffset GetUtcNow() => now;
         }
     }
 }

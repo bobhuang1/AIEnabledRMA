@@ -21,8 +21,30 @@ public interface IDeviceRepository
         DeviceSearchQuery query,
         CancellationToken cancellationToken);
 
-    /// <summary>Device plus the warranty that governs today, in one round trip.</summary>
+    /// <summary>
+    /// Device plus the warranty that governs today, in one round trip. Falls back to fuzzy
+    /// matching, so a truncated, mistyped, or product-name-shaped identifier can still resolve.
+    /// </summary>
+    /// <remarks>
+    /// Agent and operator paths use this. The customer-facing wizard must not: see
+    /// <see cref="LookupExactAsync"/>.
+    /// </remarks>
     Task<DeviceLookupResult> LookupAsync(
+        string identifier,
+        DateOnly today,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Device plus the warranty that governs today, matched only on an exact serial or an exact
+    /// alternate identifier (MAC, IMEI, host serial). Never fuzzy, never a catalog scan.
+    /// </summary>
+    /// <remarks>
+    /// Intake uses this because fuzzy matching there was an enumeration oracle: an anonymous
+    /// visitor could walk the catalog a serial prefix at a time, and every hit opened a return
+    /// against the real unit, which then blocked its owner as a duplicate. Tools that serve an
+    /// operator who already holds partial information keep <see cref="LookupAsync"/>.
+    /// </remarks>
+    Task<DeviceLookupResult> LookupExactAsync(
         string identifier,
         DateOnly today,
         CancellationToken cancellationToken);
