@@ -175,11 +175,17 @@ wizard uses: first name and surname initial, `j•••@e•••.com`, the la
 address reduced to its label, postcode prefix and country. `externalCustomerId` is not exposed.
 Name searches stay fuzzy — a name is not an identifier — but email and phone must be complete and
 match exactly, because a partial contact search is an enumeration oracle however well the answer
-is masked; terms shorter than three characters are refused outright. Each of these calls writes a
-row to `mcp_tool_calls` (tool, caller, argument hashes rather than values, result count, latency),
-and a session is limited to 60 calls a minute and 200 customer lookups, configurable under
-`Mcp:Budget`. Exposing contact data to an authenticated support role needs an identity provider,
-which arrives with P2.
+is masked; terms shorter than three characters are refused outright.
+
+Every call of every MCP tool — these four, the device lookups, and the policy tools — writes a row
+to `mcp_tool_calls` (tool, caller, argument hashes rather than values, result count, latency) and
+counts against a session limit of 60 calls a minute, configurable under `Mcp:Budget`. Both happen
+at one choke point on the `tools/call` request rather than inside each tool, so a tool added later
+is audited and throttled without anyone remembering to wrap it; a refused call is recorded before
+it reaches the tool. On top of that, the customer tools above are limited to 200 customer lookups
+per session, because that cap is about what a call is for rather than how many there are.
+Exposing contact data to an authenticated support role needs an identity provider, which arrives
+with P2.
 
 Example agent question: *"AX2-0001-0005 is dead on arrival and out of warranty — what happens
 if the customer returns it, and how much would it cost?"* — `check_coverage` routes it to a

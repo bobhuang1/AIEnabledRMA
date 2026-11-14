@@ -19,13 +19,15 @@ builder.Services.AddMcpServer()
 builder.Services.AddRmaDbContext(builder.Configuration);
 builder.Services.AddRmaData(builder.Configuration);
 
-// Every audited call lands in mcp_tool_calls, and the session's budget is counted before the
-// lookup runs, so a refused call costs nothing.
+// Every tool call is audited and counted against the session's per-minute budget at one choke
+// point (the tools/call filter), so a tool added later is covered without being wrapped. The
+// customer tools additionally cap customer lookups per session.
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddOptions<McpBudgetOptions>()
     .Bind(builder.Configuration.GetSection(McpBudgetOptions.SectionName));
 builder.Services.AddSingleton<CallBudget>();
 builder.Services.AddScoped<IToolAuditSink, EfToolAuditSink>();
+builder.Services.AddToolCallGuard();
 
 builder.Services.AddScoped<DeviceLookupTools>();
 builder.Services.AddScoped<CustomerLookupTools>();

@@ -247,7 +247,7 @@ public sealed class McpAddressResolutionTests
         var budget = new CallBudget(
             Microsoft.Extensions.Options.Options.Create(new McpBudgetOptions()),
             TimeProvider.System);
-        return (new CustomerLookupTools(customers, new FakeRmaRepository(), new FakeToolAuditSink(), budget), customers);
+        return (new CustomerLookupTools(customers, new FakeRmaRepository(), budget), customers);
     }
 
     private static AddressResolution Resolution(

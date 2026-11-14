@@ -10,7 +10,9 @@ namespace AIEnabledRma.Tests;
 /// <summary>
 /// The customer tools are the only MCP surface that speaks about a person. These tests pin the
 /// things that stop it speaking too much: the masked projection, exact-only contact matching, a
-/// floor on term length, one audit row per call, and a budget that refuses before it looks.
+/// floor on term length, and the session cap that refuses before it looks. The audit row and the
+/// per-minute limit are asserted in <see cref="McpToolGuardTests"/>, where every tool passes
+/// through them.
 /// </summary>
 public sealed class McpCustomerToolTests
 {
@@ -43,27 +45,21 @@ public sealed class McpCustomerToolTests
         return customer;
     }
 
-    private static (CustomerLookupTools Tools, FakeCustomerRepository Customers, FakeToolAuditSink Audit) Build(
-        int callsPerMinute = 60,
+    private static (CustomerLookupTools Tools, FakeCustomerRepository Customers) Build(
         int lookupsPerSession = 200)
     {
         var customers = new FakeCustomerRepository();
-        var audit = new FakeToolAuditSink();
         var budget = new CallBudget(
-            Options.Create(new McpBudgetOptions
-            {
-                CallsPerMinute = callsPerMinute,
-                CustomerLookupsPerSession = lookupsPerSession,
-            }),
+            Options.Create(new McpBudgetOptions { CustomerLookupsPerSession = lookupsPerSession }),
             TimeProvider.System);
 
-        return (new CustomerLookupTools(customers, new FakeRmaRepository(), audit, budget), customers, audit);
+        return (new CustomerLookupTools(customers, new FakeRmaRepository(), budget), customers);
     }
 
     [Fact]
     public async Task A_customer_response_is_masked_and_carries_no_external_id()
     {
-        var (tools, customers, _) = Build();
+        var (tools, customers) = Build();
         customers.SearchResults.Add(Josephine());
 
         var response = await tools.FindCustomerAsync(
@@ -90,7 +86,7 @@ public sealed class McpCustomerToolTests
     [Fact]
     public async Task A_partial_email_matches_nothing_even_though_the_repository_is_fuzzy()
     {
-        var (tools, customers, _) = Build();
+        var (tools, customers) = Build();
         customers.SearchResults.Add(Josephine());
 
         var response = await tools.FindCustomerAsync(
@@ -106,7 +102,7 @@ public sealed class McpCustomerToolTests
     [Fact]
     public async Task The_complete_email_and_phone_do_match()
     {
-        var (tools, customers, _) = Build();
+        var (tools, customers) = Build();
         customers.SearchResults.Add(Josephine());
 
         var byEmail = await tools.FindCustomerAsync(
@@ -123,7 +119,7 @@ public sealed class McpCustomerToolTests
     [Fact]
     public async Task A_term_shorter_than_the_floor_is_refused_before_the_repository_runs()
     {
-        var (tools, customers, audit) = Build();
+        var (tools, customers) = Build();
         customers.SearchResults.Add(Josephine());
 
         var response = await tools.FindCustomerAsync(
@@ -133,13 +129,12 @@ public sealed class McpCustomerToolTests
         Assert.Equal(0, response.MatchCount);
         Assert.NotNull(response.RefusalReason);
         Assert.Equal(0, customers.SearchCalls);
-        Assert.True(Assert.Single(audit.Records).Refused);
     }
 
     [Fact]
     public async Task A_search_with_no_terms_is_refused()
     {
-        var (tools, customers, _) = Build();
+        var (tools, customers) = Build();
 
         var response = await tools.FindCustomerAsync(cancellationToken: TestContext.Current.CancellationToken);
 
@@ -148,32 +143,9 @@ public sealed class McpCustomerToolTests
     }
 
     [Fact]
-    public async Task Every_call_writes_one_audit_row_and_the_row_holds_no_values()
-    {
-        var (tools, customers, audit) = Build();
-        customers.SearchResults.Add(Josephine());
-
-        await tools.FindCustomerAsync(
-            name: "josephine smith",
-            cancellationToken: TestContext.Current.CancellationToken);
-        await tools.GetCustomerAddressesAsync(
-            customers.SearchResults[0].Id,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(2, audit.Records.Count);
-        Assert.Equal("find_customer", audit.Records[0].Tool);
-        Assert.Equal(1, audit.Records[0].ResultCount);
-        Assert.Equal("stdio:local", audit.Records[0].Caller);
-        Assert.Contains(audit.Records[0].ArgumentHashes, h => h.StartsWith("name:", StringComparison.Ordinal));
-
-        var recorded = string.Join('\n', audit.Records.SelectMany(r => r.ArgumentHashes));
-        Assert.DoesNotContain("josephine smith", recorded, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
     public async Task A_session_that_exhausts_its_lookup_budget_is_refused_without_querying()
     {
-        var (tools, customers, audit) = Build(lookupsPerSession: 1);
+        var (tools, customers) = Build(lookupsPerSession: 1);
         customers.SearchResults.Add(Josephine());
 
         var first = await tools.FindCustomerAsync(
@@ -187,13 +159,12 @@ public sealed class McpCustomerToolTests
         Assert.Equal(0, second.MatchCount);
         Assert.Contains("limit", second.RefusalReason, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, customers.SearchCalls);
-        Assert.True(audit.Records[^1].Refused);
     }
 
     [Fact]
     public async Task Addresses_are_masked_to_label_postcode_prefix_and_country()
     {
-        var (tools, customers, _) = Build();
+        var (tools, customers) = Build();
         customers.ById = Josephine();
 
         var response = await tools.GetCustomerAddressesAsync(
@@ -213,7 +184,7 @@ public sealed class McpCustomerToolTests
     [Fact]
     public async Task A_resolved_address_is_reported_masked_and_unresolved_when_below_the_threshold()
     {
-        var (tools, customers, _) = Build();
+        var (tools, customers) = Build();
         customers.Resolution = new AddressResolution
         {
             Address = Josephine().Addresses.First(),

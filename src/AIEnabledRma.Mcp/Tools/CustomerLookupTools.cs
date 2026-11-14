@@ -1,6 +1,4 @@
 using System.ComponentModel;
-using System.Security.Cryptography;
-using System.Text;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Customers;
 using ModelContextProtocol.Server;
@@ -21,12 +19,15 @@ namespace AIEnabledRma.Mcp.Tools;
 /// typing their own name badly. Email and phone must match exactly. A partial contact lookup is an
 /// enumeration oracle — the match count answers "does this address exist?" one character at a time
 /// — and masking the output does not help when the question is the count.
+///
+/// Audit rows and the per-minute budget are not here: they belong to
+/// <see cref="ToolCallGuard"/>, which every tool passes through. What stays here is the cap on
+/// customer lookups per session, because that one is about what a call is for.
 /// </remarks>
 [McpServerToolType]
 public sealed class CustomerLookupTools(
     ICustomerRepository customers,
     IRmaRepository rmas,
-    IToolAuditSink audit,
     CallBudget budget)
 {
     /// <summary>
@@ -34,9 +35,6 @@ public sealed class CustomerLookupTools(
     /// exactly the shape of a scan.
     /// </summary>
     private const int MinimumQueryLength = 3;
-
-    /// <summary>A stdio session has no identity provider; P2 adds the authenticated caller.</summary>
-    private const string CallerName = "stdio:local";
 
     [McpServerTool(
         Name = "find_customer",
@@ -62,57 +60,47 @@ public sealed class CustomerLookupTools(
         var emailQuery = Normalize(email);
         var phoneQuery = Normalize(phoneNumber);
 
-        return await AuditedAsync(
-            "find_customer",
-            [("name", nameQuery), ("email", emailQuery), ("phoneNumber", phoneQuery), ("take", take.ToString())],
-            async () =>
-            {
-                if (nameQuery is null && emailQuery is null && phoneQuery is null)
+        if (nameQuery is null && emailQuery is null && phoneQuery is null)
+        {
+            return RefusedSearch(
+                "Supply at least one of name, email, or phoneNumber. An unfiltered customer "
+                + "search is not permitted.");
+        }
+
+        if (Shortest(nameQuery, emailQuery, phoneQuery) is { } tooShort)
+        {
+            return RefusedSearch(
+                $"Search terms must be at least {MinimumQueryLength} characters, and '{tooShort}' "
+                + "is shorter. A shorter term matches a prefix of the customer table.");
+        }
+
+        if (!budget.TryConsumeCustomerLookup(out var refusal))
+        {
+            return RefusedSearch(refusal!);
+        }
+
+        var matches = (await customers.SearchAsync(
+                new CustomerSearchQuery
                 {
-                    return RefusedSearch(
-                        "Supply at least one of name, email, or phoneNumber. An unfiltered customer "
-                        + "search is not permitted.");
-                }
+                    Name = nameQuery,
+                    Email = emailQuery,
+                    PhoneNumber = phoneQuery,
+                    Take = Math.Clamp(take, 1, 25),
+                },
+                cancellationToken))
+            // The repository is fuzzy on every field; the caller is not allowed to be.
+            .Where(c => CustomerProjection.MatchesExactContact(c, emailQuery, phoneQuery))
+            .ToList();
 
-                if (Shortest(nameQuery, emailQuery, phoneQuery) is { } tooShort)
-                {
-                    return RefusedSearch(
-                        $"Search terms must be at least {MinimumQueryLength} characters, and '{tooShort}' "
-                        + "is shorter. A shorter term matches a prefix of the customer table.");
-                }
-
-                if (!budget.TryConsumeCustomerLookup(out var refusal))
-                {
-                    return RefusedSearch(refusal!);
-                }
-
-                var matches = (await customers.SearchAsync(
-                        new CustomerSearchQuery
-                        {
-                            Name = nameQuery,
-                            Email = emailQuery,
-                            PhoneNumber = phoneQuery,
-                            Take = Math.Clamp(take, 1, 25),
-                        },
-                        cancellationToken))
-                    // The repository is fuzzy on every field; the caller is not allowed to be.
-                    .Where(c => CustomerProjection.MatchesExactContact(c, emailQuery, phoneQuery))
-                    .ToList();
-
-                return new AuditedResponse<CustomerSearchResponse>(
-                    new CustomerSearchResponse
-                    {
-                        MatchCount = matches.Count,
-                        // Ambiguity is the dangerous case in a returns flow, not a low match count:
-                        // two customers on the same account is normal. The caller is told to
-                        // disambiguate.
-                        RequiresConfirmation = matches.Count > 1,
-                        Customers = matches.Select(CustomerProjection.From).ToList(),
-                    },
-                    matches.Count,
-                    Refused: false);
-            },
-            cancellationToken);
+        return new CustomerSearchResponse
+        {
+            MatchCount = matches.Count,
+            // Ambiguity is the dangerous case in a returns flow, not a low match count:
+            // two customers on the same account is normal. The caller is told to
+            // disambiguate.
+            RequiresConfirmation = matches.Count > 1,
+            Customers = matches.Select(CustomerProjection.From).ToList(),
+        };
     }
 
     [McpServerTool(
@@ -127,49 +115,36 @@ public sealed class CustomerLookupTools(
         Guid customerId,
         CancellationToken cancellationToken = default)
     {
-        return await AuditedAsync(
-            "get_customer_addresses",
-            [("customerId", customerId.ToString())],
-            async () =>
+        if (!budget.TryConsumeCustomerLookup(out var refusal))
+        {
+            return RefusedAddresses(customerId, refusal!);
+        }
+
+        var customer = await customers.GetByIdAsync(customerId, cancellationToken);
+
+        if (customer is null)
+        {
+            return new AddressListResponse
             {
-                if (!budget.TryConsumeCustomerLookup(out var refusal))
-                {
-                    return RefusedAddresses(customerId, refusal!);
-                }
+                CustomerId = customerId,
+                Count = 0,
+                Addresses = [],
+                NotFound = true,
+            };
+        }
 
-                var customer = await customers.GetByIdAsync(customerId, cancellationToken);
+        var addresses = customer.Addresses
+            .OrderByDescending(a => a.IsDefault)
+            .ThenBy(a => a.Label, StringComparer.OrdinalIgnoreCase)
+            .Select(ToMaskedAddress)
+            .ToList();
 
-                if (customer is null)
-                {
-                    return new AuditedResponse<AddressListResponse>(
-                        new AddressListResponse
-                        {
-                            CustomerId = customerId,
-                            Count = 0,
-                            Addresses = [],
-                            NotFound = true,
-                        },
-                        0,
-                        Refused: false);
-                }
-
-                var addresses = customer.Addresses
-                    .OrderByDescending(a => a.IsDefault)
-                    .ThenBy(a => a.Label, StringComparer.OrdinalIgnoreCase)
-                    .Select(ToMaskedAddress)
-                    .ToList();
-
-                return new AuditedResponse<AddressListResponse>(
-                    new AddressListResponse
-                    {
-                        CustomerId = customerId,
-                        Count = addresses.Count,
-                        Addresses = addresses,
-                    },
-                    addresses.Count,
-                    Refused: false);
-            },
-            cancellationToken);
+        return new AddressListResponse
+        {
+            CustomerId = customerId,
+            Count = addresses.Count,
+            Addresses = addresses,
+        };
     }
 
     [McpServerTool(
@@ -185,43 +160,33 @@ public sealed class CustomerLookupTools(
         int take = 20,
         CancellationToken cancellationToken = default)
     {
-        return await AuditedAsync(
-            "get_customer_returns",
-            [("customerId", customerId.ToString()), ("take", take.ToString())],
-            async () =>
+        if (!budget.TryConsumeCustomerLookup(out var refusal))
+        {
+            return RefusedReturns(customerId, refusal!);
+        }
+
+        var all = await rmas.GetForCustomerAsync(customerId, cancellationToken);
+
+        var page = all
+            .OrderByDescending(r => r.CreatedAtUtc)
+            .Take(Math.Clamp(take, 1, 50))
+            .ToList();
+
+        return new CustomerReturnsResponse
+        {
+            CustomerId = customerId,
+            Count = page.Count,
+            TotalCount = all.Count,
+            Returns = page.Select(r => new CustomerReturnSummary
             {
-                if (!budget.TryConsumeCustomerLookup(out var refusal))
-                {
-                    return RefusedReturns(customerId, refusal!);
-                }
-
-                var all = await rmas.GetForCustomerAsync(customerId, cancellationToken);
-
-                var page = all
-                    .OrderByDescending(r => r.CreatedAtUtc)
-                    .Take(Math.Clamp(take, 1, 50))
-                    .ToList();
-
-                return new AuditedResponse<CustomerReturnsResponse>(
-                    new CustomerReturnsResponse
-                    {
-                        CustomerId = customerId,
-                        Count = page.Count,
-                        TotalCount = all.Count,
-                        Returns = page.Select(r => new CustomerReturnSummary
-                        {
-                            Id = r.Id,
-                            RmaNumber = r.RmaNumber,
-                            Status = r.Status.ToString(),
-                            Kind = r.Kind.ToString(),
-                            CreatedAtUtc = r.CreatedAtUtc,
-                            LineCount = r.Lines.Count,
-                        }).ToList(),
-                    },
-                    page.Count,
-                    Refused: false);
-            },
-            cancellationToken);
+                Id = r.Id,
+                RmaNumber = r.RmaNumber,
+                Status = r.Status.ToString(),
+                Kind = r.Kind.ToString(),
+                CreatedAtUtc = r.CreatedAtUtc,
+                LineCount = r.Lines.Count,
+            }).ToList(),
+        };
     }
 
     [McpServerTool(
@@ -244,57 +209,44 @@ public sealed class CustomerLookupTools(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(freeTextAddress);
 
-        return await AuditedAsync(
-            "resolve_shipping_address",
-            [("customerId", customerId.ToString()), ("freeTextAddress", freeTextAddress)],
-            async () =>
-            {
-                if (!budget.TryConsumeCustomerLookup(out var refusal))
-                {
-                    return RefusedResolution(customerId, refusal!);
-                }
+        if (!budget.TryConsumeCustomerLookup(out var refusal))
+        {
+            return RefusedResolution(customerId, refusal!);
+        }
 
-                var resolution = await customers.ResolveAddressAsync(
-                    customerId,
-                    freeTextAddress,
-                    cancellationToken);
-
-                if (resolution is null)
-                {
-                    return new AuditedResponse<AddressResolutionResponse>(
-                        new AddressResolutionResponse
-                        {
-                            CustomerId = customerId,
-                            Resolved = false,
-                            Reason =
-                                "This customer has no saved address. Collect the full address and save it "
-                                + "before continuing, rather than shipping to a guess.",
-                        },
-                        0,
-                        Refused: false);
-                }
-
-                // Report the score the matcher actually achieved. Returning the caller's own
-                // threshold here would report a weak match as a perfect one.
-                var accepted = !resolution.IsFallback && resolution.Score >= minimumScore;
-
-                return new AuditedResponse<AddressResolutionResponse>(
-                    new AddressResolutionResponse
-                    {
-                        CustomerId = customerId,
-                        Resolved = accepted,
-                        MatchScore = resolution.Score,
-                        IsFallback = resolution.IsFallback,
-                        Address = ToMaskedAddress(resolution.Address),
-                        Reason = accepted
-                            ? null
-                            : "Nothing scored at or above the minimum, so the default address is shown "
-                              + "as a suggestion only. Confirm it with the customer before using it.",
-                    },
-                    1,
-                    Refused: false);
-            },
+        var resolution = await customers.ResolveAddressAsync(
+            customerId,
+            freeTextAddress,
             cancellationToken);
+
+        if (resolution is null)
+        {
+            return new AddressResolutionResponse
+            {
+                CustomerId = customerId,
+                Resolved = false,
+                Reason =
+                    "This customer has no saved address. Collect the full address and save it "
+                    + "before continuing, rather than shipping to a guess.",
+            };
+        }
+
+        // Report the score the matcher actually achieved. Returning the caller's own
+        // threshold here would report a weak match as a perfect one.
+        var accepted = !resolution.IsFallback && resolution.Score >= minimumScore;
+
+        return new AddressResolutionResponse
+        {
+            CustomerId = customerId,
+            Resolved = accepted,
+            MatchScore = resolution.Score,
+            IsFallback = resolution.IsFallback,
+            Address = ToMaskedAddress(resolution.Address),
+            Reason = accepted
+                ? null
+                : "Nothing scored at or above the minimum, so the default address is shown "
+                  + "as a suggestion only. Confirm it with the customer before using it.",
+        };
     }
 
     private static MaskedAddressSummary ToMaskedAddress(Address address) => new()
@@ -305,29 +257,29 @@ public sealed class CustomerLookupTools(
         IsDefault = address.IsDefault,
     };
 
-    private static AuditedResponse<CustomerSearchResponse> RefusedSearch(string reason) =>
-        new(new CustomerSearchResponse { MatchCount = 0, RefusalReason = reason, Customers = [] }, 0, true);
+    private static CustomerSearchResponse RefusedSearch(string reason) =>
+        new() { MatchCount = 0, RefusalReason = reason, Customers = [] };
 
-    private static AuditedResponse<AddressListResponse> RefusedAddresses(Guid customerId, string reason) =>
-        new(new AddressListResponse { CustomerId = customerId, Count = 0, Addresses = [], RefusalReason = reason }, 0, true);
+    private static AddressListResponse RefusedAddresses(Guid customerId, string reason) =>
+        new() { CustomerId = customerId, Count = 0, Addresses = [], RefusalReason = reason };
 
-    private static AuditedResponse<CustomerReturnsResponse> RefusedReturns(Guid customerId, string reason) =>
-        new(new CustomerReturnsResponse
+    private static CustomerReturnsResponse RefusedReturns(Guid customerId, string reason) =>
+        new()
         {
             CustomerId = customerId,
             Count = 0,
             TotalCount = 0,
             RefusalReason = reason,
             Returns = [],
-        }, 0, true);
+        };
 
-    private static AuditedResponse<AddressResolutionResponse> RefusedResolution(Guid customerId, string reason) =>
-        new(new AddressResolutionResponse
+    private static AddressResolutionResponse RefusedResolution(Guid customerId, string reason) =>
+        new()
         {
             CustomerId = customerId,
             Resolved = false,
             RefusalReason = reason,
-        }, 0, true);
+        };
 
     private static string? Shortest(params string?[] values) =>
         values
@@ -337,44 +289,6 @@ public sealed class CustomerLookupTools(
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    /// <summary>
-    /// Runs a tool call, records it, and returns the response. Latency is measured around the work
-    /// only, and the arguments are hashed so the audit row cannot be read as a copy of the query.
-    /// </summary>
-    private async Task<T> AuditedAsync<T>(
-        string tool,
-        (string Name, string? Value)[] arguments,
-        Func<Task<AuditedResponse<T>>> call,
-        CancellationToken cancellationToken)
-    {
-        var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        var outcome = await call();
-        var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(started);
-
-        await audit.RecordAsync(
-            new ToolCallRecord
-            {
-                Tool = tool,
-                Caller = CallerName,
-                ArgumentHashes = arguments
-                    .Where(a => a.Value is not null)
-                    .Select(a => $"{a.Name}:{Hash(a.Value!)}")
-                    .ToList(),
-                ResultCount = outcome.Count,
-                LatencyMs = (long)elapsed.TotalMilliseconds,
-                Refused = outcome.Refused,
-                AtUtc = DateTimeOffset.UtcNow,
-            },
-            cancellationToken);
-
-        return outcome.Response;
-    }
-
-    private static string Hash(string value) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..16].ToLowerInvariant();
-
-    private sealed record AuditedResponse<T>(T Response, int Count, bool Refused);
 }
 
 public sealed record CustomerSearchResponse

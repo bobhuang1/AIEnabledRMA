@@ -5,7 +5,10 @@ public sealed class McpBudgetOptions
 {
     public const string SectionName = "Mcp:Budget";
 
-    /// <summary>Audited tool calls allowed in any rolling minute. Zero disables the limit.</summary>
+    /// <summary>
+    /// Calls of any tool allowed in any rolling minute. Zero disables the limit. Counted at
+    /// <see cref="ToolCallGuard"/>, so it covers every tool rather than the customer ones only.
+    /// </summary>
     public int CallsPerMinute { get; init; } = 60;
 
     /// <summary>Customer lookups allowed for the life of the process. Zero disables the limit.</summary>
@@ -20,6 +23,11 @@ public sealed class McpBudgetOptions
 /// about: an agent that walks the customer table does it inside one process. The per-minute limit
 /// stops a burst; the per-session limit stops a slow walk that never bursts. Both are counted
 /// before the work is done, so a refused call costs nothing.
+///
+/// The minute window is consumed once per tool call, by the guard every tool passes through. The
+/// customer-lookup cap is consumed inside the customer tools, because it is about what a call is
+/// for, not how many calls there are: walking the device catalog is cheap, walking the customer
+/// table is not.
 /// </remarks>
 public sealed class CallBudget(Microsoft.Extensions.Options.IOptions<McpBudgetOptions> options, TimeProvider clock)
 {
@@ -30,14 +38,15 @@ public sealed class CallBudget(Microsoft.Extensions.Options.IOptions<McpBudgetOp
     private readonly Queue<DateTimeOffset> _recent = new();
     private int _customerLookups;
 
-    public bool TryConsumeCustomerLookup(out string? refusal)
+    /// <summary>Counts one call of any tool against the rolling minute.</summary>
+    public bool TryConsumeCall(out string? refusal)
     {
         lock (_gate)
         {
-            var now = clock.GetUtcNow();
-
             if (_options.CallsPerMinute > 0)
             {
+                var now = clock.GetUtcNow();
+
                 while (_recent.Count > 0 && now - _recent.Peek() >= Window)
                 {
                     _recent.Dequeue();
@@ -49,8 +58,23 @@ public sealed class CallBudget(Microsoft.Extensions.Options.IOptions<McpBudgetOp
                               + "minute, which is the configured limit. Wait a minute and try again.";
                     return false;
                 }
+
+                _recent.Enqueue(now);
             }
 
+            refusal = null;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Counts one customer lookup against the session cap. The rolling minute is not touched
+    /// here: that is the guard's job, and counting it twice would halve the configured rate.
+    /// </summary>
+    public bool TryConsumeCustomerLookup(out string? refusal)
+    {
+        lock (_gate)
+        {
             if (_options.CustomerLookupsPerSession > 0
                 && _customerLookups >= _options.CustomerLookupsPerSession)
             {
@@ -59,7 +83,6 @@ public sealed class CallBudget(Microsoft.Extensions.Options.IOptions<McpBudgetOp
                 return false;
             }
 
-            _recent.Enqueue(now);
             _customerLookups++;
             refusal = null;
             return true;
