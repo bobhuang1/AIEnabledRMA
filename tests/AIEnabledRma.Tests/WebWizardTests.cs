@@ -39,11 +39,9 @@ public sealed class WebWizardTests : IAsyncLifetime
     private const string IneligibleSerial = "NO-SUCH-SERIAL-0000";
 
     /// <summary>
-    /// Seeded with its warranty over 90 days before <see cref="SeedAnchor"/> and shipped 365 days
-    /// before it, so at the anchored date it is out of warranty but well inside the 730-day return
-    /// window: the wizard offers a paid repair, and that is what walks the payment step. These are
-    /// the seeder's offsets, restated here so a change to them has to be a deliberate change to
-    /// this test as well.
+    /// The seeder's out-of-warranty, inside-the-window unit: at <see cref="SeedAnchor"/> it is past
+    /// its warranty and grace period but still well inside the return window, so the wizard offers
+    /// a paid repair — the path that walks the payment step.
     /// </summary>
     private const string PaidRepairSerial = "AX2-0001-0005";
 
@@ -69,15 +67,11 @@ public sealed class WebWizardTests : IAsyncLifetime
     private const string CurrencyCode = "USD";
 
     /// <summary>
-    /// The fixture's reference date: today, read once, then pinned into the host clock.
+    /// The fixture's reference date: today, read once, then pinned into the host clock. The seeder
+    /// writes every warranty and ship date as an offset from it and the wizard's "today" is frozen
+    /// at it, so the data and the assertions agree whatever day the suite runs on. A literal date
+    /// only held the fixture still relative to a day that keeps receding.
     /// </summary>
-    /// <remarks>
-    /// The seeder writes every warranty and shipping date as an offset from it and the host's
-    /// clock is frozen at it, so the data and the wizard agree whatever the calendar says. A
-    /// literal date was the wrong kind of stability: it held the fixture still relative to a day
-    /// that keeps receding, and once the suite's own run date passed the window the fixture
-    /// described, the paid-repair test failed for a reason unrelated to the code under test.
-    /// </remarks>
     private static readonly DateOnly SeedAnchor = DateOnly.FromDateTime(DateTime.UtcNow);
 
     private readonly LiveDatabase _database = new("rma_web_test");
@@ -1331,31 +1325,19 @@ public sealed class WebWizardTests : IAsyncLifetime
             ? id
             : throw new InvalidOperationException($"'{path}' does not end in a request id.");
 
-    private sealed class WizardFactory : WebApplicationFactory<global::WebAppAnchor>
+    private sealed class WizardFactory(string connectionString, DateOnly anchor)
+        : WebApplicationFactory<global::WebAppAnchor>
     {
-        private readonly string _connectionString;
-        private readonly DateOnly _anchor;
-
-        public WizardFactory(string connectionString, DateOnly anchor)
-        {
-            _connectionString = connectionString;
-            _anchor = anchor;
-        }
-
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
-            builder.UseSetting("ConnectionStrings:Rma", _connectionString);
+            builder.UseSetting("ConnectionStrings:Rma", connectionString);
 
             builder.ConfigureTestServices(services =>
             {
-                // Every date in the fixture is an offset from the anchor, so the host's clock is
-                // pinned to it as well: the wizard's "today" is the day the data was authored
-                // for, not whatever day the suite happens to run. Without this, a unit seeded 500
-                // days before the anchor walks out of the 730-day return window as the calendar
-                // advances, and the paid-repair test turns red for a reason that has nothing to do
-                // with the code under test.
-                var at = new DateTimeOffset(
-                    _anchor.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
+                // The fixture is authored for the anchor, so the host's "today" is pinned to it as
+                // well. Otherwise the calendar advances past the data and the paid-repair test
+                // turns red for a reason that has nothing to do with the code under test.
+                var at = new DateTimeOffset(anchor.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
 
                 services.AddSingleton<TimeProvider>(new FrozenTimeProvider(at));
                 services.AddSingleton<IClock>(new FakeClock(at));

@@ -45,21 +45,14 @@ internal static class DemoDataSeederCore
     private const int DaysPastGrace = 60;
 
     /// <summary>
-    /// How long ago the paid-repair unit shipped.
+    /// How long ago the paid-repair unit shipped. The return window is 730 days from here, so this
+    /// leaves a year of headroom for a seeded database that sits unused before the demo runs.
     /// </summary>
-    /// <remarks>
-    /// This offset is the one that decides how long the demo keeps offering the paid-repair
-    /// path, because the return window is measured from the ship date and is 730 days wide. At
-    /// 500 days the fixture had 230 days of headroom and aged out within eight months of seeding,
-    /// which is what turned the documented outcome into a refusal. A year of drift now leaves the
-    /// unit inside the window with 365 days to spare.
-    /// </remarks>
     private const int PaidRepairDaysSinceShip = 365;
 
     /// <summary>
-    /// How long the paid-repair unit's warranty has been over: past the 30-day grace period, so
-    /// it is a paid repair rather than a covered return, and after the ship date, so its own
-    /// warranty does not claim to have ended before the unit shipped.
+    /// How long the paid-repair unit's warranty has been over: past the 30-day grace period, so it
+    /// is a paid repair rather than a covered return, and later than the ship date above.
     /// </summary>
     private const int PaidRepairDaysSinceWarrantyEnd = 90;
 
@@ -69,10 +62,10 @@ internal static class DemoDataSeederCore
     /// </summary>
     /// <remarks>
     /// Anchoring on the day the seed runs is what keeps the documented outcomes true, because the
-    /// policy evaluates warranty, grace, and return windows against the date the wizard actually
-    /// runs on. A hard-coded reference date — 2026-03-01 was the old one — therefore ages out: 500
-    /// days after it, "shipped 500 days ago" falls outside the 730-day return window, so the
-    /// paid-repair unit stops being offered while its warranty still reads as expired.
+    /// policy evaluates warranty, grace and return windows against the date the wizard actually
+    /// runs on. A hard-coded reference date ages instead: every day the calendar advances is a day
+    /// the fixture's ship dates recede, until the paid-repair unit is outside the return window
+    /// while its warranty still reads as expired.
     ///
     /// A database seeded once and left for months drifts the same way, because these are stored
     /// dates, not rules: re-run the seeder (`DbAdmin reset`) when the demo has been sitting. A
