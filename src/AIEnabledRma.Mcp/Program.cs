@@ -29,6 +29,9 @@ builder.Services.AddSingleton<CallBudget>();
 builder.Services.AddScoped<IToolAuditSink, EfToolAuditSink>();
 builder.Services.AddToolCallGuard();
 
+// Registered explicitly as well as through WithToolsFromAssembly: these classes take scoped
+// dependencies (the DbContext through their repositories), so how the SDK activates them is not
+// something to leave to a convention.
 builder.Services.AddScoped<DeviceLookupTools>();
 builder.Services.AddScoped<CustomerLookupTools>();
 builder.Services.AddScoped<PolicyTools>();

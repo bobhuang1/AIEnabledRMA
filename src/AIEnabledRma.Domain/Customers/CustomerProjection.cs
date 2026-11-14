@@ -54,35 +54,36 @@ public sealed record CustomerProjection
     }
 
     /// <summary>
-    /// Whether a typed value identifies the customer exactly: the whole email, or every digit of
-    /// the phone number. Anything weaker is a guess dressed as a confirmation.
+    /// Whether one typed value identifies the customer exactly: the whole email, or every digit
+    /// of the phone number. This is the wizard's question, where the visitor types one identifier
+    /// and may have typed either. Anything weaker is a guess dressed as a confirmation.
     /// </summary>
-    public static bool IsExactContactMatch(string? typed, Customer customer)
-    {
-        if (string.IsNullOrWhiteSpace(typed))
-        {
-            return false;
-        }
-
-        var value = typed.Trim();
-        if (!string.IsNullOrEmpty(customer.Email)
-            && string.Equals(value, customer.Email.Trim(), StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        var typedDigits = Digits(value);
-        var phoneDigits = Digits(customer.PhoneNumber ?? string.Empty);
-        return typedDigits.Length >= 7 && typedDigits == phoneDigits;
-    }
+    public static bool IsExactContactMatch(string? typed, Customer customer) =>
+        SameEmail(typed, customer.Email) || SamePhone(typed, customer.PhoneNumber);
 
     /// <summary>
-    /// Applies <see cref="IsExactContactMatch"/> to the channels the caller actually supplied.
-    /// Null means "not supplied", not "must not match".
+    /// Whether each channel the caller supplied matches that channel of the record. Null means
+    /// "not supplied", not "must not match". An email is never confirmed by phone digits and a
+    /// phone number is never confirmed by an address.
     /// </summary>
     public static bool MatchesExactContact(Customer customer, string? email, string? phoneNumber) =>
-        (email is null || IsExactContactMatch(email, customer))
-        && (phoneNumber is null || IsExactContactMatch(phoneNumber, customer));
+        (email is null || SameEmail(email, customer.Email))
+        && (phoneNumber is null || SamePhone(phoneNumber, customer.PhoneNumber));
+
+    private static bool SameEmail(string? typed, string? email) =>
+        !string.IsNullOrWhiteSpace(typed)
+        && !string.IsNullOrWhiteSpace(email)
+        && string.Equals(typed.Trim(), email.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A phone number matches when every digit matches and there are enough of them to be a
+    /// number rather than a fragment.
+    /// </summary>
+    private static bool SamePhone(string? typed, string? phoneNumber)
+    {
+        var typedDigits = Digits(typed ?? string.Empty);
+        return typedDigits.Length >= 7 && typedDigits == Digits(phoneNumber ?? string.Empty);
+    }
 
     public static string MaskName(string? first, string? last)
     {
@@ -93,15 +94,22 @@ public sealed record CustomerProjection
 
     public static string? MaskEmail(string? email)
     {
-        if (string.IsNullOrWhiteSpace(email) || email.IndexOf('@') is var at && at <= 0)
+        if (string.IsNullOrWhiteSpace(email))
         {
             return null;
         }
 
-        var domain = email[(at + 1)..];
+        var trimmed = email.Trim();
+        var at = trimmed.IndexOf('@');
+        if (at <= 0)
+        {
+            return null;
+        }
+
+        var domain = trimmed[(at + 1)..];
         var dot = domain.LastIndexOf('.');
         var maskedDomain = dot > 0 ? $"{domain[0]}•••{domain[dot..]}" : "•••";
-        return $"{email[0]}•••@{maskedDomain}";
+        return $"{trimmed[0]}•••@{maskedDomain}";
     }
 
     public static string? MaskPhone(string? phone)

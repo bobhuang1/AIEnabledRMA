@@ -43,26 +43,27 @@ public sealed class CallBudget(Microsoft.Extensions.Options.IOptions<McpBudgetOp
     {
         lock (_gate)
         {
-            if (_options.CallsPerMinute > 0)
+            refusal = null;
+            if (_options.CallsPerMinute <= 0)
             {
-                var now = clock.GetUtcNow();
-
-                while (_recent.Count > 0 && now - _recent.Peek() >= Window)
-                {
-                    _recent.Dequeue();
-                }
-
-                if (_recent.Count >= _options.CallsPerMinute)
-                {
-                    refusal = $"This session has made {_options.CallsPerMinute} tool calls in the last "
-                              + "minute, which is the configured limit. Wait a minute and try again.";
-                    return false;
-                }
-
-                _recent.Enqueue(now);
+                return true;
             }
 
-            refusal = null;
+            var now = clock.GetUtcNow();
+
+            while (_recent.Count > 0 && now - _recent.Peek() >= Window)
+            {
+                _recent.Dequeue();
+            }
+
+            if (_recent.Count >= _options.CallsPerMinute)
+            {
+                refusal = $"This session has made {_options.CallsPerMinute} tool calls in the last "
+                          + "minute, which is the configured limit. Wait a minute and try again.";
+                return false;
+            }
+
+            _recent.Enqueue(now);
             return true;
         }
     }

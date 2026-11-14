@@ -169,8 +169,6 @@ public sealed record CustomerSearchQuery
 
     public string? PhoneNumber { get; init; }
 
-    public string? ExternalCustomerId { get; init; }
-
     public int Take { get; init; } = 25;
 }
 

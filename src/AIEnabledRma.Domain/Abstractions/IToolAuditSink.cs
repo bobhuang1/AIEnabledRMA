@@ -24,7 +24,10 @@ public sealed record ToolCallRecord
     public DateTimeOffset AtUtc { get; init; }
 }
 
-/// <summary>Where agent calls are recorded. Implementations must not throw for a call in flight.</summary>
+/// <summary>
+/// Where agent calls are recorded. An implementation may throw — a database write can fail — and
+/// the caller treats that as a hole in the trail rather than losing an answer it already has.
+/// </summary>
 public interface IToolAuditSink
 {
     Task RecordAsync(ToolCallRecord record, CancellationToken cancellationToken);

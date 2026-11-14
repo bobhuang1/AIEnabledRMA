@@ -282,10 +282,7 @@ public sealed class CustomerLookupTools(
         };
 
     private static string? Shortest(params string?[] values) =>
-        values
-            .Where(v => v is not null && v.Length < MinimumQueryLength)
-            .OrderBy(v => v!.Length)
-            .FirstOrDefault();
+        values.FirstOrDefault(v => v is { Length: < MinimumQueryLength });
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

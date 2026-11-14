@@ -26,7 +26,7 @@ namespace AIEnabledRma.Mcp;
 /// customer lookups, which is about what a call is for rather than how many calls there are.
 /// </remarks>
 public sealed class ToolCallGuard(
-    IServiceProvider services,
+    IServiceScopeFactory scopes,
     CallBudget budget,
     TimeProvider clock,
     ILogger<ToolCallGuard> logger)
@@ -53,7 +53,7 @@ public sealed class ToolCallGuard(
         {
             // Refused before the work: the tool is not invoked at all, so the row says the call
             // happened and did nothing.
-            await RecordAsync(tool, arguments, 0, started, wasRefused: true, cancellationToken);
+            await RecordAsync(tool, arguments, 0, started, wasRefused: true);
 
             return new CallToolResult
             {
@@ -71,17 +71,11 @@ public sealed class ToolCallGuard(
         {
             // A tool that threw is still a call that happened, and "it errored" is a fact the
             // audit trail should hold.
-            await RecordAsync(tool, arguments, 0, started, wasRefused: true, cancellationToken);
+            await RecordAsync(tool, arguments, 0, started, wasRefused: true);
             throw;
         }
 
-        await RecordAsync(
-            tool,
-            arguments,
-            CountOf(result),
-            started,
-            wasRefused: result.IsError == true,
-            cancellationToken);
+        await RecordAsync(tool, arguments, CountOf(result), started, wasRefused: result.IsError == true);
 
         return result;
     }
@@ -89,14 +83,14 @@ public sealed class ToolCallGuard(
     /// <summary>
     /// The audit row for a call that has already been decided. Writes through a scope of its
     /// own, because the tool's scope is disposed with the call and the sink writes through EF.
+    /// The write is not cancellable: a client that hung up has still been answered.
     /// </summary>
     private async Task RecordAsync(
         string tool,
         IDictionary<string, JsonElement>? arguments,
         int resultCount,
         long startedTimestamp,
-        bool wasRefused,
-        CancellationToken cancellationToken)
+        bool wasRefused)
     {
         var record = new ToolCallRecord
         {
@@ -116,7 +110,7 @@ public sealed class ToolCallGuard(
 
         try
         {
-            using var scope = services.CreateScope();
+            using var scope = scopes.CreateScope();
             await scope.ServiceProvider
                 .GetRequiredService<IToolAuditSink>()
                 .RecordAsync(record, CancellationToken.None);
@@ -129,17 +123,13 @@ public sealed class ToolCallGuard(
         }
     }
 
+    /// <summary>
+    /// How many things the tool said it found, read from the response body. These tools declare
+    /// no output schema, so the return value arrives as a JSON text block; a block that is not
+    /// JSON — an error message — carries no count.
+    /// </summary>
     private static int CountOf(CallToolResult result)
     {
-        if (result.StructuredContent is { ValueKind: JsonValueKind.Object } structured
-            && TryCount(structured, out var named))
-        {
-            return named;
-        }
-
-        // A tool that declares no output schema has its return value sent as a JSON text block
-        // rather than as structured content. Read the same object from there, so the recorded
-        // count does not depend on which of the two shapes the SDK chose.
         foreach (var block in result.Content)
         {
             if (block is not TextContentBlock { Text: { Length: > 0 } text })
@@ -150,35 +140,28 @@ public sealed class ToolCallGuard(
             try
             {
                 using var document = JsonDocument.Parse(text);
-                if (document.RootElement.ValueKind == JsonValueKind.Object
-                    && TryCount(document.RootElement, out var parsed))
+                if (document.RootElement.ValueKind != JsonValueKind.Object)
                 {
-                    return parsed;
+                    continue;
+                }
+
+                foreach (var property in document.RootElement.EnumerateObject())
+                {
+                    if (CountProperties.Contains(property.Name, StringComparer.OrdinalIgnoreCase)
+                        && property.Value.ValueKind == JsonValueKind.Number
+                        && property.Value.TryGetInt32(out var count))
+                    {
+                        return count;
+                    }
                 }
             }
             catch (JsonException)
             {
-                // A block that is not JSON — an error message, say — carries no count.
+                // Not a response body; keep looking.
             }
         }
 
         return 0;
-    }
-
-    private static bool TryCount(JsonElement element, out int count)
-    {
-        foreach (var property in element.EnumerateObject())
-        {
-            if (CountProperties.Contains(property.Name, StringComparer.OrdinalIgnoreCase)
-                && property.Value.ValueKind == JsonValueKind.Number
-                && property.Value.TryGetInt32(out count))
-            {
-                return true;
-            }
-        }
-
-        count = 0;
-        return false;
     }
 
     /// <summary>
