@@ -110,6 +110,56 @@ public sealed class RagAdminEndpointTests
         Assert.Equal("ok", property.Value.GetString());
     }
 
+    [Fact]
+    public void A_production_host_without_a_key_refuses_to_boot()
+    {
+        // The rule the deployment depends on: outside Development there is no loopback fallback,
+        // because the documented deployment proxies to this host from the same machine. A host
+        // that started keyless in Production would serve all three operator endpoints to anyone
+        // who reached the proxy, so the entry point throws and nothing listens.
+        using var factory = new RagFactory(adminKey: null, peer: Loopback, environment: "Production");
+
+        var thrown = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        // The test host wraps startup failures, so the assertion follows the chain rather than
+        // the outermost type: what matters is that the process did not come up, and that the
+        // message names the setting that is missing.
+        Assert.Contains(
+            RagAdminGate.ApiKeyConfigurationKey,
+            Flatten(thrown),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_production_host_with_a_key_boots_and_keeps_the_endpoints_gated()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var factory = new RagFactory(AdminKey, peer: OffHost, environment: "Production");
+        using var client = factory.CreateClient();
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health", ct)).StatusCode);
+        await AssertAllThreeRefusedAsync(client, ct);
+
+        // Reaches the corpus, which also proves the Production review requirement is satisfied
+        // by the articles as shipped: a corpus refused for missing provenance would still answer
+        // this request, so the count is what makes the assertion mean something.
+        client.DefaultRequestHeaders.Add(RagAdminGate.HeaderName, AdminKey);
+        using var diagnostics = await GetJsonAsync(client, "/diagnostics", ct);
+        Assert.True(diagnostics.RootElement.GetProperty("articleCount").GetInt32() > 0);
+    }
+
+    private static string Flatten(Exception exception)
+    {
+        var messages = new List<string>();
+
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            messages.Add(current.Message);
+        }
+
+        return string.Join('\n', messages);
+    }
+
     /// <summary>All three operational endpoints, so no case can accidentally cover only two.</summary>
     private static async Task AssertAllThreeRefusedAsync(HttpClient client, CancellationToken ct)
     {
@@ -152,11 +202,12 @@ public sealed class RagAdminEndpointTests
     /// host resolves a relative path against the working directory, which differs between a
     /// developer's shell, CI, and this suite.
     /// </summary>
-    private sealed class RagFactory(string? adminKey, IPAddress peer)
+    private sealed class RagFactory(string? adminKey, IPAddress peer, string environment = "Development")
         : WebApplicationFactory<global::RagAppAnchor>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            builder.UseEnvironment(environment);
             builder.UseSetting("Rag:KnowledgeBasePath", KnowledgeBasePath());
 
             if (adminKey is not null)
