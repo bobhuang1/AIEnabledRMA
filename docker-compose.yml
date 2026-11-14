@@ -10,8 +10,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rmapassword}
       # Deterministic collation so trigram similarity is stable across machines.
       POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    # Bound to loopback: the container runs with a demo password, and publishing it on every
+    # interface turned a local database into a network service.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - ./data/pgdata:/var/lib/postgresql/data
     healthcheck:

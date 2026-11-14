@@ -1,0 +1,81 @@
+name: ci
+
+# Every push and every pull request runs the same gate: build, then the full suite with a live
+# PostgreSQL. The live suites skip silently when RMA_TEST_CONNECTION is missing, so a green run
+# that quietly ran no database test is the failure mode this workflow exists to prevent — hence
+# the explicit skip check below rather than trusting the summary line.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: rmaci
+          POSTGRES_USER: rmauser
+          POSTGRES_PASSWORD: rmapassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rmauser -d rmaci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # The live fixtures create and drop a database per test, so they connect as the cluster's
+      # admin user to the maintenance database, not to rmaci.
+      RMA_TEST_CONNECTION: "Host=localhost;Port=5432;Database=postgres;Username=rmauser;Password=rmapassword"
+      DOTNET_NOLOGO: "true"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # --locked-mode turns a dependency change that was not committed into a build failure,
+      # which is the point of checking the lock files in.
+      - name: Restore
+        run: dotnet restore AIEnabledRma.slnx --locked-mode
+
+      - name: Build
+        run: dotnet build AIEnabledRma.slnx --no-restore -warnaserror
+
+      - name: Test
+        run: |
+          set -o pipefail
+          dotnet test AIEnabledRma.slnx --no-build --logger "console;verbosity=normal" | tee test.log
+
+      - name: Fail when any test was skipped
+        run: |
+          set -euo pipefail
+          if grep -Eq "Skipped:[[:space:]]+[1-9]" test.log; then
+            echo "::error::Tests were skipped. The live suites must run against the service database."
+            grep -E "Skipped:[[:space:]]+[1-9]" test.log
+            exit 1
+          fi
+          if ! grep -Eq "Total:[[:space:]]+[1-9]" test.log; then
+            echo "::error::No tests ran."
+            exit 1
+          fi
+
+      - name: Audit dependencies
+        run: |
+          set -euo pipefail
+          dotnet list AIEnabledRma.slnx package --vulnerable --include-transitive | tee vulnerable.log
+          if grep -q "has the following vulnerable packages" vulnerable.log; then
+            echo "::error::A dependency has a known vulnerability."
+            exit 1
+          fi
