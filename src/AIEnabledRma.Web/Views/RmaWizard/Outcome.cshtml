@@ -11,7 +11,14 @@
     // Where the customer can actually continue. Every step refuses a request that has already
     // passed it, so the fixed link to triage sent a return that was at payment or approved
     // straight back into another refusal. Null means there is no step left to open.
-    var resumeAction = Model.Status switch
+    //
+    // A review-pending outcome never offers one, even if the status were still Draft: triage
+    // accepts Draft, so that link would walk the customer into a return a specialist owns and
+    // past the review that put it there. The status decides which step; the outcome decides
+    // whether there is one at all.
+    var resumeAction = Model.Outcome == StepOutcome.RequiresHumanReview
+        ? null
+        : Model.Status switch
     {
         RmaRequestStatus.Draft => "Triage",
         RmaRequestStatus.PendingPayment => "Payment",
@@ -158,7 +165,9 @@ else
 
 <div class="actions">
     @* A refused return has nothing left to continue, so offering the link would send the
-       customer back into a step the policy has already stopped. *@
+       customer back into a step the policy has already stopped. For a refused step the link
+       stays, because it names the step the return is actually at — the theory that follows the
+       link proves that page renders instead of a second refusal. *@
     @if (!completed && !resolved && !refused && resumeAction is not null
         && !string.IsNullOrEmpty(Model.RmaNumber) && Model.RmaId != Guid.Empty)
     {

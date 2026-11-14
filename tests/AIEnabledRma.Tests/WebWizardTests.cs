@@ -602,6 +602,15 @@ public sealed class WebWizardTests : IAsyncLifetime
         // so the only way out of that loop was to abandon the return and start again.
         Assert.Contains($"/RmaWizard/{expectedStep}/{rmaId}", html, StringComparison.Ordinal);
         Assert.DoesNotContain($"/RmaWizard/Triage/{rmaId}", html, StringComparison.Ordinal);
+
+        // Follow the link. An href that names the right step is not the same as a page that
+        // opens it, and the whole complaint about this link was that it led to a second refusal.
+        var resumed = await client.GetAsync($"/RmaWizard/{expectedStep}/{rmaId}", ct);
+        Assert.Equal(HttpStatusCode.OK, resumed.StatusCode);
+        Assert.DoesNotContain(
+            "That step is out of order",
+            await resumed.Content.ReadAsStringAsync(ct),
+            StringComparison.Ordinal);
     }
 
     [Fact]
