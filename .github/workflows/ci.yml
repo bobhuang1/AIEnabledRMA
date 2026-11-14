@@ -5,7 +5,9 @@ name: ci
 #
 #   * pull requests and manual runs only. A merge to main is a commit that a PR already tested,
 #     so running the same job again on push duplicates the cost for no new signal.
-#   * documentation-only changes do not start a run at all.
+#   * documentation-only changes do not start a run at all: root-level markdown (README, plan,
+#     licence) and docs/ are ignored. knowledge-base/ is deliberately not ignored — its markdown
+#     is data the retrieval tests read, so a change there can change what the suite sees.
 #   * a newer push to the same ref cancels the older run, so a fixup commit does not pay for its
 #     predecessor as well.
 #   * a hard timeout, because a hung test otherwise bills until the runner gives up.
@@ -17,6 +19,10 @@ name: ci
 # what the extra minutes buy.
 on:
   pull_request:
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+  # No path filter here: a manual run is a person asking for the full gate on purpose.
   workflow_dispatch:
 
 permissions:

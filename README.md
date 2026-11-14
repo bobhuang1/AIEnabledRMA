@@ -196,9 +196,11 @@ rules hold until someone changes the workflow on purpose:
 - **Pull requests and manual runs only.** A commit on `main` is a commit a pull request already
   built; running the same job again on push pays twice for one signal. `workflow_dispatch` covers
   the "verify main now" case when it is wanted.
-- **Documentation-only changes start no run.** `paths-ignore` covers markdown and the plan. If the
-  check ever becomes required for merging, replace the filter with a job that starts and exits
-  early: a path-filtered run leaves the check absent, not green.
+- **Documentation-only changes start no run.** `paths-ignore` covers root-level markdown
+  (`README.md`, `plan.md`, the licence) and `docs/`. `knowledge-base/**/*.md` is deliberately not
+  ignored: those files are data the retrieval tests read, so editing one can change what the suite
+  sees. If the check ever becomes required for merging, replace the filter with a job that starts
+  and exits early: a path-filtered run leaves the check absent, not green.
 - **Superseded runs are cancelled** for the same ref, so a fixup push does not also pay for the
   run it replaced, and every job has a hard timeout so a hung test cannot bill indefinitely.
 - **No matrix, no second operating system, no extra job** without a sentence in the pull request
