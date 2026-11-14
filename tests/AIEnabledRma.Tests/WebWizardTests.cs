@@ -975,6 +975,56 @@ public sealed class WebWizardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_customer_id_the_visitor_was_never_offered_is_rejected()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        // An ambiguous identity puts the visitor on the chooser, where the server remembers which
+        // accounts it offered. Everything the chooser can submit afterwards has to come from that
+        // list: this is the only wizard POST that attaches a customer by id, and the id reaches
+        // the form as a value a caller can rewrite.
+        var start = await client.GetAsync("/RmaWizard/Start", ct);
+        var chooser = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            TokenOf(await start.Content.ReadAsStringAsync(ct)),
+            [
+                ("Customer", "Smyth"),
+                ("Identifiers", EligibleSerial),
+                ("CurrencyCode", CurrencyCode),
+            ],
+            ct);
+
+        Assert.StartsWith("/RmaWizard/ChooseCustomer", chooser.Path, StringComparison.Ordinal);
+
+        var chooserHtml = await chooser.Page.Content.ReadAsStringAsync(ct);
+
+        await using var db = CreateContext();
+        var requestsBefore = await db.RmaRequests.CountAsync(ct);
+        var linesBefore = await db.RmaLines.CountAsync(ct);
+
+        // A real account from the same seed that this visitor was never shown. Eight are seeded
+        // and only the two Smyths are offered, so the pick cannot fail for want of a candidate.
+        var unoffered = (await db.Customers.Select(c => c.Id).ToListAsync(ct))
+            .First(id => !chooserHtml.Contains(id.ToString(), StringComparison.OrdinalIgnoreCase));
+
+        var rejected = await PostStepAsync(
+            client,
+            "/RmaWizard/ChooseCustomer",
+            TokenOf(chooserHtml),
+            [("CustomerId", unoffered.ToString()), ("Identifiers", EligibleSerial)],
+            ct);
+
+        // Back to the start, not an error page: the posted identity is simply not one this
+        // visitor may choose. A return attached to it would have shown a stranger's stored
+        // address, and put a line against a unit they do not own.
+        Assert.Equal("/RmaWizard/Start", rejected.Path);
+        Assert.Equal(requestsBefore, await db.RmaRequests.CountAsync(ct));
+        Assert.Equal(linesBefore, await db.RmaLines.CountAsync(ct));
+    }
+
+    [Fact]
     public async Task An_ineligible_serial_is_reported_and_creates_no_request()
     {
         var ct = TestContext.Current.CancellationToken;
