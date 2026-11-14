@@ -188,6 +188,24 @@ host) cannot be faked.
 end to end, including the paid-repair path that lands on the payment step and bills the
 per-product price.
 
+## CI cost
+
+Hosted-runner minutes are billed per account, so the pipeline is deliberately narrow. These
+rules hold until someone changes the workflow on purpose:
+
+- **Pull requests and manual runs only.** A commit on `main` is a commit a pull request already
+  built; running the same job again on push pays twice for one signal. `workflow_dispatch` covers
+  the "verify main now" case when it is wanted.
+- **Documentation-only changes start no run.** `paths-ignore` covers markdown and the plan. If the
+  check ever becomes required for merging, replace the filter with a job that starts and exits
+  early: a path-filtered run leaves the check absent, not green.
+- **Superseded runs are cancelled** for the same ref, so a fixup push does not also pay for the
+  run it replaced, and every job has a hard timeout so a hung test cannot bill indefinitely.
+- **No matrix, no second operating system, no extra job** without a sentence in the pull request
+  saying what the added minutes buy.
+- **Local first.** `dotnet test` runs the whole suite against a local PostgreSQL in about four
+  minutes; CI is a gate for what already passed locally, not the first place a change runs.
+
 ## Containers
 
 Build and run the two shipped Dockerfiles:

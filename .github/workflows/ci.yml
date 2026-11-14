@@ -1,20 +1,35 @@
 name: ci
 
-# Every push and every pull request runs the same gate: build, then the full suite with a live
-# PostgreSQL. The live suites skip silently when RMA_TEST_CONNECTION is missing, so a green run
-# that quietly ran no database test is the failure mode this workflow exists to prevent — hence
-# the explicit skip check below rather than trusting the summary line.
+# Every hour of hosted-runner time is billed, and this job builds nine projects and starts a
+# PostgreSQL for the live suites. The rules that keep it cheap:
+#
+#   * pull requests and manual runs only. A merge to main is a commit that a PR already tested,
+#     so running the same job again on push duplicates the cost for no new signal.
+#   * documentation-only changes do not start a run at all.
+#   * a newer push to the same ref cancels the older run, so a fixup commit does not pay for its
+#     predecessor as well.
+#   * a hard timeout, because a hung test otherwise bills until the runner gives up.
+#   * the NuGet cache is keyed on the lock files, which are checked in.
+#
+# If this check is ever made required for merging, note that a skipped path filter leaves the
+# check absent rather than green: the filter is then the wrong tool, and the run should start and
+# exit early instead. Do not add a matrix or a second operating system without saying, in the PR,
+# what the extra minutes buy.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     services:
       postgres:
@@ -44,6 +59,8 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: "10.0.x"
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
 
       # --locked-mode turns a dependency change that was not committed into a build failure,
       # which is the point of checking the lock files in.
