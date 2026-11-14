@@ -164,8 +164,22 @@ Tools:
 | --- | --- |
 | `check_coverage` | Policy verdict for a serial on a given date (`Eligible`, `EligibleForPaidRepair`, `RequiresHumanReview`, `NotEligible`) + explanation + rule trace |
 | `get_fee_quote` | Repair price for a device from the same per-product price table the wizard bills from |
-| `lookup_device` / `lookup_customer` | Fuzzy catalog and customer lookups. The wizard's own intake is exact by design (see Repository layout); this tool is for a caller that already holds partial information |
-| `resolve_shipping_address` | Matches free text to a customer's stored addresses, never claiming a weak match is confident |
+| `lookup_device` | Fuzzy catalog lookup by serial or alternate identifier |
+| `find_customer` | Customer lookup by partial name, or confirmation by complete email or phone. Every field is masked |
+| `get_customer_addresses` | A customer's saved addresses, each reduced to label, postcode prefix and country |
+| `get_customer_returns` | A customer's return history, so an agent sees existing requests before adding one |
+| `resolve_shipping_address` | Matches free text to a customer's stored addresses, never claiming a weak match is confident, and returns the match masked |
+
+Everything the agent sees about a person comes from `CustomerProjection`, the same masking the
+wizard uses: first name and surname initial, `j•••@e•••.com`, the last two phone digits, and an
+address reduced to its label, postcode prefix and country. `externalCustomerId` is not exposed.
+Name searches stay fuzzy — a name is not an identifier — but email and phone must be complete and
+match exactly, because a partial contact search is an enumeration oracle however well the answer
+is masked; terms shorter than three characters are refused outright. Each of these calls writes a
+row to `mcp_tool_calls` (tool, caller, argument hashes rather than values, result count, latency),
+and a session is limited to 60 calls a minute and 200 customer lookups, configurable under
+`Mcp:Budget`. Exposing contact data to an authenticated support role needs an identity provider,
+which arrives with P2.
 
 Example agent question: *"AX2-0001-0005 is dead on arrival and out of warranty — what happens
 if the customer returns it, and how much would it cost?"* — `check_coverage` routes it to a

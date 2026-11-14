@@ -373,6 +373,59 @@ namespace AIEnabledRma.Data.Migrations
                     b.ToTable("customers", (string)null);
                 });
 
+            modelBuilder.Entity("AIEnabledRma.Domain.Operations.McpToolCall", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ArgumentHashes")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("argument_hashes");
+
+                    b.Property<DateTimeOffset>("AtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("at_utc");
+
+                    b.Property<string>("Caller")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("caller");
+
+                    b.Property<long>("LatencyMs")
+                        .HasColumnType("bigint")
+                        .HasColumnName("latency_ms");
+
+                    b.Property<bool>("Refused")
+                        .HasColumnType("boolean")
+                        .HasColumnName("refused");
+
+                    b.Property<int>("ResultCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("result_count");
+
+                    b.Property<string>("Tool")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("tool");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mcp_tool_calls");
+
+                    b.HasIndex("AtUtc")
+                        .HasDatabaseName("ix_mcp_tool_calls_at");
+
+                    b.HasIndex("Tool", "AtUtc")
+                        .HasDatabaseName("ix_mcp_tool_calls_tool_at");
+
+                    b.ToTable("mcp_tool_calls", (string)null);
+                });
+
             modelBuilder.Entity("AIEnabledRma.Domain.Rma.RmaExclusion", b =>
                 {
                     b.Property<Guid>("Id")

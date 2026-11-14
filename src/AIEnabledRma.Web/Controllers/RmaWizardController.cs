@@ -72,7 +72,7 @@ public sealed class RmaWizardController(
         // matched customers. An exact email or phone match (the visitor already knows the
         // contact detail on file) attaches directly; anything weaker is shown only as masked
         // candidates, and the pick is checked against that server-issued list.
-        var exact = customerMatches.Where(c => IsExactContactMatch(form.Customer, c)).ToList();
+        var exact = customerMatches.Where(c => CustomerProjection.IsExactContactMatch(form.Customer, c)).ToList();
         if (exact.Count == 1)
         {
             customerMatches = exact;
@@ -82,7 +82,11 @@ public sealed class RmaWizardController(
             TempData["AmbiguousCustomer"] = form.Customer;
             TempData["AmbiguousMatches"] = System.Text.Json.JsonSerializer.Serialize(
                 customerMatches
-                    .Select(c => new CustomerMatchView(c.Id, MaskName(c.FirstName, c.LastName), MaskEmail(c.Email), MaskPhone(c.PhoneNumber)))
+                    .Select(c => new CustomerMatchView(
+                        c.Id,
+                        CustomerProjection.MaskName(c.FirstName, c.LastName),
+                        CustomerProjection.MaskEmail(c.Email),
+                        CustomerProjection.MaskPhone(c.PhoneNumber)))
                     .ToList());
             TempData["AmbiguousIds"] = string.Join('|', customerMatches.Select(c => c.Id));
 
@@ -411,9 +415,9 @@ public sealed class RmaWizardController(
             // shown masked: enough for the owner to recognise, not enough to learn them.
             ViewBag.CustomerName = customer is null
                 ? null
-                : MaskName(customer.FirstName, customer.LastName);
+                : CustomerProjection.MaskName(customer.FirstName, customer.LastName);
             ViewBag.Addresses = (customer?.Addresses ?? [])
-                .Select(a => new MaskedAddressView(a.Id, a.Label, MaskAddress(a), a.IsDefault))
+                .Select(a => new MaskedAddressView(a.Id, a.Label, CustomerProjection.MaskAddress(a), a.IsDefault))
                 .ToList();
         }
 
@@ -592,54 +596,4 @@ public sealed class RmaWizardController(
 
     public sealed record MaskedAddressView(Guid Id, string? Label, string Masked, bool IsDefault);
 
-    public static bool IsExactContactMatch(string? typed, Customer c)
-    {
-        if (string.IsNullOrWhiteSpace(typed))
-        {
-            return false;
-        }
-
-        var value = typed.Trim();
-        if (!string.IsNullOrEmpty(c.Email) && string.Equals(value, c.Email.Trim(), StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        var typedDigits = new string(value.Where(char.IsAsciiDigit).ToArray());
-        var phoneDigits = new string((c.PhoneNumber ?? string.Empty).Where(char.IsAsciiDigit).ToArray());
-        return typedDigits.Length >= 7 && typedDigits == phoneDigits;
-    }
-
-    public static string MaskName(string? first, string? last)
-    {
-        var f = string.IsNullOrWhiteSpace(first) ? "?" : first.Trim();
-        var l = string.IsNullOrWhiteSpace(last) ? string.Empty : $" {last.Trim()[0]}.";
-        return f + l;
-    }
-
-    public static string? MaskEmail(string? email)
-    {
-        if (string.IsNullOrWhiteSpace(email) || email.IndexOf('@') is var at && at <= 0)
-        {
-            return null;
-        }
-
-        var domain = email[(at + 1)..];
-        var dot = domain.LastIndexOf('.');
-        var maskedDomain = dot > 0 ? $"{domain[0]}•••{domain[dot..]}" : "•••";
-        return $"{email[0]}•••@{maskedDomain}";
-    }
-
-    public static string? MaskPhone(string? phone)
-    {
-        var digits = new string((phone ?? string.Empty).Where(char.IsAsciiDigit).ToArray());
-        return digits.Length < 4 ? null : $"••• {digits[^2..]}";
-    }
-
-    public static string MaskAddress(Address a)
-    {
-        var postal = string.IsNullOrWhiteSpace(a.PostalCode) ? string.Empty : a.PostalCode.Trim();
-        var postalMasked = postal.Length <= 2 ? "•••" : postal[..2] + new string('•', postal.Length - 2);
-        return $"•••, {postalMasked} {a.CountryCode}".Trim();
-    }
 }

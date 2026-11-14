@@ -200,16 +200,38 @@ internal sealed class FakeCustomerRepository : ICustomerRepository
 
     public AddressResolution? Resolution { get; set; }
 
+    public Customer? ById { get; set; }
+
+    /// <summary>What <see cref="SearchAsync"/> returns, whatever was asked for.</summary>
+    public List<Customer> SearchResults { get; } = [];
+
+    public int SearchCalls { get; private set; }
+
     public Task<Customer?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-        Task.FromResult<Customer?>(null);
+        Task.FromResult(ById);
 
     public Task<IReadOnlyList<Customer>> SearchAsync(
-        CustomerSearchQuery query, CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<Customer>>([]);
+        CustomerSearchQuery query, CancellationToken cancellationToken = default)
+    {
+        SearchCalls++;
+        return Task.FromResult<IReadOnlyList<Customer>>(SearchResults);
+    }
 
     public Task<AddressResolution?> ResolveAddressAsync(
         Guid customerId, string? freeTextAddress, CancellationToken cancellationToken = default) =>
         Task.FromResult(Resolution);
+}
+
+/// <summary>Records what the tools handed to the audit sink, in order.</summary>
+internal sealed class FakeToolAuditSink : IToolAuditSink
+{
+    public List<ToolCallRecord> Records { get; } = [];
+
+    public Task RecordAsync(ToolCallRecord record, CancellationToken cancellationToken)
+    {
+        Records.Add(record);
+        return Task.CompletedTask;
+    }
 }
 
 internal sealed class FakeRmaRepository : IRmaRepository

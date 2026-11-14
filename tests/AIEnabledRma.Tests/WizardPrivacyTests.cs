@@ -27,19 +27,19 @@ public sealed class WizardPrivacyTests
     [InlineData("0104477", false)]
     [InlineData("", false)]
     public void Only_An_Exact_Email_Or_Full_Phone_Is_An_Exact_Match(string typed, bool expected) =>
-        Assert.Equal(expected, RmaWizardController.IsExactContactMatch(typed, Jane));
+        Assert.Equal(expected, CustomerProjection.IsExactContactMatch(typed, Jane));
 
     [Fact]
     public void Candidates_Are_Masked()
     {
-        Assert.Equal("Jane S.", RmaWizardController.MaskName(Jane.FirstName, Jane.LastName));
+        Assert.Equal("Jane S.", CustomerProjection.MaskName(Jane.FirstName, Jane.LastName));
 
-        var email = RmaWizardController.MaskEmail(Jane.Email)!;
+        var email = CustomerProjection.MaskEmail(Jane.Email)!;
         Assert.DoesNotContain("smith", email);
         Assert.StartsWith("j", email);
         Assert.EndsWith(".com", email);
 
-        var phone = RmaWizardController.MaskPhone(Jane.PhoneNumber)!;
+        var phone = CustomerProjection.MaskPhone(Jane.PhoneNumber)!;
         Assert.EndsWith("77", phone);
         Assert.DoesNotContain("555", phone);
     }
@@ -47,7 +47,7 @@ public sealed class WizardPrivacyTests
     [Fact]
     public void Addresses_Are_Masked()
     {
-        var masked = RmaWizardController.MaskAddress(new Address
+        var masked = CustomerProjection.MaskAddress(new Address
         {
             Id = Guid.NewGuid(),
             Line1 = "742 Evergreen Terrace",

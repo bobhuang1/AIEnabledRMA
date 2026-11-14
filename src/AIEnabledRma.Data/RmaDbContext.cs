@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AIEnabledRma.Domain.Catalog;
 using AIEnabledRma.Domain.Customers;
+using AIEnabledRma.Domain.Operations;
 using AIEnabledRma.Domain.Rma;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
@@ -26,6 +27,8 @@ public sealed class RmaDbContext(DbContextOptions<RmaDbContext> options) : DbCon
     public DbSet<RmaLine> RmaLines => Set<RmaLine>();
 
     public DbSet<RmaExclusion> RmaExclusions => Set<RmaExclusion>();
+
+    public DbSet<McpToolCall> McpToolCalls => Set<McpToolCall>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -227,6 +230,23 @@ public sealed class RmaLineConfiguration : IEntityTypeConfiguration<RmaLine>
         // A device may legitimately appear on more than one historical request, so this index
         // is not unique; the duplicate check is done against *open* statuses at query time.
         builder.HasIndex(l => l.DeviceId).HasDatabaseName("ix_rma_lines_device");
+    }
+}
+
+public sealed class McpToolCallConfiguration : IEntityTypeConfiguration<McpToolCall>
+{
+    public void Configure(EntityTypeBuilder<McpToolCall> builder)
+    {
+        builder.ToTable("mcp_tool_calls");
+        builder.HasKey(c => c.Id);
+        builder.Property(c => c.Tool).HasMaxLength(64).IsRequired();
+        builder.Property(c => c.Caller).HasMaxLength(128).IsRequired();
+        builder.Property(c => c.ArgumentHashes).HasMaxLength(1000).IsRequired();
+
+        // The audit trail is read by time and by tool, not by id: an operator asking "what did
+        // agents look up yesterday" scans the newest rows first.
+        builder.HasIndex(c => c.AtUtc).HasDatabaseName("ix_mcp_tool_calls_at");
+        builder.HasIndex(c => new { c.Tool, c.AtUtc }).HasDatabaseName("ix_mcp_tool_calls_tool_at");
     }
 }
 

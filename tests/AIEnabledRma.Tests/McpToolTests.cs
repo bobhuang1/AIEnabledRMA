@@ -2,6 +2,7 @@ using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Catalog;
 using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Rules;
+using AIEnabledRma.Mcp;
 using AIEnabledRma.Mcp.Tools;
 using Microsoft.Extensions.Options;
 
@@ -243,7 +244,10 @@ public sealed class McpAddressResolutionTests
     private static (CustomerLookupTools Tools, FakeCustomerRepository Customers) Build()
     {
         var customers = new FakeCustomerRepository();
-        return (new CustomerLookupTools(customers, new FakeRmaRepository()), customers);
+        var budget = new CallBudget(
+            Microsoft.Extensions.Options.Options.Create(new McpBudgetOptions()),
+            TimeProvider.System);
+        return (new CustomerLookupTools(customers, new FakeRmaRepository(), new FakeToolAuditSink(), budget), customers);
     }
 
     private static AddressResolution Resolution(
@@ -267,7 +271,9 @@ public sealed class McpAddressResolutionTests
         Assert.False(response.IsFallback);
         Assert.Equal(0.83, response.MatchScore, 3);
         Assert.NotNull(response.Address);
-        Assert.Equal("Oakland", response.Address.City);
+        // The address comes back masked now: the label and a postcode prefix, not the street.
+        Assert.DoesNotContain("Harrison", response.Address.Masked, StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith("•••", response.Address.Masked);
     }
 
     [Fact]

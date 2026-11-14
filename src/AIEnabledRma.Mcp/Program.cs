@@ -1,4 +1,6 @@
 using AIEnabledRma.Data;
+using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Mcp;
 using AIEnabledRma.Mcp.Tools;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
@@ -16,6 +18,14 @@ builder.Services.AddMcpServer()
 
 builder.Services.AddRmaDbContext(builder.Configuration);
 builder.Services.AddRmaData(builder.Configuration);
+
+// Every audited call lands in mcp_tool_calls, and the session's budget is counted before the
+// lookup runs, so a refused call costs nothing.
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddOptions<McpBudgetOptions>()
+    .Bind(builder.Configuration.GetSection(McpBudgetOptions.SectionName));
+builder.Services.AddSingleton<CallBudget>();
+builder.Services.AddScoped<IToolAuditSink, EfToolAuditSink>();
 
 builder.Services.AddScoped<DeviceLookupTools>();
 builder.Services.AddScoped<CustomerLookupTools>();
