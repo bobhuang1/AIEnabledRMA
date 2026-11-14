@@ -40,6 +40,20 @@ public sealed class RagAdminGateTests
     public void The_key_is_compared_exactly_not_case_insensitively() =>
         Assert.False(RagAdminGate.IsAllowed(Context(IPAddress.Loopback, Key.ToUpperInvariant()), Key));
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void A_keyless_host_refuses_to_start_outside_development(string? configuredKey) =>
+        Assert.False(RagAdminGate.IsStartupAllowed(configuredKey, isDevelopment: false));
+
+    [Fact]
+    public void A_keyless_host_may_start_in_development() =>
+        Assert.True(RagAdminGate.IsStartupAllowed(configuredKey: null, isDevelopment: true));
+
+    [Fact]
+    public void A_configured_key_is_enough_to_start_anywhere() =>
+        Assert.True(RagAdminGate.IsStartupAllowed(Key, isDevelopment: false));
+
     private static HttpContext Context(IPAddress? remote, string? suppliedKey = null)
     {
         var context = new DefaultHttpContext();

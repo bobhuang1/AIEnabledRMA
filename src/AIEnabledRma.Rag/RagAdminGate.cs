@@ -27,6 +27,11 @@ namespace AIEnabledRma.Rag;
 /// When a key is configured it is required from every caller, loopback included: one rule with
 /// no ambiguity about whether the host is "in key mode" for a given request.
 ///
+/// The loopback fallback is a development convenience, so it is only available in Development.
+/// A keyless host outside Development refuses to start (<see cref="IsStartupAllowed"/>): the
+/// deployment this repository documents puts the RAG host behind a TLS proxy on the same machine,
+/// which makes every caller look like loopback and would leave all three endpoints open.
+///
 /// A refusal is a 404 rather than a 401 or 403. The endpoints are not advertised, so a caller
 /// who was not told they exist should not learn that they do.
 /// </remarks>
@@ -37,6 +42,14 @@ public static class RagAdminGate
 
     /// <summary>Configuration key that holds the admin key. Empty means loopback only.</summary>
     public const string ApiKeyConfigurationKey = "Rag:Admin:ApiKey";
+
+    /// <summary>
+    /// Whether a host holding this configuration may start at all. A key is mandatory outside
+    /// Development, because the loopback fallback is worth nothing when a proxy forwards the
+    /// request from the same machine.
+    /// </summary>
+    public static bool IsStartupAllowed(string? configuredKey, bool isDevelopment) =>
+        !string.IsNullOrEmpty(configuredKey) || isDevelopment;
 
     /// <summary>True when this request may use the operational endpoints.</summary>
     public static bool IsAllowed(HttpContext context, string? configuredKey)

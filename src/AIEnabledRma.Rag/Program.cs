@@ -16,6 +16,17 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 // operation that already applies a knowledge-base change, so it adds no new procedure.
 var adminKey = app.Configuration[RagAdminGate.ApiKeyConfigurationKey];
 
+// Without a key the gate admits loopback callers, and the documented deployment puts this host
+// behind a proxy on the same machine: every caller would be loopback. So a keyless host outside
+// Development is a misconfiguration that looks like a working one, and it fails here instead.
+if (!RagAdminGate.IsStartupAllowed(adminKey, app.Environment.IsDevelopment()))
+{
+    throw new InvalidOperationException(
+        $"{RagAdminGate.ApiKeyConfigurationKey} is required outside Development. Without it the "
+        + "operator endpoints admit any loopback caller, and a reverse proxy on the same host "
+        + "makes every caller loopback.");
+}
+
 var operations = app.MapGroup(string.Empty)
     .AddEndpointFilter(async (context, next) =>
         RagAdminGate.IsAllowed(context.HttpContext, adminKey)

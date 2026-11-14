@@ -278,6 +278,8 @@ Wizard:
   CapabilityExpiryDays: 30   # an unconfirmed request id stops working after this
 
 Rag:
+  Admin:
+    ApiKey: ""               # required outside Development; the host refuses to start without it
   KnowledgeBase:
     MaxFileBytes: 262144     # an article is prose, not a dataset
     MaxArticles: 2000
