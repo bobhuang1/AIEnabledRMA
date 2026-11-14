@@ -40,19 +40,28 @@ public sealed class RagAdminGateTests
     public void The_key_is_compared_exactly_not_case_insensitively() =>
         Assert.False(RagAdminGate.IsAllowed(Context(IPAddress.Loopback, Key.ToUpperInvariant()), Key));
 
+    // The shipped appsettings carries an empty key and an absent setting reads as null, so both
+    // shapes have to be refused; they reach the gate by different routes.
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    public void A_keyless_host_refuses_to_start_outside_development(string? configuredKey) =>
-        Assert.False(RagAdminGate.IsStartupAllowed(configuredKey, isDevelopment: false));
+    public void A_keyless_host_refuses_to_start_outside_development(string? configuredKey)
+    {
+        var thrown = Assert.Throws<InvalidOperationException>(
+            () => RagAdminGate.EnsureStartupAllowed(configuredKey, isDevelopment: false));
+
+        Assert.Contains(RagAdminGate.ApiKeyConfigurationKey, thrown.Message, StringComparison.Ordinal);
+    }
 
     [Fact]
     public void A_keyless_host_may_start_in_development() =>
-        Assert.True(RagAdminGate.IsStartupAllowed(configuredKey: null, isDevelopment: true));
+        Assert.Null(Record.Exception(
+            () => RagAdminGate.EnsureStartupAllowed(configuredKey: null, isDevelopment: true)));
 
     [Fact]
     public void A_configured_key_is_enough_to_start_anywhere() =>
-        Assert.True(RagAdminGate.IsStartupAllowed(Key, isDevelopment: false));
+        Assert.Null(Record.Exception(
+            () => RagAdminGate.EnsureStartupAllowed(Key, isDevelopment: false)));
 
     private static HttpContext Context(IPAddress? remote, string? suppliedKey = null)
     {

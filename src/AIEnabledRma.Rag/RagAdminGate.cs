@@ -27,10 +27,9 @@ namespace AIEnabledRma.Rag;
 /// When a key is configured it is required from every caller, loopback included: one rule with
 /// no ambiguity about whether the host is "in key mode" for a given request.
 ///
-/// The loopback fallback is a development convenience, so it is only available in Development.
-/// A keyless host outside Development refuses to start (<see cref="IsStartupAllowed"/>): the
-/// deployment this repository documents puts the RAG host behind a TLS proxy on the same machine,
-/// which makes every caller look like loopback and would leave all three endpoints open.
+/// The loopback fallback is a development convenience, so a keyless host refuses to start
+/// outside Development (<see cref="EnsureStartupAllowed"/>): a proxy on the same machine makes
+/// every caller look like loopback, which would leave all three endpoints open.
 ///
 /// A refusal is a 404 rather than a 401 or 403. The endpoints are not advertised, so a caller
 /// who was not told they exist should not learn that they do.
@@ -44,32 +43,34 @@ public static class RagAdminGate
     public const string ApiKeyConfigurationKey = "Rag:Admin:ApiKey";
 
     /// <summary>
-    /// Whether a host holding this configuration may start at all. A key is mandatory outside
-    /// Development, because the loopback fallback is worth nothing when a proxy forwards the
-    /// request from the same machine.
+    /// Throws unless this configuration may serve the operational endpoints. A key is mandatory
+    /// outside Development, where the loopback fallback would admit a proxy on the same machine.
     /// </summary>
-    public static bool IsStartupAllowed(string? configuredKey, bool isDevelopment) =>
-        !string.IsNullOrEmpty(configuredKey) || isDevelopment;
+    public static void EnsureStartupAllowed(string? configuredKey, bool isDevelopment)
+    {
+        if (!string.IsNullOrEmpty(configuredKey) || isDevelopment)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"{ApiKeyConfigurationKey} is required outside Development. Without it the operator "
+            + "endpoints admit any loopback caller, and a reverse proxy on the same host makes "
+            + "every caller loopback.");
+    }
 
     /// <summary>True when this request may use the operational endpoints.</summary>
     public static bool IsAllowed(HttpContext context, string? configuredKey)
     {
         if (string.IsNullOrEmpty(configuredKey))
         {
-            // IsLoopback is a static helper on IPAddress, not an instance property. It also
-            // unwraps IPv4-mapped IPv6 addresses, which is what a loopback client on a
-            // dual-stack socket looks like.
+            // A dual-stack socket presents a loopback client as an IPv4-mapped IPv6 address,
+            // which IsLoopback recognises; a request with no address is not assumed local.
             var remote = context.Connection.RemoteIpAddress;
-
             return remote is not null && IPAddress.IsLoopback(remote);
         }
 
         var supplied = context.Request.Headers[HeaderName].ToString();
-        if (supplied.Length == 0)
-        {
-            return false;
-        }
-
         var expected = Encoding.UTF8.GetBytes(configuredKey);
         var actual = Encoding.UTF8.GetBytes(supplied);
 
