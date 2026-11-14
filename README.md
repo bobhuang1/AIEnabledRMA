@@ -339,8 +339,11 @@ prompt, so the loader treats it as untrusted input with a known shape:
   it.
 - **Sanitised before indexing**: HTML tags and comments, markdown and bare link targets, and
   lines that address the model (`ignore previous instructions`, role markers, prompt-reveal
-  requests) are removed or neutralised. The removal is counted on the article and logged as a
-  count, never as the text.
+  requests) are removed or neutralised. This covers the **title**, which is rendered into the
+  prompt as a heading, as well as the body: an instruction hidden in a title is neutralised the
+  same way, and an article whose title is nothing but an instruction is refused. A keyword that
+  had to be neutralised is dropped rather than indexed. Every removal is counted on the article
+  and logged as a count, never as the text.
 - **Delimited in the prompt**: the pipeline wraps each hit in `<article>` and
   `<article_body>`, and the system prompt declares both blocks data rather than instructions.
 

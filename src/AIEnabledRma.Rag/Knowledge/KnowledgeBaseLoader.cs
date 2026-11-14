@@ -356,10 +356,40 @@ public sealed partial class KnowledgeBaseLoader
         var keywords = ParseList(frontMatter.GetValueOrDefault("keywords"));
         var related = ParseList(frontMatter.GetValueOrDefault("related"));
 
+        // The title is rendered into the prompt as `TITLE: ...`, so it is prompt text exactly as
+        // much as the body is, and an instruction placed there would otherwise skip sanitisation
+        // entirely. It is cleaned the same way; a title that is nothing but an instruction has no
+        // title left, and an article that cannot be named cannot be cited, so it is refused.
+        var sanitisedTitle = ArticleSanitizer.Sanitise(title);
+        if (sanitisedTitle.Body.Length == 0)
+        {
+            error = $"Article {file} ({id}) has no title left once sanitised. A title is how a "
+                + "citation is recognised; write one that describes the article.";
+            _logger.LogError("{Error}", error);
+            return false;
+        }
+
+        // Keywords are not rendered today, but they are indexed, and a neutralised line kept as
+        // a keyword would put the words "instruction-like text removed" into the token set. A
+        // keyword that had to be neutralised is dropped instead.
+        var sanitisedKeywords = new List<string>();
+        var keywordInstructionCount = 0;
+
+        foreach (var keyword in keywords)
+        {
+            var cleaned = ArticleSanitizer.Sanitise(keyword);
+            keywordInstructionCount += cleaned.InstructionLikeCount;
+
+            if (cleaned.InstructionLikeCount == 0 && cleaned.Body.Length > 0)
+            {
+                sanitisedKeywords.Add(cleaned.Body);
+            }
+        }
+
         var sanitised = ArticleSanitizer.Sanitise(body);
         var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var token in Tokenize(title))
+        foreach (var token in Tokenize(sanitisedTitle.Body))
         {
             tokens.Add(token);
         }
@@ -369,7 +399,7 @@ public sealed partial class KnowledgeBaseLoader
             tokens.Add(token);
         }
 
-        foreach (var keyword in keywords)
+        foreach (var keyword in sanitisedKeywords)
         {
             foreach (var token in Tokenize(keyword))
             {
@@ -377,30 +407,34 @@ public sealed partial class KnowledgeBaseLoader
             }
         }
 
+        var instructionCount = sanitised.InstructionLikeCount
+            + sanitisedTitle.InstructionLikeCount
+            + keywordInstructionCount;
+
         article = new KnowledgeArticle
         {
             Id = id,
-            Title = title,
+            Title = sanitisedTitle.Body,
             Category = category,
             Body = sanitised.Body,
             SourcePath = Path.GetRelativePath(Directory.GetCurrentDirectory(), file),
             ProductScope = scope,
-            Keywords = keywords,
+            Keywords = sanitisedKeywords,
             Related = related,
             ReviewedBy = string.IsNullOrWhiteSpace(reviewedBy) ? null : reviewedBy,
             ReviewedAt = reviewedAt,
             ContentHash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
-            InstructionLikeCount = sanitised.InstructionLikeCount,
+            InstructionLikeCount = instructionCount,
             Tokens = tokens,
         };
 
-        if (sanitised.InstructionLikeCount > 0)
+        if (instructionCount > 0)
         {
             // Counted, not quoted: writing the instruction into the log would give it a second
             // life somewhere it is not declared as data.
             _logger.LogWarning(
                 "Neutralised {Count} instruction-like line(s) in article {Id}.",
-                sanitised.InstructionLikeCount,
+                instructionCount,
                 id);
         }
 
