@@ -285,6 +285,29 @@ that can approve a return is a model that can be talked into approving a return:
   maintained as a second list that drifts from it.
 - When triage resolves the fault by troubleshooting, the RMA is **cancelled**, not approved.
 
+## What the model is allowed to see
+
+Customer text is redacted before it leaves the process (`AIEnabledRma.Privacy`), because an
+MCP-free, vendor-free architecture still ends at somebody else's server:
+
+- Email, phone numbers, Luhn-valid card numbers, postal addresses, dashed identifiers such as
+tax ids, and serial- or order-looking tokens are replaced with placeholders — `[EMAIL_1]`,
+`[ADDRESS_1]` — numbered in order of first appearance, so the same value keeps the same
+placeholder for the length of a conversation and the model can still follow "the one above".
+- The name on the return is redacted too, from the record rather than from a guess: a pattern
+cannot tell a person's name from any other capitalised pair.
+- The device serial, SKU and product stay, because the policy question is about a specific
+item and a redacted serial would make the answer useless. The caller states which values are
+protected rather than leaving it to the detector to guess.
+- The reply is scanned before it is shown or stored. One that repeats an identifier is
+replaced by the fail-closed result and the case goes to a human.
+- Logs carry counts by kind (`email=1`), never the values. A log line that names the email is
+the leak this exists to stop, and logs travel further than prompts.
+
+This is pattern-based, with no NER model: it catches the identifiers the system knows the shape
+of, which is the set that appears in fault statements. It is not a guarantee about free text
+nobody has seen yet, and the plan's local NER pass is still open.
+
 ## Paid repairs
 
 An out-of-warranty unit is neither refused nor treated as free: it is offered as a **paid

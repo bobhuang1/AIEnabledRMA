@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>AIEnabledRma.Privacy</RootNamespace>
+    <AssemblyName>AIEnabledRma.Privacy</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The seam it implements lives in the domain, next to the pipeline that depends on it. -->
+    <ProjectReference Include="..\AIEnabledRma.Domain\AIEnabledRma.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

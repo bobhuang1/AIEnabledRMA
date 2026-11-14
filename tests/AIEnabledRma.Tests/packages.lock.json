@@ -507,6 +507,12 @@
           "ModelContextProtocol": "[2.2.0, )"
         }
       },
+      "aienabledrma.privacy": {
+        "type": "Project",
+        "dependencies": {
+          "AIEnabledRma.Domain": "[1.0.0, )"
+        }
+      },
       "aienabledrma.rag": {
         "type": "Project",
         "dependencies": {
@@ -519,6 +525,7 @@
           "AIEnabledRma.Ai": "[1.0.0, )",
           "AIEnabledRma.Data": "[1.0.0, )",
           "AIEnabledRma.Domain": "[1.0.0, )",
+          "AIEnabledRma.Privacy": "[1.0.0, )",
           "AIEnabledRma.Rag": "[1.0.0, )"
         }
       },

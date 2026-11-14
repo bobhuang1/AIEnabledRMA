@@ -10,6 +10,7 @@
     <ProjectReference Include="..\AIEnabledRma.Domain\AIEnabledRma.Domain.csproj" />
     <ProjectReference Include="..\AIEnabledRma.Data\AIEnabledRma.Data.csproj" />
     <ProjectReference Include="..\AIEnabledRma.Ai\AIEnabledRma.Ai.csproj" />
+    <ProjectReference Include="..\AIEnabledRma.Privacy\AIEnabledRma.Privacy.csproj" />
     <ProjectReference Include="..\AIEnabledRma.Rag\AIEnabledRma.Rag.csproj" />
   </ItemGroup>
 

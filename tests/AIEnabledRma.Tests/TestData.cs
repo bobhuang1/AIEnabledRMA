@@ -210,6 +210,11 @@ internal sealed class FakeCustomerRepository : ICustomerRepository
     public Task<Customer?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
         Task.FromResult(ById);
 
+    public Task<CustomerName?> GetNameAsync(Guid id, CancellationToken cancellationToken = default) =>
+        Task.FromResult(ById is null
+            ? null
+            : new CustomerName(ById.FirstName, ById.LastName));
+
     public Task<IReadOnlyList<Customer>> SearchAsync(
         CustomerSearchQuery query, CancellationToken cancellationToken = default)
     {

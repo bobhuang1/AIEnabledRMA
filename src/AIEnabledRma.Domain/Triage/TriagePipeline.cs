@@ -28,6 +28,7 @@ public sealed partial class TriagePipeline(
     IChatModel chatModel,
     IKnowledgeRetriever retriever,
     IScopeGuard scopeGuard,
+    IPiiRedactor redactor,
     IOptions<RmaPolicyOptions> policyOptions,
     IOptions<TriagePipelineOptions> pipelineOptions,
     ILogger<TriagePipeline> logger) : ITriageService
@@ -53,6 +54,11 @@ public sealed partial class TriagePipeline(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        // 0. Redact before anything else reads the text. The retrieval query is built from the
+        //    customer's own words, and it leaves this process for the RAG service, so the same
+        //    rule applies to it as to the model call.
+        request = RedactRequest(request);
 
         // 1. Retrieve, scoped to the devices in this session.
         var retrieval = await RetrieveAsync(request, cancellationToken);
@@ -113,11 +119,96 @@ public sealed partial class TriagePipeline(
         var allowedIds = retrieval.Articles.Select(a => a.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var verified = VerifyAndClamp(verdict, allowedIds, request.CorrelationId);
 
+        // 6. The reply is scanned before it is shown or stored. A model that repeats an
+        //    identifier it was never given has either guessed one or been fed it by something
+        //    else, and neither is a reply worth showing: it is replaced, and the case goes to a
+        //    human.
+        if (OutputLeaksAnIdentifier(request, verified.Verdict))
+        {
+            logger.LogWarning(
+                "Triage output repeated a customer identifier; replaced with the fail-closed "
+                + "result. Correlation {CorrelationId}.",
+                request.CorrelationId);
+
+            return Fallback("pii-in-output");
+        }
+
         return new TriageResult
         {
             Verdict = verified.Verdict,
             Sources = retrieval.Articles,
         };
+    }
+
+    /// <summary>
+    /// Replaces every customer identifier in the statement and the conversation, with placeholders
+    /// that stay stable for the length of this conversation.
+    /// </summary>
+    private TriageRequest RedactRequest(TriageRequest request)
+    {
+        var session = BeginSessionFor(request);
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        string? statement = null;
+        if (request.CustomerStatement is not null)
+        {
+            var redacted = session.Redact(request.CustomerStatement);
+            statement = redacted.Text;
+            Merge(counts, redacted.Counts);
+        }
+
+        var turns = request.Conversation
+            .Select(turn =>
+            {
+                var redacted = session.Redact(turn.Content);
+                Merge(counts, redacted.Counts);
+                return turn with { Content = redacted.Text };
+            })
+            .ToList();
+
+        if (counts.Count > 0)
+        {
+            // Counts by kind, never the values: a log line naming the email is the leak this
+            // redaction exists to prevent, and logs travel further than prompts.
+            logger.LogInformation(
+                "Redacted {Total} customer identifier(s) before the model call ({Counts}). "
+                + "Correlation {CorrelationId}.",
+                counts.Values.Sum(),
+                string.Join(
+                    ", ",
+                    counts.OrderBy(c => c.Key, StringComparer.Ordinal)
+                        .Select(c => $"{c.Key}={c.Value}")),
+                request.CorrelationId);
+        }
+
+        return request with { CustomerStatement = statement, Conversation = turns };
+    }
+
+    private IPiiRedactionSession BeginSessionFor(TriageRequest request) =>
+        redactor.BeginSession(
+            request.CustomerNames,
+            request.Devices
+                // The serial and product are what the policy needs to see, and they are shaped
+                // exactly like the identifiers the redactor strips. The caller says which ones
+                // survive rather than leaving it to a pattern to guess.
+                .SelectMany(d => new[] { d.SerialNumber, d.Sku, d.Model, d.ProductName })
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Select(v => v!));
+
+    private bool OutputLeaksAnIdentifier(TriageRequest request, TriageVerdict verdict)
+    {
+        var session = BeginSessionFor(request);
+
+        return session.ContainsIdentifiers(verdict.Summary ?? string.Empty)
+               || verdict.Steps.Any(s => session.ContainsIdentifiers(s.Instruction));
+    }
+
+    private static void Merge(Dictionary<string, int> into, IReadOnlyDictionary<string, int> from)
+    {
+        foreach (var (kind, count) in from)
+        {
+            into[kind] = into.TryGetValue(kind, out var seen) ? seen + count : count;
+        }
     }
 
     private async Task<KnowledgeRetrievalResult> RetrieveAsync(

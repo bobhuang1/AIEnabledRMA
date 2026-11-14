@@ -271,6 +271,13 @@ public sealed class RmaWizardController(
 
         var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
 
+        // The customer's name is the one identifier the redactor cannot recognise from a pattern,
+        // so it is looked up and handed over with the statement. Projected rather than loaded:
+        // a tracked entity here would collide with the one the workflow attaches later.
+        var customerName = request.CustomerId is Guid customerId
+            ? await customers.GetNameAsync(customerId, cancellationToken)
+            : null;
+
         // Retrieval and the model call happen inside the pipeline, which enforces the scope
         // guard, the closed schema, and citation verification. The controller cannot skip those
         // because it has no path to IChatModel.
@@ -288,6 +295,9 @@ public sealed class RmaWizardController(
                     },
                 ],
                 CustomerStatement = form.Statement,
+                CustomerNames = customerName is null
+                    ? []
+                    : new[] { customerName.FirstName, customerName.LastName },
                 CorrelationId = $"rma:{request.RmaNumber}",
             },
             cancellationToken);

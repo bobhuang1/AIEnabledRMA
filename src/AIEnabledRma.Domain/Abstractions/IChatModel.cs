@@ -107,6 +107,13 @@ public sealed record TriageRequest
 
     public string? CustomerStatement { get; init; }
 
+    /// <summary>
+    /// The name of the customer on this return, when the caller knows it. Passed so the redactor
+    /// can recognise it: a pattern cannot tell a person's name from any other pair of
+    /// capitalised words.
+    /// </summary>
+    public IReadOnlyList<string> CustomerNames { get; init; } = [];
+
     public string? RegionCode { get; init; }
 
     public string? CorrelationId { get; init; }

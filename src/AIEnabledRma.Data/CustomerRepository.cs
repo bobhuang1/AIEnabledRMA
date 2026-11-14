@@ -19,6 +19,12 @@ public sealed class CustomerRepository(
             .Include(c => c.Addresses)
             .FirstOrDefaultAsync(c => c.Id == id, cancellationToken);
 
+    public Task<CustomerName?> GetNameAsync(Guid id, CancellationToken cancellationToken) =>
+        _db.Customers
+            .Where(c => c.Id == id)
+            .Select(c => new CustomerName(c.FirstName, c.LastName))
+            .FirstOrDefaultAsync(cancellationToken);
+
     /// <summary>
     /// Two-stage lookup. The database does trigram prefiltering and returns a bounded
     /// candidate set; <see cref="FuzzyMatcher"/> then re-ranks in memory. Doing it this way

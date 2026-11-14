@@ -69,6 +69,7 @@ public sealed class TriagePipelineTests
             model,
             retriever,
             guard,
+            new AIEnabledRma.Privacy.PiiRedactor(),
             Microsoft.Extensions.Options.Options.Create(new RmaPolicyOptions
             {
                 HumanReviewConfidenceThreshold = 0.45,
@@ -352,6 +353,108 @@ public sealed class TriagePipelineTests
         // Only the product identity the model legitimately needs is present.
         Assert.Contains("serial=SN-1", deviceBlock, StringComparison.Ordinal);
         Assert.Contains("product=Vertex Widget", deviceBlock, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task No_planted_customer_value_reaches_the_model()
+    {
+        // The gate the whole redaction exists for: what the provider is handed, across every
+        // message, statement and turn, contains none of the values the customer wrote.
+        var (pipeline, model) = Build();
+
+        await pipeline.TriageAsync(
+            new TriageRequest
+            {
+                Devices = [Device()],
+                CustomerNames = ["Josephine Smith"],
+                CustomerStatement =
+                    "Josephine Smith here. The indicator light stays dark and it will not power on. "
+                    + "Reach me at josephine.smith@example.com or 020 7946 0018. Last return shipped "
+                    + "to 2210 Harrison Street, order RMA-2026-00001, card 4111 1111 1111 1111.",
+                Conversation =
+                [
+                    new TriageTurn
+                    {
+                        Role = TriageRole.Customer,
+                        Content = "my tax id is 99-1234567, the unit still will not turn on",
+                        AtUtc = DateTimeOffset.UnixEpoch,
+                    },
+                ],
+                CorrelationId = "test-correlation",
+            },
+            CancellationToken.None);
+
+        Assert.Single(model.Requests);
+        var sent = string.Join("\n", model.Requests[0].Messages.Select(m => m.Content));
+
+        string[] planted =
+        [
+            "josephine.smith@example.com",
+            "020 7946 0018",
+            "2210 Harrison Street",
+            "RMA-2026-00001",
+            "4111 1111 1111 1111",
+            "99-1234567",
+            "Josephine",
+        ];
+
+        foreach (var value in planted)
+        {
+            Assert.DoesNotContain(value, sent, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // The placeholders are there instead, and the device identity the policy needs survives.
+        Assert.Contains("[EMAIL_1]", sent, StringComparison.Ordinal);
+        Assert.Contains("[ADDRESS_1]", sent, StringComparison.Ordinal);
+        Assert.Contains("serial=SN-1", sent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_placeholder_is_the_same_number_every_time_it_appears()
+    {
+        var (pipeline, model) = Build();
+
+        await pipeline.TriageAsync(
+            new TriageRequest
+            {
+                Devices = [Device()],
+                CustomerStatement =
+                    "indicator light is dark and it will not power on; write to ada@example.com.",
+                Conversation =
+                [
+                    new TriageTurn
+                    {
+                        Role = TriageRole.Customer,
+                        Content = "the light stays dark, mail ada@example.com again if you need to",
+                        AtUtc = DateTimeOffset.UnixEpoch,
+                    },
+                ],
+            },
+            CancellationToken.None);
+
+        var sent = string.Join("\n", model.Requests[0].Messages.Select(m => m.Content));
+
+        Assert.DoesNotContain("ada@example.com", sent, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("[EMAIL_1]", sent, StringComparison.Ordinal);
+        Assert.DoesNotContain("[EMAIL_2]", sent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_reply_that_repeats_an_identifier_is_replaced_and_goes_to_a_human()
+    {
+        // The model was never given the address, so a reply carrying one has invented it or been
+        // fed it by something other than this pipeline. Either way it is not shown.
+        var (pipeline, _) = Build(
+            modelOutput: DefaultVerdictJson(
+                summary: "Your replacement goes to 2210 Harrison Street, confirmation sent to ada@example.com."));
+
+        var result = await pipeline.TriageAsync(Request(), CancellationToken.None);
+
+        Assert.True(result.UsedFallback);
+        Assert.Equal("pii-in-output", result.FailureReason);
+        Assert.False(result.Verdict.Resolved);
+        Assert.DoesNotContain("Harrison", result.Verdict.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ada@example.com", result.Verdict.Summary, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

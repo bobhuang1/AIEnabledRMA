@@ -108,6 +108,17 @@ public interface ICustomerRepository
 {
     Task<Customer?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The customer's name alone, projected so no entity is tracked.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="GetByIdAsync"/> returns a tracked graph, and attaching a second copy of the
+    /// same customer later in the same request throws "already being tracked". A caller that
+    /// only wants to know what to redact must not drag the entity into the change tracker to
+    /// find out.
+    /// </remarks>
+    Task<CustomerName?> GetNameAsync(Guid id, CancellationToken cancellationToken);
+
     Task<IReadOnlyList<Customer>> SearchAsync(
         CustomerSearchQuery query,
         CancellationToken cancellationToken);
@@ -126,6 +137,8 @@ public interface ICustomerRepository
         string? freeTextAddress,
         CancellationToken cancellationToken);
 }
+
+public sealed record CustomerName(string FirstName, string LastName);
 
 /// <summary>Outcome of resolving a shipping address, including how confident the match was.</summary>
 public sealed record AddressResolution

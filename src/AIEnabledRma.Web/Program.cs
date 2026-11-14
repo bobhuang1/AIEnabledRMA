@@ -4,6 +4,7 @@ using AIEnabledRma.Data;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Domain.Triage;
+using AIEnabledRma.Privacy;
 using AIEnabledRma.Rag;
 using AIEnabledRma.Web;
 using Microsoft.AspNetCore.RateLimiting;
@@ -23,6 +24,10 @@ builder.Services.AddAiProvider(builder.Configuration);
 
 builder.Services.AddScoped<IRmaWorkflow, RmaWorkflow>();
 builder.Services.AddScoped<ITriageService, TriagePipeline>();
+
+// The redactor holds no state across requests: each triage call starts its own session, so the
+// placeholders it hands the model cannot link two conversations by number.
+builder.Services.AddSingleton<IPiiRedactor, PiiRedactor>();
 
 // Warranty windows and return windows are date-sensitive, so every date in the flow is read
 // through IClock. Singleton, because it holds no state and must not vary between requests.

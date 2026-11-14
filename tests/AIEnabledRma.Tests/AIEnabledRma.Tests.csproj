@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\src\AIEnabledRma.Domain\AIEnabledRma.Domain.csproj" />
     <ProjectReference Include="..\..\src\AIEnabledRma.Rag\AIEnabledRma.Rag.csproj" />
     <ProjectReference Include="..\..\src\AIEnabledRma.Ai\AIEnabledRma.Ai.csproj" />
+    <ProjectReference Include="..\..\src\AIEnabledRma.Privacy\AIEnabledRma.Privacy.csproj" />
     <ProjectReference Include="..\..\src\AIEnabledRma.Mcp\AIEnabledRma.Mcp.csproj" />
     <!-- Data is referenced only by RmaNumberSequenceTests, which exercises real PostgreSQL
          sequence behaviour against a throwaway database, and by WebWizardTests, which boots
