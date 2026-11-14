@@ -2,6 +2,8 @@
 id: kb-0009
 title: Barcode will not decode
 category: scanning
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [barcode, decode, scan, read, laser, symbology, blurry, damaged label, not reading]
 related: [kb-0008, kb-0010]

@@ -109,19 +109,7 @@ public sealed class WebWizardTests : IAsyncLifetime
         var client = CreateClient();
 
         // Step 1: serial in.
-        var start = await client.GetAsync("/RmaWizard/Start", ct);
-        Assert.Equal(HttpStatusCode.OK, start.StatusCode);
-
-        var startStep = await PostStepAsync(
-            client,
-            "/RmaWizard/Start",
-            TokenOf(await start.Content.ReadAsStringAsync(ct)),
-            [
-                ("Customer", CustomerEmail),
-                ("Identifiers", EligibleSerial),
-                ("CurrencyCode", CurrencyCode),
-            ],
-            ct);
+        var startStep = await BeginAsync(client, CustomerEmail, EligibleSerial, ct);
 
         // The triage page is addressed by request id, so the path carries the id rather than a
         // query string. Everything after this point is addressed the same way, which is what
@@ -248,20 +236,12 @@ public sealed class WebWizardTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var client = CreateClient();
 
-        var start = await client.GetAsync("/RmaWizard/Start", ct);
-        Assert.Equal(HttpStatusCode.OK, start.StatusCode);
-
         // One device the policy accepts and one it refuses, so the request is created from part of
         // what was handed over and the customer has to be told about the rest.
-        var startStep = await PostStepAsync(
+        var startStep = await BeginAsync(
             client,
-            "/RmaWizard/Start",
-            TokenOf(await start.Content.ReadAsStringAsync(ct)),
-            [
-                ("Customer", CustomerEmail),
-                ("Identifiers", $"{EligibleSerial}\n{ExcludedSerial}"),
-                ("CurrencyCode", CurrencyCode),
-            ],
+            CustomerEmail,
+            $"{EligibleSerial}\n{ExcludedSerial}",
             ct);
 
         var triagePath = startStep.Path;
@@ -317,19 +297,7 @@ public sealed class WebWizardTests : IAsyncLifetime
 
         // Step 1: an expired unit is no longer a dead end. It is not refused and it is not
         // treated as free: the wizard keeps it in scope by quoting a paid repair.
-        var start = await client.GetAsync("/RmaWizard/Start", ct);
-        Assert.Equal(HttpStatusCode.OK, start.StatusCode);
-
-        var startStep = await PostStepAsync(
-            client,
-            "/RmaWizard/Start",
-            TokenOf(await start.Content.ReadAsStringAsync(ct)),
-            [
-                ("Customer", CustomerEmail),
-                ("Identifiers", PaidRepairSerial),
-                ("CurrencyCode", CurrencyCode),
-            ],
-            ct);
+        var startStep = await BeginAsync(client, CustomerEmail, PaidRepairSerial, ct);
 
         var triagePath = startStep.Path;
         Assert.StartsWith("/RmaWizard/Triage/", triagePath, StringComparison.Ordinal);
@@ -449,13 +417,7 @@ public sealed class WebWizardTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var client = CreateClient();
 
-        var start = await client.GetAsync("/RmaWizard/Start", ct);
-        var startStep = await PostStepAsync(
-            client,
-            "/RmaWizard/Start",
-            TokenOf(await start.Content.ReadAsStringAsync(ct)),
-            [("Customer", CustomerEmail), ("Identifiers", EligibleSerial)],
-            ct);
+        var startStep = await BeginAsync(client, CustomerEmail, EligibleSerial, ct);
 
         Assert.StartsWith("/RmaWizard/Triage/", startStep.Path, StringComparison.Ordinal);
         var rmaId = IdFromPath(startStep.Path);
@@ -493,13 +455,7 @@ public sealed class WebWizardTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var client = CreateClient();
 
-        var start = await client.GetAsync("/RmaWizard/Start", ct);
-        var startStep = await PostStepAsync(
-            client,
-            "/RmaWizard/Start",
-            TokenOf(await start.Content.ReadAsStringAsync(ct)),
-            [("Customer", CustomerEmail), ("Identifiers", EligibleSerial)],
-            ct);
+        var startStep = await BeginAsync(client, CustomerEmail, EligibleSerial, ct);
 
         Assert.StartsWith("/RmaWizard/Triage/", startStep.Path, StringComparison.Ordinal);
         var rmaId = IdFromPath(startStep.Path);
@@ -560,13 +516,7 @@ public sealed class WebWizardTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var client = CreateClient();
 
-        var start = await client.GetAsync("/RmaWizard/Start", ct);
-        var startStep = await PostStepAsync(
-            client,
-            "/RmaWizard/Start",
-            TokenOf(await start.Content.ReadAsStringAsync(ct)),
-            [("Customer", CustomerEmail), ("Identifiers", EligibleSerial)],
-            ct);
+        var startStep = await BeginAsync(client, CustomerEmail, EligibleSerial, ct);
 
         var rmaId = IdFromPath(startStep.Path);
 
@@ -614,19 +564,10 @@ public sealed class WebWizardTests : IAsyncLifetime
         var client = CreateClient();
 
         // AX2-0001-0002 already carries an open return in the seed, so intake stops for a person.
-        var start = await client.GetAsync("/RmaWizard/Start", ct);
-        var startStep = await PostStepAsync(
-            client,
-            "/RmaWizard/Start",
-            TokenOf(await start.Content.ReadAsStringAsync(ct)),
-            [
-                ("Customer", CustomerEmail),
-                ("Identifiers", DuplicateSerial),
-                ("CurrencyCode", CurrencyCode),
-            ],
-            ct);
+        var startStep = await BeginAsync(client, CustomerEmail, DuplicateSerial, ct);
 
-        Assert.Equal("/RmaWizard/Start", startStep.Path);
+        // The intake stop renders on the page the chooser POST ended at.
+        Assert.Equal("/RmaWizard/ChooseCustomer", startStep.Path);
 
         var html = await startStep.Page.Content.ReadAsStringAsync(ct);
         Assert.Contains("A person will take a look", html, StringComparison.Ordinal);
@@ -646,13 +587,7 @@ public sealed class WebWizardTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var client = CreateClient();
 
-        var start = await client.GetAsync("/RmaWizard/Start", ct);
-        var startStep = await PostStepAsync(
-            client,
-            "/RmaWizard/Start",
-            TokenOf(await start.Content.ReadAsStringAsync(ct)),
-            [("Customer", CustomerEmail), ("Identifiers", EligibleSerial)],
-            ct);
+        var startStep = await BeginAsync(client, CustomerEmail, EligibleSerial, ct);
 
         var rmaId = IdFromPath(startStep.Path);
 
@@ -704,11 +639,28 @@ public sealed class WebWizardTests : IAsyncLifetime
 
         // A prefix of a real serial, not a serial: fuzzy intake matching scored this 0.90
         // against AX2-0001-0001 and opened a return for a unit the visitor does not have.
-        var startStep = await PostStepAsync(
+        var started = await PostStepAsync(
             client,
             "/RmaWizard/Start",
             TokenOf(await start.Content.ReadAsStringAsync(ct)),
-            [("Customer", CustomerEmail), ("Identifiers", "AX2-0001")],
+            [("Customer", CustomerEmail), ("Identifiers", "AX2-0001"), ("CurrencyCode", CurrencyCode)],
+            ct);
+
+        Assert.StartsWith("/RmaWizard/ChooseCustomer", started.Path, StringComparison.Ordinal);
+
+        var chooserHtml = await started.Page.Content.ReadAsStringAsync(ct);
+        var carried = Regex.Match(chooserHtml, "name=\"identifiers\"[^>]*value=\"(?<ids>[^\"]*)\"");
+        Assert.True(carried.Success, "the chooser did not carry the identifiers on");
+
+        var startStep = await PostStepAsync(
+            client,
+            "/RmaWizard/ChooseCustomer",
+            TokenOf(chooserHtml),
+            [
+                ("customerId", string.Empty),
+                ("identifiers", carried.Groups["ids"].Value),
+                ("offer", OfferOf(chooserHtml)),
+            ],
             ct);
 
         Assert.DoesNotContain("/RmaWizard/Triage/", startStep.Path, StringComparison.Ordinal);
@@ -730,17 +682,7 @@ public sealed class WebWizardTests : IAsyncLifetime
         // The consequence that actually hurts a customer: a line created here would sit against
         // the real unit, and the owner's own return would then be refused as a duplicate. So the
         // unit the prefix pointed at must still start a return normally.
-        var ownerStart = await client.GetAsync("/RmaWizard/Start", ct);
-        var ownerStep = await PostStepAsync(
-            client,
-            "/RmaWizard/Start",
-            TokenOf(await ownerStart.Content.ReadAsStringAsync(ct)),
-            [
-                ("Customer", CustomerEmail),
-                ("Identifiers", EligibleSerial),
-                ("CurrencyCode", CurrencyCode),
-            ],
-            ct);
+        var ownerStep = await BeginAsync(client, CustomerEmail, EligibleSerial, ct);
 
         Assert.StartsWith("/RmaWizard/Triage/", ownerStep.Path, StringComparison.Ordinal);
 
@@ -769,20 +711,8 @@ public sealed class WebWizardTests : IAsyncLifetime
         Assert.StartsWith("/RmaWizard/Triage/", ownerStep.Path, StringComparison.Ordinal);
         Assert.NotEqual(IdFromPath(squatterStep.Path), IdFromPath(ownerStep.Path));
 
-        async Task<StepOutcome> StartReturnAsync(HttpClient client)
-        {
-            var start = await client.GetAsync("/RmaWizard/Start", ct);
-            return await PostStepAsync(
-                client,
-                "/RmaWizard/Start",
-                TokenOf(await start.Content.ReadAsStringAsync(ct)),
-                [
-                    ("Customer", CustomerEmail),
-                    ("Identifiers", PaidRepairSerial),
-                    ("CurrencyCode", CurrencyCode),
-                ],
-                ct);
-        }
+        async Task<StepOutcome> StartReturnAsync(HttpClient client) =>
+            await BeginAsync(client, CustomerEmail, PaidRepairSerial, ct);
     }
 
     [Fact]
@@ -791,17 +721,7 @@ public sealed class WebWizardTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var client = CreateClient();
 
-        var start = await client.GetAsync("/RmaWizard/Start", ct);
-        var startStep = await PostStepAsync(
-            client,
-            "/RmaWizard/Start",
-            TokenOf(await start.Content.ReadAsStringAsync(ct)),
-            [
-                ("Customer", CustomerEmail),
-                ("Identifiers", EligibleSerial),
-                ("CurrencyCode", CurrencyCode),
-            ],
-            ct);
+        var startStep = await BeginAsync(client, CustomerEmail, EligibleSerial, ct);
 
         var rmaId = IdFromPath(startStep.Path);
         var triagePage = await client.GetAsync($"/RmaWizard/Triage/{rmaId}", ct);
@@ -887,18 +807,7 @@ public sealed class WebWizardTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var client = CreateClient();
 
-        var start = await client.GetAsync("/RmaWizard/Start", ct);
-
-        var startStep = await PostStepAsync(
-            client,
-            "/RmaWizard/Start",
-            TokenOf(await start.Content.ReadAsStringAsync(ct)),
-            [
-                ("Customer", CustomerEmail),
-                ("Identifiers", identifier),
-                ("CurrencyCode", CurrencyCode),
-            ],
-            ct);
+        var startStep = await BeginAsync(client, CustomerEmail, identifier, ct);
 
         Assert.StartsWith("/RmaWizard/Triage/", startStep.Path, StringComparison.Ordinal);
     }
@@ -913,8 +822,6 @@ public sealed class WebWizardTests : IAsyncLifetime
         // The wizard must show both rather than attach the return to one of them, because the
         // wrong account would expose its address and its returns history.
         var start = await client.GetAsync("/RmaWizard/Start", ct);
-        Assert.Equal(HttpStatusCode.OK, start.StatusCode);
-
         var startStep = await PostStepAsync(
             client,
             "/RmaWizard/Start",
@@ -954,6 +861,7 @@ public sealed class WebWizardTests : IAsyncLifetime
             [
                 ("CustomerId", chosen.Id.ToString()),
                 ("Identifiers", EligibleSerial),
+                ("offer", OfferOf(chooserHtml)),
             ],
             ct);
 
@@ -1007,7 +915,11 @@ public sealed class WebWizardTests : IAsyncLifetime
             client,
             "/RmaWizard/ChooseCustomer",
             TokenOf(chooserHtml),
-            [("CustomerId", unoffered.ToString()), ("Identifiers", EligibleSerial)],
+            [
+                ("CustomerId", unoffered.ToString()),
+                ("Identifiers", EligibleSerial),
+                ("offer", OfferOf(chooserHtml)),
+            ],
             ct);
 
         // Back to the start, not an error page: the posted identity is simply not one this
@@ -1024,19 +936,11 @@ public sealed class WebWizardTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var client = CreateClient();
 
-        var start = await client.GetAsync("/RmaWizard/Start", ct);
-        var startStep = await PostStepAsync(
-            client,
-            "/RmaWizard/Start",
-            TokenOf(await start.Content.ReadAsStringAsync(ct)),
-            [
-                ("Customer", CustomerEmail),
-                ("Identifiers", IneligibleSerial),
-                ("CurrencyCode", CurrencyCode),
-            ],
-            ct);
+        var startStep = await BeginAsync(client, CustomerEmail, IneligibleSerial, ct);
 
-        Assert.Equal("/RmaWizard/Start", startStep.Path);
+        // The refusal renders where the POST ended, which is the chooser the visitor was sent
+        // through: intake answers every contact lookup with that page.
+        Assert.Equal("/RmaWizard/ChooseCustomer", startStep.Path);
         Assert.Contains(
             "cannot take this return",
             await startStep.Page.Content.ReadAsStringAsync(ct),
@@ -1195,10 +1099,169 @@ public sealed class WebWizardTests : IAsyncLifetime
             ?? throw new InvalidOperationException("The response had no request URI to inspect.");
     }
 
+    [Fact]
+    public async Task An_unknown_account_gets_the_same_chooser_page_as_a_known_one()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+        var start = await client.GetAsync("/RmaWizard/Start", ct);
+        var token = TokenOf(await start.Content.ReadAsStringAsync(ct));
+
+        (string Key, string Value)[] Fields(string customer) =>
+        [
+            ("Customer", customer),
+            ("Identifiers", EligibleSerial),
+            ("CurrencyCode", CurrencyCode),
+        ];
+
+        var known = await PostStepAsync(client, "/RmaWizard/Start", token, Fields(CustomerEmail), ct);
+        var unknown = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            token,
+            Fields("definitely-not-a-customer@example.com"),
+            ct);
+
+        // The response is the same shape either way. Attaching an exact match at Start and
+        // showing a chooser only for near misses made the redirect itself the answer to "is
+        // this address on file?", which is an enumeration oracle over the customer table.
+        Assert.StartsWith("/RmaWizard/ChooseCustomer", known.Path, StringComparison.Ordinal);
+        Assert.StartsWith("/RmaWizard/ChooseCustomer", unknown.Path, StringComparison.Ordinal);
+
+        var unknownHtml = await unknown.Page.Content.ReadAsStringAsync(ct);
+        Assert.Contains("could not find that account", unknownHtml, StringComparison.OrdinalIgnoreCase);
+
+        // And the no-match page can finish the return, just as the chooser can.
+        var finished = await PostStepAsync(
+            client,
+            "/RmaWizard/ChooseCustomer",
+            TokenOf(unknownHtml),
+            [
+                ("customerId", string.Empty),
+                ("identifiers", EligibleSerial),
+                ("offer", OfferOf(unknownHtml)),
+            ],
+            ct);
+
+        Assert.StartsWith("/RmaWizard/Triage/", finished.Path, StringComparison.Ordinal);
+
+        await using var db = CreateContext();
+        var request = await db.RmaRequests.SingleAsync(r => r.Id == IdFromPath(finished.Path), ct);
+        Assert.Null(request.CustomerId);
+    }
+
+    [Fact]
+    public async Task A_draft_past_the_capability_window_refuses_every_step()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        var started = await BeginAsync(client, CustomerEmail, EligibleSerial, ct);
+        var rmaId = IdFromPath(started.Path);
+
+        await using (var db = CreateContext())
+        {
+            var request = await db.RmaRequests.SingleAsync(r => r.Id == rmaId, ct);
+            request.CreatedAtUtc = DateTimeOffset.UtcNow.AddDays(-31);
+            await db.SaveChangesAsync(ct);
+        }
+
+        // The request id is the capability. A link left in an inbox must stop working.
+        var page = await client.GetAsync($"/RmaWizard/Triage/{rmaId}", ct);
+
+        Assert.Equal(HttpStatusCode.Gone, page.StatusCode);
+        Assert.Contains("expired", await page.Content.ReadAsStringAsync(ct), StringComparison.OrdinalIgnoreCase);
+
+        // A draft inside the window is untouched: the rule bounds the link, not the step.
+        var fresh = await BeginAsync(client, CustomerEmail, EligibleSerial, ct);
+        Assert.StartsWith("/RmaWizard/Triage/", fresh.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Security_headers_are_sent_with_the_page()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        var response = await client.GetAsync("/RmaWizard/Start", ct);
+
+        Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
+        Assert.Equal("no-referrer", response.Headers.GetValues("Referrer-Policy").Single());
+        Assert.Equal("DENY", response.Headers.GetValues("X-Frame-Options").Single());
+
+        var csp = response.Headers.GetValues("Content-Security-Policy").Single();
+        Assert.Contains("default-src 'self'", csp, StringComparison.Ordinal);
+        Assert.Contains("frame-ancestors 'none'", csp, StringComparison.Ordinal);
+        Assert.Contains("form-action 'self'", csp, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// Posts a wizard step and returns the page the step hands the customer to, together with the
     /// redirect that got it there.
     /// </summary>
+    /// <summary>
+    /// Starts a return and picks the account on the chooser page it always lands on.
+    /// </summary>
+    /// <remarks>
+    /// A contact lookup is answered with the chooser whether it matched nothing, one account or
+    /// several: the response must not be the answer to "is this address on file?". So every
+    /// walk-through goes through the chooser, and an account is selected only when one was
+    /// offered — the no-match form posts an empty id.
+    /// </remarks>
+    private static string OfferOf(string html) =>
+        Regex.Match(html, "name=\"offer\"[^>]*value=\"(?<offer>[^\"]*)\"").Groups["offer"].Value;
+
+    private static async Task<StepOutcome> BeginAsync(
+        HttpClient client,
+        string customer,
+        string identifiers,
+        CancellationToken cancellationToken)
+    {
+        var start = await client.GetAsync("/RmaWizard/Start", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, start.StatusCode);
+
+        var started = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            TokenOf(await start.Content.ReadAsStringAsync(cancellationToken)),
+            [
+                ("Customer", customer),
+                ("Identifiers", identifiers),
+                ("CurrencyCode", CurrencyCode),
+            ],
+            cancellationToken);
+
+        Assert.StartsWith("/RmaWizard/ChooseCustomer", started.Path, StringComparison.Ordinal);
+
+        var chooser = await client.GetAsync(started.Redirect ?? started.Path, cancellationToken);
+        var html = await chooser.Content.ReadAsStringAsync(cancellationToken);
+        var offered = Regex.Match(html, "name=\"customerId\" value=\"(?<id>[0-9a-fA-F-]{36})\"");
+
+        // The chooser carries the server's own joined identifier list, which is not the same
+        // string the visitor typed (several serials are joined with '|'). Posting the typed
+        // text back would drop every identifier but the first.
+        var carried = Regex.Match(html, "name=\"identifiers\"[^>]*value=\"(?<ids>[^\"]*)\"");
+
+        // The chooser posts its server-side offer key back, and that is the only thing that
+        // makes the next POST legitimate. Without it every walk-through would bounce to Start
+        // and no test below would be exercising the step it names.
+        Assert.False(string.IsNullOrEmpty(OfferOf(html)), "the chooser page carried no offer key");
+        Assert.True(
+            html.Contains("Which account is yours?", StringComparison.Ordinal),
+            "chooser for a known account rendered no candidates; redirect was " + started.Redirect);
+
+        return await PostStepAsync(
+            client,
+            "/RmaWizard/ChooseCustomer",
+            TokenOf(html),
+            [
+                ("customerId", offered.Success ? offered.Groups["id"].Value : string.Empty),
+                ("identifiers", carried.Success ? carried.Groups["ids"].Value : identifiers),
+                ("offer", OfferOf(html)),
+            ],
+            cancellationToken);
+    }
+
     /// <remarks>
     /// A redirect is followed only as a GET, which is what the wizard uses between steps. A 307
     /// or 308 would preserve the POST verb, and reposting a step can charge a card or allocate

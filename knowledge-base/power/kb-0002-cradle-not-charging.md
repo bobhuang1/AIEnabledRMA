@@ -2,6 +2,8 @@
 id: kb-0002
 title: Charging cradle will not charge the unit
 category: power
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [cradle, charge, charging, dock, cradle, power supply, adapter, not charging]
 related: [kb-0001]

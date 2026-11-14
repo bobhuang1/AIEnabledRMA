@@ -2,6 +2,8 @@
 id: kb-0008
 title: Scan trigger does not fire
 category: scanning
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [trigger, scan, scan button, wont scan, laser, imager, read, barcode, dead trigger]
 related: [kb-0009, kb-0010]

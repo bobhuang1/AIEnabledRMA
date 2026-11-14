@@ -1,31 +1,69 @@
-@using AIEnabledRma.Web.Controllers
+﻿@using AIEnabledRma.Web.Controllers
 @model RmaWizardController.ChooseCustomerViewModel
 @{
-    ViewData["Title"] = "Which account?";
+    ViewData["Title"] = Model.Matches.Count > 0 ? "Which account?" : "No matching account";
+    var hasMatches = Model.Matches.Count > 0;
 }
 
-<h1>More than one account matches</h1>
-<p class="lede">
-    We found several accounts that could be yours. Pick the right one so we do not send your
-    return details to the wrong person.
-</p>
+@if (hasMatches)
+{
+    <h1>Which account is yours?</h1>
+    <p class="lede">
+        We found @Model.Matches.Count account(s) that could be yours. Pick the right one so we do
+        not send your return details to the wrong person. If none of them is you, continue without
+        an account.
+    </p>
+}
+else
+{
+    <h1>We could not find that account</h1>
+    <p class="lede">
+        No account matched what you entered. You can continue without one: the return works the
+        same, and the details you gave are used only for this return.
+    </p>
+}
 
-<form method="post" asp-controller="RmaWizard" asp-action="ChooseCustomer">
-    <input name="identifiers" type="hidden" value="@Model.Identifiers" />
+@if (hasMatches)
+{
+    <form method="post" asp-controller="RmaWizard" asp-action="ChooseCustomer">
+        <input name="identifiers" type="hidden" value="@Model.Identifiers" />
+        <input name="offer" type="hidden" value="@Model.Offer" />
 
-    @foreach (var match in Model.Matches)
-    {
-        <label class="radio-card">
-            <input type="radio" name="customerId" value="@match.Id" required />
-            <span>
-                <strong>@match.Name</strong><br />
-                <span class="muted">@match.Email &middot; @match.PhoneNumber</span>
-            </span>
-        </label>
-    }
+        @foreach (var match in Model.Matches)
+        {
+            <label class="radio-card">
+                <input type="radio" name="customerId" value="@match.Id" required />
+                <span>
+                    <strong>@match.Name</strong><br />
+                    <span class="muted">@match.Email &middot; @match.PhoneNumber</span>
+                </span>
+            </label>
+        }
 
-    <div class="actions">
-        <button class="btn" type="submit">Use this account</button>
-        <a class="btn btn-secondary" asp-controller="RmaWizard" asp-action="Start">Start over</a>
-    </div>
-</form>
+        <div class="actions">
+            <button class="btn" type="submit">Use this account</button>
+            <a class="btn btn-secondary" asp-controller="RmaWizard" asp-action="Start">Start over</a>
+        </div>
+    </form>
+
+    <form method="post" asp-controller="RmaWizard" asp-action="ChooseCustomer">
+        <input name="identifiers" type="hidden" value="@Model.Identifiers" />
+        <input name="offer" type="hidden" value="@Model.Offer" />
+        <input name="customerId" type="hidden" value="" />
+        <div class="actions">
+            <button class="btn btn-secondary" type="submit">None of these — continue without an account</button>
+        </div>
+    </form>
+}
+else
+{
+    <form method="post" asp-controller="RmaWizard" asp-action="ChooseCustomer">
+        <input name="identifiers" type="hidden" value="@Model.Identifiers" />
+        <input name="offer" type="hidden" value="@Model.Offer" />
+        <input name="customerId" type="hidden" value="" />
+        <div class="actions">
+            <button class="btn" type="submit">Continue with this return</button>
+            <a class="btn btn-secondary" asp-controller="RmaWizard" asp-action="Start">Start over</a>
+        </div>
+    </form>
+}

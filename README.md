@@ -267,6 +267,16 @@ Ai:
 Payments:
   Fake:
     AllowInProduction: false # the accept-everything gateway exists for Development only
+
+Wizard:
+  CapabilityExpiryDays: 30   # an unconfirmed request id stops working after this
+
+Rag:
+  KnowledgeBase:
+    MaxFileBytes: 262144     # an article is prose, not a dataset
+    MaxArticles: 2000
+    MaxFrontMatterCharacters: 4096
+    RequireReview: false     # always on in Production, whatever this says
 ```
 
 ## Why the AI is advisory
@@ -308,6 +318,24 @@ This is pattern-based, with no NER model: it catches the identifiers the system 
 of, which is the set that appears in fault statements. It is not a guarantee about free text
 nobody has seen yet, and the plan's local NER pass is still open.
 
+## What the corpus is allowed to add
+
+The knowledge base is hand-written and code-reviewed, but it is still text going into a
+prompt, so the loader treats it as untrusted input with a known shape:
+
+- **Refused and reported**, never silently dropped: files over `MaxFileBytes`, front matter
+  over `MaxFrontMatterCharacters`, more than `MaxArticles` articles, non-UTF-8 bytes, symlinks
+  and paths that resolve outside the corpus root.
+- **Provenance**: each article carries `reviewed_by`, `reviewed_at` and a SHA-256 content hash,
+  so "the article is what was reviewed" is checkable. Production refuses any article without
+  it.
+- **Sanitised before indexing**: HTML tags and comments, markdown and bare link targets, and
+  lines that address the model (`ignore previous instructions`, role markers, prompt-reveal
+  requests) are removed or neutralised. The removal is counted on the article and logged as a
+  count, never as the text.
+- **Delimited in the prompt**: the pipeline wraps each hit in `<article>` and
+  `<article_body>`, and the system prompt declares both blocks data rather than instructions.
+
 ## Paid repairs
 
 An out-of-warranty unit is neither refused nor treated as free: it is offered as a **paid
@@ -346,10 +374,18 @@ Accepted trade-off: anyone holding a request URL can drive that return until it 
 
 Because the wizard is anonymous, it never shows another customer's details in full:
 
-- A customer is attached directly only when the visitor types the exact email or full
-  phone number on file. A weaker (fuzzy) match lists candidates **masked** (`Jane S.`,
-  `j•••@e•••.com`, `••• 77`), and only an account from that server-issued list can be
-  picked.
+- An email or phone lookup always answers with the same account chooser, whether it matched
+  one account, several, or none. Attaching on an exact hit and showing a chooser only for a
+  near miss made the redirect itself the answer to "is this address on file?". Candidates
+  are **masked** (`Jane S.`, `j•••@e•••.com`, `••• 77`), the exact match is offered first,
+  and only an account from that server-issued list can be picked — or the visitor continues
+  without one.
+- An unconfirmed request expires after `Wizard:CapabilityExpiryDays` (30 by default) and
+  every step then answers **410 Gone**. The GUID is the capability, so the link has to stop
+  working eventually.
+- Every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
+  `X-Frame-Options: DENY` and a CSP that allows nothing but the site's own CSS and JS, with
+  `frame-ancestors 'none'`. A clickjacked confirm button is a confirmed return.
 - Stored addresses are shown masked (label plus `•••, 62••• US`) on the shipping and
   confirmation steps.
 - The payment currency comes from the price table (`RmaPolicy:RepairPrices`), never from

@@ -2,6 +2,8 @@
 id: kb-0001
 title: Reading the charge indicator light
 category: power
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [power, charge, indicator, light, led, battery, blinking]
 related: [kb-0002, kb-0003]

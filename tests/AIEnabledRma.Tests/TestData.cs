@@ -120,6 +120,9 @@ internal static class TestData
             ProductScope = scope ?? ["*"],
             Keywords = keywords ?? [],
             Related = related ?? [],
+            // Fixtures are not files, so they carry no hash; the loader is what fills this in
+            // for real articles and the tests that care about it read it from there.
+            ContentHash = string.Empty,
             Tokens = tokens,
         };
     }

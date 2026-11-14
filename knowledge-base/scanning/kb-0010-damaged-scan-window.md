@@ -2,6 +2,8 @@
 id: kb-0010
 title: Laser or imager window damaged
 category: scanning
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [cracked, damaged, scratched, window, lens, laser, imager, physical damage, broken]
 related: [kb-0009]

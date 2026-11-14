@@ -6,6 +6,7 @@ using AIEnabledRma.Domain.Triage;
 using AIEnabledRma.Web.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace AIEnabledRma.Web.Controllers;
 
@@ -32,7 +33,9 @@ public sealed class RmaWizardController(
     IDeviceRepository devices,
     ICustomerRepository customers,
     IRmaRepository requests,
-    TimeProvider timeProvider) : Controller
+    TimeProvider timeProvider,
+    Microsoft.Extensions.Options.IOptions<WizardOptions> wizardOptions,
+    Microsoft.Extensions.Caching.Memory.IMemoryCache chooserOffers) : Controller
 {
     [HttpGet]
     public IActionResult Start() => View(new StartReturnForm());
@@ -73,24 +76,43 @@ public sealed class RmaWizardController(
         // contact detail on file) attaches directly; anything weaker is shown only as masked
         // candidates, and the pick is checked against that server-issued list.
         var exact = customerMatches.Where(c => CustomerProjection.IsExactContactMatch(form.Customer, c)).ToList();
-        if (exact.Count == 1)
-        {
-            customerMatches = exact;
-        }
-        else if (customerMatches.Count > 0)
-        {
-            TempData["AmbiguousCustomer"] = form.Customer;
-            TempData["AmbiguousMatches"] = System.Text.Json.JsonSerializer.Serialize(
-                customerMatches
-                    .Select(c => new CustomerMatchView(
-                        c.Id,
-                        CustomerProjection.MaskName(c.FirstName, c.LastName),
-                        CustomerProjection.MaskEmail(c.Email),
-                        CustomerProjection.MaskPhone(c.PhoneNumber)))
-                    .ToList());
-            TempData["AmbiguousIds"] = string.Join('|', customerMatches.Select(c => c.Id));
+        var contactLookup = LooksLikeEmail(form.Customer) || LooksLikePhone(form.Customer);
 
-            return RedirectToAction(nameof(ChooseCustomer), new { identifiers = string.Join('|', identifiers) });
+        // An email or phone lookup goes through the chooser whether it matched exactly one
+        // account, several, or none. Attaching on an exact hit and showing a chooser on a near
+        // hit made the response itself the answer to "is this address on file?", which is an
+        // enumeration oracle over the customer table. The exact match is offered first, so the
+        // visitor who typed their own address picks it in one click.
+        customerMatches = exact.Concat(customerMatches.Except(exact)).ToList();
+
+        if (contactLookup || customerMatches.Count > 0)
+        {
+            var offers = customerMatches
+                .Select(c => new CustomerMatchView(
+                    c.Id,
+                    CustomerProjection.MaskName(c.FirstName, c.LastName),
+                    CustomerProjection.MaskEmail(c.Email),
+                    CustomerProjection.MaskPhone(c.PhoneNumber)))
+                .ToList();
+
+            // The POST has to know which accounts were offered so a rewritten id is refused.
+            // The list is held server-side under an opaque key: it is not customer data worth
+            // a cookie round trip, and a client that drops or rewrites the key gets the start
+            // page rather than an account it was never offered.
+            var offer = Guid.NewGuid().ToString("N");
+            chooserOffers.Set(
+                OfferKey(offer),
+                offers,
+                new Microsoft.Extensions.Caching.Memory.MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15),
+                });
+
+            return RedirectToAction(nameof(ChooseCustomer), new
+            {
+                identifiers = string.Join('|', identifiers),
+                offer,
+            });
         }
 
         var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
@@ -133,20 +155,27 @@ public sealed class RmaWizardController(
     /// returns history.
     /// </summary>
     [HttpGet]
-    public IActionResult ChooseCustomer(string? identifiers)
+    public IActionResult ChooseCustomer(string? identifiers, string? offer)
     {
-        TempData.TryGetValue("AmbiguousMatches", out var matchesJson);
+        var matches = OfferedAccounts(offer) ?? [];
 
-        // The match list crosses the redirect as a JSON string: cookie TempData round-trips
-        // simple values dependably, and a structured list is pushed through the serializer
-        // explicitly instead of being left to inference.
-        var matches = matchesJson is string json
-            ? System.Text.Json.JsonSerializer.Deserialize<List<CustomerMatchView>>(json)
-            : null;
+        return View(new ChooseCustomerViewModel(matches, identifiers, offer ?? string.Empty));
+    }
 
-        TempData.Keep("AmbiguousMatches");
+    private static string OfferKey(string offer) => $"rma-chooser:{offer}";
 
-        return View(new ChooseCustomerViewModel(matches ?? [], identifiers));
+    private IReadOnlyList<CustomerMatchView>? OfferedAccounts(string? offer)
+    {
+        if (string.IsNullOrWhiteSpace(offer)
+            || !chooserOffers.TryGetValue(OfferKey(offer), out var cached)
+            || cached is not IReadOnlyList<CustomerMatchView> matches)
+        {
+            // An expired, unknown or tampered key is treated as "you were not offered
+            // anything", which is the start page rather than an error.
+            return null;
+        }
+
+        return matches;
     }
 
     [HttpPost]
@@ -155,17 +184,26 @@ public sealed class RmaWizardController(
     // identifiers and can create the request, so a separate allowance would just double the
     // writes one caller can make.
     [EnableRateLimiting(RateLimitPolicies.WizardWrites)]
-    public async Task<IActionResult> ChooseCustomer(string customerId, string identifiers, CancellationToken cancellationToken)
+    public async Task<IActionResult> ChooseCustomer(
+        string? customerId,
+        string identifiers,
+        string? offer,
+        CancellationToken cancellationToken)
     {
-        if (!Guid.TryParse(customerId, out var id))
+        // An empty id is the "no account is mine" choice, and it is only available to a visitor
+        // who was shown the chooser. Without that, an unknown email would be a different
+        // response from a known one.
+        var offered = OfferedAccounts(offer);
+        if (offered is null)
         {
             return RedirectToAction(nameof(Start));
         }
 
+        Guid? id = Guid.TryParse(customerId, out var parsed) ? parsed : null;
+
         // Only an account from the list this visitor was shown may be attached; a GUID typed
         // into the form must not attach (and later display) an arbitrary customer.
-        var offered = TempData["AmbiguousIds"] as string ?? string.Empty;
-        if (!offered.Split('|', StringSplitOptions.RemoveEmptyEntries).Contains(id.ToString(), StringComparer.OrdinalIgnoreCase))
+        if (id is not null && !offered.Any(m => m.Id == id.Value))
         {
             return RedirectToAction(nameof(Start));
         }
@@ -206,6 +244,11 @@ public sealed class RmaWizardController(
         if (request is null)
         {
             return NotFound();
+        }
+
+        if (RefuseIfExpired(request) is { } expiredTriage)
+        {
+            return expiredTriage;
         }
 
         ViewBag.RmaNumber = request.RmaNumber;
@@ -267,6 +310,11 @@ public sealed class RmaWizardController(
         if (request is null)
         {
             return NotFound();
+        }
+
+        if (RefuseIfExpired(request) is { } expiredTriagePost)
+        {
+            return expiredTriagePost;
         }
 
         var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
@@ -334,6 +382,11 @@ public sealed class RmaWizardController(
             return NotFound();
         }
 
+        if (RefuseIfExpired(request) is { } expiredProblems)
+        {
+            return expiredProblems;
+        }
+
         return View(new ProblemsForm
         {
             RmaId = request.Id,
@@ -363,6 +416,11 @@ public sealed class RmaWizardController(
         if (request is null)
         {
             return NotFound();
+        }
+
+        if (RefuseIfExpired(request) is { } expiredProblemsPost)
+        {
+            return expiredProblemsPost;
         }
 
         var owned = request.Lines.Select(l => l.DeviceId).ToHashSet();
@@ -418,6 +476,11 @@ public sealed class RmaWizardController(
 
         ViewBag.RmaNumber = request.RmaNumber;
 
+        if (RefuseIfExpired(request) is { } expiredShipping)
+        {
+            return expiredShipping;
+        }
+
         if (request.CustomerId is { } customerId)
         {
             var customer = await customers.GetByIdAsync(customerId, cancellationToken);
@@ -449,6 +512,11 @@ public sealed class RmaWizardController(
         if (request is null)
         {
             return NotFound();
+        }
+
+        if (RefuseIfExpired(request) is { } expiredShippingPost)
+        {
+            return expiredShippingPost;
         }
 
         // Two ways to choose an address: pick a stored one, or type a free-text address that
@@ -501,7 +569,17 @@ public sealed class RmaWizardController(
     public async Task<IActionResult> Payment(Guid id, CancellationToken cancellationToken)
     {
         var request = await requests.GetByIdAsync(id, cancellationToken);
-        return request is null ? NotFound() : View(new PaymentForm { RmaId = request.Id });
+        if (request is null)
+        {
+            return NotFound();
+        }
+
+        if (RefuseIfExpired(request) is { } expiredPayment)
+        {
+            return expiredPayment;
+        }
+
+        return View(new PaymentForm { RmaId = request.Id });
     }
 
     [HttpPost]
@@ -531,6 +609,11 @@ public sealed class RmaWizardController(
             return NotFound();
         }
 
+        if (RefuseIfExpired(request) is { } expiredConfirm)
+        {
+            return expiredConfirm;
+        }
+
         ViewBag.FallbackAddress = fallback;
         ViewBag.Address = request.ShipToAddress;
 
@@ -553,6 +636,17 @@ public sealed class RmaWizardController(
     [EnableRateLimiting(RateLimitPolicies.WizardWrites)]
     public async Task<IActionResult> Confirm(ConfirmForm form, CancellationToken cancellationToken)
     {
+        var request = await requests.GetByIdAsync(form.RmaId, cancellationToken);
+        if (request is null)
+        {
+            return NotFound();
+        }
+
+        if (RefuseIfExpired(request) is { } expiredConfirmPost)
+        {
+            return expiredConfirmPost;
+        }
+
         var result = await workflow.ConfirmAsync(form.RmaId, cancellationToken);
 
         return View("Outcome", ToViewModel(result));
@@ -602,8 +696,39 @@ public sealed class RmaWizardController(
     /// </summary>
     public sealed record ChooseCustomerViewModel(
         IReadOnlyList<CustomerMatchView> Matches,
-        string? Identifiers);
+        string? Identifiers,
+        string Offer);
 
     public sealed record MaskedAddressView(Guid Id, string? Label, string Masked, bool IsDefault);
+
+    /// <summary>
+    /// Refuses a step on an unconfirmed request that has outlived the capability window.
+    /// </summary>
+    /// <remarks>
+    /// The step guards already refuse a request in the wrong status, so an abandoned draft is
+    /// only ever as dangerous as the link that reaches it. Expiry is what bounds that link:
+    /// without it, a URL left in a shared inbox keeps working indefinitely. 410 rather than 404
+    /// because the request really was here; the customer needs to know to start again, not to
+    /// suspect a typo.
+    /// </remarks>
+    private IActionResult? RefuseIfExpired(RmaRequest request)
+    {
+        if (request.Status != RmaRequestStatus.Draft)
+        {
+            return null;
+        }
+
+        var expiry = TimeSpan.FromDays(Math.Max(1, wizardOptions.Value.CapabilityExpiryDays));
+        if (timeProvider.GetUtcNow() - request.CreatedAtUtc <= expiry)
+        {
+            return null;
+        }
+
+        Response.StatusCode = StatusCodes.Status410Gone;
+        ViewBag.RmaNumber = request.RmaNumber;
+        ViewBag.ExpiryDays = (int)expiry.TotalDays;
+
+        return View("Expired");
+    }
 
 }

@@ -2,6 +2,8 @@
 id: kb-0012
 title: Liquid exposure
 category: physical
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [water, liquid, wet, spill, rain, moisture, corrosion, damp, submerged]
 related: [kb-0011]

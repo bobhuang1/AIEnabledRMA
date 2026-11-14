@@ -2,6 +2,8 @@
 id: kb-0015
 title: Cables, adapters, and other non-electronic merchandise
 category: merchandise
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [cable, adapter, cradle, mount, holster, accessory, merchandise, strap, charger]
 related: []

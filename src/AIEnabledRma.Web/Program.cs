@@ -90,6 +90,12 @@ builder.Services.AddControllersWithViews();
 // rather than being parked, and callers behind one NAT address share a partition. That shared
 // partition is the known trade-off: the alternative is a global limit, which one caller could
 // use to shut the wizard down for everyone.
+builder.Services.Configure<WizardOptions>(builder.Configuration.GetSection(WizardOptions.SectionName));
+
+// Holds the account list a visitor was shown until they choose from it. Server-side, because
+// the POST validates the chosen id against it and the browser must not be able to add one.
+builder.Services.AddMemoryCache();
+
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -107,6 +113,24 @@ builder.Services.AddRateLimiter(options =>
 });
 
 var app = builder.Build();
+
+// Response headers for every request, including the static files and the error page. The
+// wizard renders no inline script or style, so a strict policy costs nothing: a page that
+// cannot load anything but its own CSS and JS cannot be made to exfiltrate the request id
+// sitting in the address bar. frame-ancestors and X-Frame-Options both say no framing, because
+// a clickjacked confirm button is a confirmed return.
+app.Use(async (context, next) =>
+{
+    var headers = context.Response.Headers;
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["Referrer-Policy"] = "no-referrer";
+    headers["X-Frame-Options"] = "DENY";
+    headers["Content-Security-Policy"] =
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+        + "form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
+
+    await next();
+});
 
 // First in the pipeline, because everything that cares about the caller's address reads
 // Connection.RemoteIpAddress and the write limiter partitions on it. Behind a reverse proxy that

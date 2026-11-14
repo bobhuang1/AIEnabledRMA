@@ -2,6 +2,8 @@
 id: kb-0004
 title: Screen is blank but the unit has power
 category: display
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [screen, display, blank, black, backlight, dim, no image, lcd, touch]
 related: [kb-0003, kb-0011]

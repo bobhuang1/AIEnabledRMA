@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace AIEnabledRma.Rag;
 
@@ -34,7 +35,26 @@ public static class RagServiceCollectionExtensions
             .Validate(o => o.MaxRelatedExpansions >= 0, "MaxRelatedExpansions cannot be negative.")
             .ValidateOnStart();
 
-        services.AddSingleton<KnowledgeBaseLoader>();
+        // Limits and provenance come from configuration, with one rule the deployment cannot
+        // forget: Production always requires review. An unreviewed article is an unreviewed
+        // policy answer, and the environment is a fact about the host, not a preference.
+        services.AddSingleton(sp =>
+        {
+            var options = new KnowledgeBaseOptions();
+            configuration.GetSection(KnowledgeBaseOptions.SectionName).Bind(options);
+
+            if (sp.GetService<IHostEnvironment>()?.IsProduction() == true)
+            {
+                options.RequireReview = true;
+            }
+
+            return options;
+        });
+
+        services.AddSingleton(sp => new KnowledgeBaseLoader(
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<KnowledgeBaseLoader>>(),
+            Microsoft.Extensions.Options.Options.Create(
+                sp.GetRequiredService<KnowledgeBaseOptions>())));
 
         // Resolved once per process. A reload is a deliberate operation (see ReloadAsync), not
         // a file watcher, so a half-written article can never be picked up mid-save.

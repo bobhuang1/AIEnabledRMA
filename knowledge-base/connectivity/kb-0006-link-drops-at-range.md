@@ -2,6 +2,8 @@
 id: kb-0006
 title: Wireless link drops at range
 category: connectivity
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [range, distance, drops, intermittent, radio, wifi, interference, far away]
 related: [kb-0005]

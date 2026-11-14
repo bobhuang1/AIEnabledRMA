@@ -2,6 +2,8 @@
 id: kb-0016
 title: What the troubleshooting assistant can and cannot do
 category: process
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [process, return, rma, policy, what can you do, help, assistant, scope, warranty]
 related: [kb-0017]

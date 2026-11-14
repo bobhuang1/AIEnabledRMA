@@ -1,0 +1,28 @@
+@{
+    ViewData["Title"] = "This return has expired";
+    var rmaNumber = ViewBag.RmaNumber as string;
+    var expiryDays = ViewBag.ExpiryDays is int d ? d : 30;
+}
+
+<h1>This return has expired</h1>
+
+<p class="lede">
+    @if (!string.IsNullOrWhiteSpace(rmaNumber))
+    {
+        <text>Return @rmaNumber was started more than @expiryDays days ago and was never confirmed.</text>
+    }
+    else
+    {
+        <text>This return was started more than @expiryDays days ago and was never confirmed.</text>
+    }
+    For security, a link that was not used is not left working indefinitely.
+</p>
+
+<p>
+    Nothing was charged and nothing was shipped. Start a new return and the same items will be
+    checked again against the policy in force today.
+</p>
+
+<div class="actions">
+    <a class="btn" asp-controller="RmaWizard" asp-action="Start">Start a new return</a>
+</div>

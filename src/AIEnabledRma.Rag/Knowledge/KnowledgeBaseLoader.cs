@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace AIEnabledRma.Rag.Knowledge;
@@ -13,6 +15,7 @@ public sealed record KnowledgeArticle
 
     public required string Category { get; init; }
 
+    /// <summary>The body after sanitisation: HTML, link targets and instruction-like lines removed.</summary>
     public required string Body { get; init; }
 
     public required string SourcePath { get; init; }
@@ -25,6 +28,21 @@ public sealed record KnowledgeArticle
     public required IReadOnlyList<string> Keywords { get; init; }
 
     public required IReadOnlyList<string> Related { get; init; }
+
+    /// <summary>Who last reviewed the article. Required in Production.</summary>
+    public string? ReviewedBy { get; init; }
+
+    /// <summary>When the article was last reviewed. Required in Production.</summary>
+    public DateTimeOffset? ReviewedAt { get; init; }
+
+    /// <summary>
+    /// SHA-256 of the file as loaded. Lets an operator tell "the article is what was reviewed"
+    /// from "the article is what someone edited after review".
+    /// </summary>
+    public required string ContentHash { get; init; }
+
+    /// <summary>How many instruction-like lines were neutralised while sanitising the body.</summary>
+    public int InstructionLikeCount { get; init; }
 
     public bool IsUniversal => ProductScope.Contains("*", StringComparer.Ordinal);
 
@@ -44,27 +62,67 @@ public sealed record KnowledgeBaseLoadResult
 }
 
 /// <summary>
+/// Limits applied to the corpus as it is read. Bound from <c>Rag:KnowledgeBase</c>.
+/// </summary>
+public sealed class KnowledgeBaseOptions
+{
+    public const string SectionName = "Rag:KnowledgeBase";
+
+    /// <summary>Largest article file accepted, in bytes. A corpus is prose, not a dataset.</summary>
+    public long MaxFileBytes { get; set; } = 256 * 1024;
+
+    /// <summary>Largest number of articles the index will hold.</summary>
+    public int MaxArticles { get; set; } = 2000;
+
+    /// <summary>Largest front-matter block accepted, in characters.</summary>
+    public int MaxFrontMatterCharacters { get; set; } = 4096;
+
+    /// <summary>
+    /// When true, an article without <c>reviewed_by</c> and <c>reviewed_at</c> is refused.
+    /// Set by the host in Production, where an unreviewed page is an unreviewed policy answer.
+    /// </summary>
+    public bool RequireReview { get; set; }
+}
+
+/// <summary>
 /// Reads the knowledge-base directory from disk. Fails closed on structural problems:
 /// a missing required field or a duplicate id produces an error and the article is not
 /// loaded, because a half-loaded corpus with ambiguous ids would make citation
 /// verification meaningless.
 /// </summary>
+/// <remarks>
+/// The corpus is written by hand and merged by pull request, which makes it trusted at the
+/// process level — but it is still content going into a prompt, and an article can carry
+/// instructions as easily as a customer can. Two rules follow. The loader refuses anything it
+/// cannot read deterministically (oversize, non-UTF-8, symlinked, unreviewed in Production) and
+/// records why, rather than silently dropping it. The body is then sanitised, and the pipeline
+/// wraps it in delimiters the system prompt declares as data.
+/// </remarks>
 public sealed partial class KnowledgeBaseLoader
 {
     private const string FrontMatterFence = "---";
+
+    /// <summary>Strict UTF-8: a file that is not valid UTF-8 is refused, not repaired.</summary>
+    private static readonly UTF8Encoding StrictUtf8 =
+        new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     [GeneratedRegex(@"^---\s*\n(?<frontMatter>[\s\S]*?)\n---\s*\n?(?<body>[\s\S]*)$")]
     private static partial Regex ArticleRegex();
 
     private readonly ILogger<KnowledgeBaseLoader> _logger;
+    private readonly KnowledgeBaseOptions _options;
     private readonly Lock _gate = new();
 
-    public KnowledgeBaseLoader(ILogger<KnowledgeBaseLoader> logger) => _logger = logger;
+    public KnowledgeBaseLoader(
+        ILogger<KnowledgeBaseLoader> logger,
+        Microsoft.Extensions.Options.IOptions<KnowledgeBaseOptions>? options = null)
+    {
+        _logger = logger;
+        _options = options?.Value ?? new KnowledgeBaseOptions();
+    }
 
     /// <summary>
-    /// Loads every <c>*.md</c> file under <paramref name="rootPath"/>, recursively. The
-    /// in-memory index is swapped atomically, so a reload never leaves retrieval serving a
-    /// half-updated corpus.
+    /// Loads every <c>*.md</c> file under <paramref name="rootPath"/>, recursively.
     /// </summary>
     public KnowledgeBaseLoadResult Load(string rootPath)
     {
@@ -82,6 +140,7 @@ public sealed partial class KnowledgeBaseLoader
             return new KnowledgeBaseLoadResult { Errors = errors, RootPath = rootPath };
         }
 
+        var rootFull = Path.GetFullPath(rootPath);
         var files = Directory
             .EnumerateFiles(rootPath, "*.md", SearchOption.AllDirectories)
             .OrderBy(f => f, StringComparer.Ordinal)
@@ -91,6 +150,21 @@ public sealed partial class KnowledgeBaseLoader
         {
             // The directory's own README documents the format; it is not an article.
             if (string.Equals(Path.GetFileName(file), "README.md", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (articles.Count >= _options.MaxArticles)
+            {
+                // One error, then stop: a per-file error for every remaining file would bury
+                // the reason under thousands of copies of it.
+                errors.Add(
+                    $"Article limit of {_options.MaxArticles} reached; the rest of the corpus under "
+                    + $"{rootPath} was not loaded.");
+                break;
+            }
+
+            if (RefuseStructuralProblem(file, rootFull, errors))
             {
                 continue;
             }
@@ -144,6 +218,43 @@ public sealed partial class KnowledgeBaseLoader
     }
 
     /// <summary>
+    /// Refuses files the loader cannot vouch for before reading them: symlinks, paths that
+    /// resolve outside the root, and anything over the size cap.
+    /// </summary>
+    private bool RefuseStructuralProblem(string file, string rootFull, List<string> errors)
+    {
+        var info = new FileInfo(file);
+
+        // A symlink is a path that means something different depending on the machine it was
+        // checked out on. Refusing them means the reviewed file is the loaded file.
+        if (info.LinkTarget is not null)
+        {
+            errors.Add($"{file} is a symbolic link. Articles must be regular files in the corpus.");
+            _logger.LogError("{File} is a symbolic link and was not loaded.", file);
+            return true;
+        }
+
+        var full = Path.GetFullPath(file);
+        if (!full.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            errors.Add($"{file} resolves outside the knowledge-base root {rootFull}.");
+            _logger.LogError("{File} resolves outside the knowledge-base root.", file);
+            return true;
+        }
+
+        if (info.Length > _options.MaxFileBytes)
+        {
+            errors.Add(
+                $"{file} is {info.Length} bytes, over the {_options.MaxFileBytes}-byte limit. "
+                + "An article is prose; a file this large is something else.");
+            _logger.LogError("{File} is over the size limit.", file);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Parses one article file. Returns false with a human-readable reason rather than
     /// logging and returning null, so the caller can surface the problem in the load result
     /// and the reload endpoint can refuse to publish a degraded corpus.
@@ -152,7 +263,30 @@ public sealed partial class KnowledgeBaseLoader
     {
         article = null;
 
-        var raw = File.ReadAllText(file);
+        byte[] bytes;
+        try
+        {
+            bytes = File.ReadAllBytes(file);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            error = $"Could not read {file}: {ex.Message}";
+            return false;
+        }
+
+        string raw;
+        try
+        {
+            raw = StrictUtf8.GetString(bytes).TrimStart('\uFEFF');
+        }
+        catch (DecoderFallbackException)
+        {
+            error = $"{file} is not valid UTF-8. The corpus is UTF-8 only, so the text cannot be "
+                + "indexed or quoted reliably.";
+            _logger.LogError("{Error}", error);
+            return false;
+        }
+
         var match = ArticleRegex().Match(raw);
 
         if (!match.Success)
@@ -162,7 +296,16 @@ public sealed partial class KnowledgeBaseLoader
             return false;
         }
 
-        var frontMatter = ParseFrontMatter(match.Groups["frontMatter"].Value);
+        var frontMatterRaw = match.Groups["frontMatter"].Value;
+        if (frontMatterRaw.Length > _options.MaxFrontMatterCharacters)
+        {
+            error = $"{file} has {frontMatterRaw.Length} characters of front matter, over the "
+                + $"{_options.MaxFrontMatterCharacters}-character limit.";
+            _logger.LogError("{Error}", error);
+            return false;
+        }
+
+        var frontMatter = ParseFrontMatter(frontMatterRaw);
         var body = match.Groups["body"].Value.Trim();
 
         var id = frontMatter.GetValueOrDefault("id")?.Trim();
@@ -189,6 +332,18 @@ public sealed partial class KnowledgeBaseLoader
             return false;
         }
 
+        var reviewedBy = frontMatter.GetValueOrDefault("reviewed_by")?.Trim();
+        var reviewedAt = ParseReviewedAt(frontMatter.GetValueOrDefault("reviewed_at"));
+
+        if (_options.RequireReview
+            && (string.IsNullOrWhiteSpace(reviewedBy) || reviewedAt is null))
+        {
+            error = $"Article {file} ({id}) has no provenance. Production refuses an article "
+                + "that nobody has reviewed; add reviewed_by and reviewed_at to its front matter.";
+            _logger.LogError("{Error}", error);
+            return false;
+        }
+
         var scope = ParseList(frontMatter.GetValueOrDefault("product_scope"));
         if (scope.Count == 0)
         {
@@ -201,13 +356,15 @@ public sealed partial class KnowledgeBaseLoader
         var keywords = ParseList(frontMatter.GetValueOrDefault("keywords"));
         var related = ParseList(frontMatter.GetValueOrDefault("related"));
 
+        var sanitised = ArticleSanitizer.Sanitise(body);
         var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var token in Tokenize(title))
         {
             tokens.Add(token);
         }
 
-        foreach (var token in Tokenize(body))
+        foreach (var token in Tokenize(sanitised.Body))
         {
             tokens.Add(token);
         }
@@ -225,17 +382,40 @@ public sealed partial class KnowledgeBaseLoader
             Id = id,
             Title = title,
             Category = category,
-            Body = body,
+            Body = sanitised.Body,
             SourcePath = Path.GetRelativePath(Directory.GetCurrentDirectory(), file),
             ProductScope = scope,
             Keywords = keywords,
             Related = related,
+            ReviewedBy = string.IsNullOrWhiteSpace(reviewedBy) ? null : reviewedBy,
+            ReviewedAt = reviewedAt,
+            ContentHash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+            InstructionLikeCount = sanitised.InstructionLikeCount,
             Tokens = tokens,
         };
+
+        if (sanitised.InstructionLikeCount > 0)
+        {
+            // Counted, not quoted: writing the instruction into the log would give it a second
+            // life somewhere it is not declared as data.
+            _logger.LogWarning(
+                "Neutralised {Count} instruction-like line(s) in article {Id}.",
+                sanitised.InstructionLikeCount,
+                id);
+        }
 
         error = string.Empty;
         return true;
     }
+
+    private static DateTimeOffset? ParseReviewedAt(string? value) =>
+        DateTimeOffset.TryParse(
+            value,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal,
+            out var parsed)
+            ? parsed
+            : null;
 
     /// <summary>
     /// Minimal YAML subset parser: <c>key: value</c> lines plus inline <c>[a, b]</c> lists.

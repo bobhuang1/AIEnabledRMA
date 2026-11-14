@@ -2,6 +2,8 @@
 id: kb-0013
 title: Firmware update failed or unit will not boot after update
 category: software
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [firmware, update, upgrade, failed update, bricked, will not boot, software, version]
 related: [kb-0003, kb-0014]

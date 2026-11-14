@@ -2,6 +2,8 @@
 id: kb-0019
 title: "Nimbus Beacon dock reports a stalled charge"
 category: power
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["Nimbus Beacon"]
 keywords: ["dock", "charging", "stalled", "beacon", "queue", "contacts", "clean"]
 related: ["kb-0002", "kb-0018"]

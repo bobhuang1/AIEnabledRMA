@@ -2,6 +2,8 @@
 id: kb-0018
 title: "Vertex Widget charging cradle will not charge a second unit"
 category: power
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["Vertex Widget"]
 keywords: ["cradle", "charging", "second unit", "multi-slot", "queue", "docks"]
 related: ["kb-0002", "kb-0001", "kb-0019"]
