@@ -11,12 +11,21 @@
     <!-- The Worker SDK would supply Hosting and the implicit usings, but this host also
          needs to be referenced as a library by the test project, which the Worker SDK's
          implicit top-level usings and generated Program type make awkward. Explicit
-         references keep it a plain library-with-an-entry-point. -->
-    <PackageReference Include="Microsoft.Extensions.Hosting" />
-    <!-- For AddConsole, which is how logging is redirected to stderr so stdout stays a
-         clean JSON-RPC channel. -->
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+         references keep it a plain library-with-an-entry-point. Hosting and the console
+         logger (used to keep stdout a clean JSON-RPC channel on stdio) both come from the
+         framework reference below. -->
     <PackageReference Include="ModelContextProtocol" />
+    <!-- The remote transport: MapMcp and the streamable HTTP handler. -->
+    <PackageReference Include="ModelContextProtocol.AspNetCore" />
+    <!-- Token validation for that transport. Not part of the shared framework, so it is a
+         package reference like any other. -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Needed for WebApplication and the middleware pipeline the HTTP transport is built on;
+         the stdio host uses the same services through the hosting abstractions only. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <ItemGroup>

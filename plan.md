@@ -79,7 +79,7 @@ Severity is for a deployment that faces real customers. None of these bite in th
 | # | Decision | Blocks | Proposed default |
 |---|---|---|---|
 | D1 | Which CRM holds the support cases (Dynamics 365/Dataverse assumed, as for Docketglass), and which case fields may be used | P6 | Dynamics incidents: title, description, resolution, notes; synthetic data until the tenant is configured by the owner |
-| D2 | How agents will reach the MCP server: local stdio only, or remote HTTP with an identity provider (which one?) | P2 | Both: stdio for a developer, HTTP + OAuth (Keycloak or Entra ID) for anything shared |
+| D2 | How agents will reach the MCP server: local stdio only, or remote HTTP with an identity provider (which one?) | P2 | **Decided:** both. stdio stays the default for a developer; anything shared is streamable HTTP behind Keycloak, so the realm is one container beside PostgreSQL instead of a tenant someone has to be granted access to. See the P2 status for what that means in configuration. |
 | D3 | Whether an agent may see unmasked customer contact data at all | P1 | No. Masked by default, and an unmask tool only for an authenticated support role, audited |
 | D4 | The embedding model: a local model (BGE-M3 / nomic via Ollama) or a hosted API | P5 | Local, so no case text leaves the company |
 | D5 | The real payment provider | P9 | Stripe, test mode first |
@@ -146,6 +146,36 @@ bullets stay as requirements.
 - Tests: missing token, wrong audience, missing scope and disallowed Origin each give 401/403. A valid token
   reaches the tools.
 - Add a `docs/mcp.md` runbook.
+
+**Status: transport and its checks shipped; the runbook, RFC 9728 metadata and a committed realm are not.**
+- `McpTransportMode` picks the transport from `Mcp:Transport` (default `stdio`) and refuses any other value,
+  so a deployment that mistypes `http` fails to start instead of coming up as a process that never listens.
+- `McpHttpHost` serves `MapMcp` at `Mcp:Http:Path` from the same `McpServices` registrations stdio uses, so a
+  tool cannot be guarded on one transport and not the other.
+- JWT validation: `iss` must equal `Mcp:Http:Issuer`, `aud` must be `aienabledrma-mcp`, lifetime and signature
+  are checked against the realm's discovery document, and one authorization policy requires the `rma:read`
+  scope together with a listed `client_id`/`azp`. The Origin allow-list is compared exactly and runs before
+  authentication, so a page from an origin nobody allowed is refused without its token being processed; a
+  request with no `Origin` header (a server-side agent) is unaffected.
+- `McpHttpOptions.EnsureUsable` stops the host on the configurations that would serve the tools wider than
+  intended: an http issuer outside Development, an empty client allow-list, a wildcard origin, an empty scope.
+  There is no switch that disables authentication, so `Mcp:Transport=http` without an identity provider cannot
+  ship.
+- The caller recorded in P1's audit is now asked for rather than assumed: the validated token's
+  `client_id:sub` on HTTP, `stdio:local` when there is no request. `CallerIdentityTests` pins both.
+- Pinned by `McpHttpTransportTests` on a `TestServer` (the real pipeline: routing, origin check, authentication,
+  authorization, MCP endpoint), asserting 401 for no token, a token minted for another audience and one from
+  another issuer; 403 for a token without `rma:read`, for an unlisted client, for a disallowed origin and for an
+  origin that merely starts with an allowed one; and 200 with `check_warranty_coverage` in `tools/list` for a
+  valid token at the allowed origin. `McpHttpOptionsTests` covers the startup guard. 13 facts, no database.
+- Keycloak is the default identity provider: `Mcp:Http:Issuer` defaults to
+  `http://localhost:8080/realms/aienabledrma`, which is accepted in Development only, and the realm needs an
+  audience mapper adding `aienabledrma-mcp` to `aud` and a client scope granting `rma:read`. Without those two
+  the checks fail closed — a 401 rather than an agent that silently reaches nothing.
+- **Outstanding:** `docs/mcp.md`; protected-resource metadata (RFC 9728) so a client can discover the
+  authorization server from a 401; no realm export or compose service in the repo, so the realm, the audience
+  mapper and the `rma:read` scope are still configured by hand; the audit row's caller is unit-tested, not
+  asserted end-to-end against a tool call.
 
 ### P3. Redact before every model call (M) — F3
 

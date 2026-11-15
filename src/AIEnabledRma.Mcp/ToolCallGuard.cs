@@ -29,9 +29,10 @@ public sealed class ToolCallGuard(
     IServiceScopeFactory scopes,
     CallBudget budget,
     TimeProvider clock,
+    ICallerIdentity caller,
     ILogger<ToolCallGuard> logger)
 {
-    /// <summary>A stdio session has no identity provider; P2 adds the authenticated caller.</summary>
+    /// <summary>A stdio session has no identity provider and is recorded as one local caller.</summary>
     public const string CallerName = "stdio:local";
 
     /// <summary>
@@ -95,7 +96,7 @@ public sealed class ToolCallGuard(
         var record = new ToolCallRecord
         {
             Tool = tool,
-            Caller = CallerName,
+            Caller = caller.Describe(),
             ArgumentHashes = arguments is null
                 ? []
                 : arguments
@@ -177,6 +178,10 @@ public static class ToolCallGuardRegistration
 {
     public static IServiceCollection AddToolCallGuard(this IServiceCollection services)
     {
+        // The caller is asked for rather than assumed: on HTTP it is the validated token's client
+        // and subject, and on stdio there is no HttpContext, so the same class answers for both.
+        services.AddHttpContextAccessor();
+        services.AddSingleton<ICallerIdentity, HttpContextCallerIdentity>();
         services.AddSingleton<ToolCallGuard>();
 
         // Configured through the options pipeline rather than a filter instance, so the guard
