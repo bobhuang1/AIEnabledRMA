@@ -159,6 +159,12 @@ bullets stay as requirements.
 - Budgets enforced in `ToolCallGuard` at the MCP `tools/call` filter rather than inside each of the four
   tools, so a tool added later cannot skip them. `McpToolGuardTests` drives the real server over the loopback
   transport. These are in-process tests, not a networked deployment.
+- Both counters are keyed on `ICallerIdentity.Describe()`. The budget is a singleton, which is one session on
+  stdio and one process on HTTP, so until this it was a shared allowance there: any caller could spend the
+  minute window every other caller was relying on, and the lookup cap counted the process rather than the
+  agent. `Two_callers_spend_their_own_budgets_even_though_the_budget_is_a_singleton` pins the split for calls
+  and for lookups. The map of tracked callers is capped at 1000 and forgets the coldest, counters included —
+  a reset for a caller nobody is serving is the price of not letting an identity flood grow it without bound.
 - **Outstanding:** `reveal_customer_contact`. D3's default was "masked by default, with an audited unmask
   tool for an authenticated support role"; only the masked half exists, so no role can see a full contact
   record. Nothing is exposed that should not be — the decision is simply not implemented.

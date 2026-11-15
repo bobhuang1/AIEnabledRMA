@@ -51,7 +51,8 @@ public sealed class McpCustomerToolTests
         var customers = new FakeCustomerRepository();
         var budget = new CallBudget(
             Options.Create(new McpBudgetOptions { CustomerLookupsPerSession = lookupsPerSession }),
-            TimeProvider.System);
+            TimeProvider.System,
+            new StdioCallerIdentity());
 
         return (new CustomerLookupTools(customers, new FakeRmaRepository(), budget), customers);
     }

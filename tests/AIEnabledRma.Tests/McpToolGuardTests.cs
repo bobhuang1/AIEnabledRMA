@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Threading.Channels;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Catalog;
@@ -187,5 +188,60 @@ public sealed class McpToolGuardTests
         var row = Assert.Single(harness.Audit.Records);
         Assert.Equal("search_devices", row.Tool);
         Assert.Equal(2, row.ResultCount);
+    }
+
+    /// <summary>
+    /// A request that can change identity between assertions, so one singleton budget sees two
+    /// callers the way the HTTP transport shows it two tokens.
+    /// </summary>
+    private sealed class RequestThatChanges : Microsoft.AspNetCore.Http.IHttpContextAccessor
+    {
+        public Microsoft.AspNetCore.Http.HttpContext? HttpContext { get; set; }
+
+        public void SignIn(string client, string subject) => HttpContext =
+            new Microsoft.AspNetCore.Http.DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(
+                    [new Claim("client_id", client), new Claim("sub", subject)],
+                    authenticationType: "test")),
+            };
+    }
+
+    [Fact]
+    public void Two_callers_spend_their_own_budgets_even_though_the_budget_is_a_singleton()
+    {
+        // The HTTP transport registers one CallBudget for the whole process. Keyed on the process
+        // it would be a shared allowance: the first agent to hit the minute would stop every
+        // other agent, and the lookup cap would say nothing about what one agent had walked.
+        var request = new RequestThatChanges();
+        var budget = new CallBudget(
+            Options.Create(new McpBudgetOptions { CallsPerMinute = 1, CustomerLookupsPerSession = 1 }),
+            TimeProvider.System,
+            new HttpContextCallerIdentity(request));
+
+        request.SignIn("agent-a", "subject-a");
+        Assert.True(budget.TryConsumeCall(out _));
+        Assert.False(budget.TryConsumeCall(out var spent));
+        Assert.NotNull(spent);
+        Assert.Contains("limit", spent, StringComparison.OrdinalIgnoreCase);
+
+        // A different token, in the same minute, through the same singleton: its own window.
+        request.SignIn("agent-b", "subject-b");
+        Assert.True(budget.TryConsumeCall(out _));
+
+        // And A is still where it was, so the allowance was spent by A and not lent to B.
+        request.SignIn("agent-a", "subject-a");
+        Assert.False(budget.TryConsumeCall(out _));
+
+        // The same for the lookup cap: walking the customer table must count against the caller
+        // that did it, not against whoever asks next.
+        request.SignIn("agent-b", "subject-b");
+        Assert.True(budget.TryConsumeCustomerLookup(out _));
+        Assert.False(budget.TryConsumeCustomerLookup(out var lookups));
+        Assert.NotNull(lookups);
+        Assert.Contains("customer lookups", lookups, StringComparison.OrdinalIgnoreCase);
+
+        request.SignIn("agent-a", "subject-a");
+        Assert.True(budget.TryConsumeCustomerLookup(out _));
     }
 }

@@ -313,6 +313,15 @@ internal sealed class FakeClock(DateTimeOffset now) : IClock
     public DateOnly Today => DateOnly.FromDateTime(UtcNow.UtcDateTime);
 }
 
+/// <summary>
+/// The caller a stdio launch has: no request, no token, one named local agent. Used where a test
+/// builds a component directly instead of going through the host that registers the real one.
+/// </summary>
+internal sealed class StdioCallerIdentity : AIEnabledRma.Mcp.ICallerIdentity
+{
+    public string Describe() => AIEnabledRma.Mcp.ToolCallGuard.CallerName;
+}
+
 internal sealed class FakePaymentGateway : IPaymentGateway
 {
     public string ProviderName => "fake";

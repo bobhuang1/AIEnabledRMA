@@ -246,7 +246,8 @@ public sealed class McpAddressResolutionTests
         var customers = new FakeCustomerRepository();
         var budget = new CallBudget(
             Microsoft.Extensions.Options.Options.Create(new McpBudgetOptions()),
-            TimeProvider.System);
+            TimeProvider.System,
+            new StdioCallerIdentity());
         return (new CustomerLookupTools(customers, new FakeRmaRepository(), budget), customers);
     }
 
