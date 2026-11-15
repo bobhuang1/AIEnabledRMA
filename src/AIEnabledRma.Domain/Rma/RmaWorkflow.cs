@@ -427,7 +427,6 @@ public sealed partial class RmaWorkflow(
             request.Status = RmaRequestStatus.Cancelled;
             request.CancellationReason = "Resolved during automated troubleshooting.";
 
-            await rmaRepository.UpdateAsync(request, cancellationToken);
             await CommitAsync(cancellationToken);
 
             return new StepResult
@@ -450,7 +449,6 @@ public sealed partial class RmaWorkflow(
             return refusedTriage;
         }
 
-        await rmaRepository.UpdateAsync(request, cancellationToken);
         await CommitAsync(cancellationToken);
 
         return new StepResult
@@ -585,7 +583,6 @@ public sealed partial class RmaWorkflow(
 
         request.UpdatedAtUtc = clock.UtcNow;
 
-        await rmaRepository.UpdateAsync(request, cancellationToken);
         await CommitAsync(cancellationToken);
 
         return new StepResult
@@ -650,7 +647,6 @@ public sealed partial class RmaWorkflow(
         }
 
         request.UpdatedAtUtc = clock.UtcNow;
-        await rmaRepository.UpdateAsync(request, cancellationToken);
         await CommitAsync(cancellationToken);
 
         return new StepResult
@@ -709,7 +705,6 @@ public sealed partial class RmaWorkflow(
             : RmaRequestStatus.Approved;
 
         request.UpdatedAtUtc = clock.UtcNow;
-        await rmaRepository.UpdateAsync(request, cancellationToken);
         await CommitAsync(cancellationToken);
 
         return new StepResult
@@ -785,7 +780,6 @@ public sealed partial class RmaWorkflow(
 
         request.Status = RmaRequestStatus.Approved;
         request.UpdatedAtUtc = clock.UtcNow;
-        await rmaRepository.UpdateAsync(request, cancellationToken);
         await CommitAsync(cancellationToken);
 
         return new StepResult
@@ -836,7 +830,6 @@ public sealed partial class RmaWorkflow(
 
         request.Status = RmaRequestStatus.AwaitingShipment;
         request.UpdatedAtUtc = clock.UtcNow;
-        await rmaRepository.UpdateAsync(request, cancellationToken);
         await CommitAsync(cancellationToken);
 
         return new StepResult

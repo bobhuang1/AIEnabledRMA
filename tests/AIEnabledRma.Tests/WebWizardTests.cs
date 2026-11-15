@@ -103,6 +103,45 @@ public sealed class WebWizardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_stored_address_can_be_chosen_instead_of_a_typed_one()
+    {
+        // The other shipping test types an address, which the resolver fuzzy-matches. This one
+        // posts an address id from the customer's own record, the path a returning customer takes
+        // when the page offers their saved addresses. It used to land on the error page instead:
+        // the action loads the customer through one repository and the workflow re-attached a
+        // second, untracked copy of the same customer through the RMA graph, and EF refuses two
+        // instances with one key.
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        var rmaId = await ReachShippingStepAsync(client, ct);
+        var addressId = await DefaultAddressIdAsync(ct);
+
+        var shippingPage = await client.GetAsync($"/RmaWizard/Shipping/{rmaId}", ct);
+        Assert.Equal(HttpStatusCode.OK, shippingPage.StatusCode);
+        var shippingHtml = await shippingPage.Content.ReadAsStringAsync(ct);
+
+        var shippingStep = await PostStepAsync(
+            client,
+            $"/RmaWizard/Shipping/{rmaId}",
+            TokenOf(shippingHtml),
+            [("RmaId", rmaId.ToString()), ("AddressId", addressId.ToString())],
+            ct);
+
+        // A step that re-renders its own form does not redirect, so this catches a stored address
+        // being refused as well as a step that never got as far as saving.
+        Assert.True(
+            shippingStep.Redirect is not null,
+            $"the shipping step did not advance: {(int)shippingStep.Page.StatusCode}");
+        Assert.Contains($"/RmaWizard/Confirm/{rmaId}", shippingStep.Path);
+
+        // Persisted, not merely accepted: the id the customer picked is the one on the request.
+        await using var db = CreateContext();
+        var stored = await db.RmaRequests.SingleAsync(r => r.Id == rmaId, ct);
+        Assert.Equal(addressId, stored.ShipToAddressId);
+    }
+
+    [Fact]
     public async Task Confirming_a_return_persists_the_request_and_its_line()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -1321,6 +1360,54 @@ public sealed class WebWizardTests : IAsyncLifetime
         posted.Dispose();
 
         return new StepOutcome(await client.GetAsync(target, cancellationToken), redirectPath);
+    }
+
+    /// <summary>
+    /// Walks a fresh request as far as the shipping step and returns its id. The steps after
+    /// intake are addressed by request id, so the id is what a later assertion needs.
+    /// </summary>
+    private async Task<Guid> ReachShippingStepAsync(HttpClient client, CancellationToken ct)
+    {
+        var start = await BeginAsync(client, CustomerEmail, EligibleSerial, ct);
+        Assert.StartsWith("/RmaWizard/Triage/", start.Path, StringComparison.Ordinal);
+        var rmaId = IdFromPath(start.Path);
+
+        var triagePage = await client.GetAsync($"/RmaWizard/Triage/{rmaId}", ct);
+        var triage = await PostStepAsync(
+            client,
+            $"/RmaWizard/Triage/{rmaId}",
+            TokenOf(await triagePage.Content.ReadAsStringAsync(ct)),
+            [("Statement", "The screen stays black although the fan is running.")],
+            ct);
+        Assert.Equal($"/RmaWizard/Problems/{rmaId}", triage.Path);
+
+        var problemsPage = await client.GetAsync($"/RmaWizard/Problems/{rmaId}", ct);
+        var deviceId = await DeviceIdAsync(EligibleSerial, ct);
+        var problems = await PostStepAsync(
+            client,
+            "/RmaWizard/Problems",
+            TokenOf(await problemsPage.Content.ReadAsStringAsync(ct)),
+            [
+                ("RmaId", rmaId.ToString()),
+                ("Lines[0].DeviceId", deviceId.ToString()),
+                ("Lines[0].SerialNumber", EligibleSerial),
+                ("Lines[0].Description", "Screen stays black although the fan is running."),
+                ("Lines[0].WhatCustomerTried", "Reseated the cable and tried a second outlet."),
+            ],
+            ct);
+        Assert.Equal($"/RmaWizard/Shipping/{rmaId}", problems.Path);
+
+        return rmaId;
+    }
+
+    private async Task<Guid> DefaultAddressIdAsync(CancellationToken cancellationToken)
+    {
+        await using var db = CreateContext();
+        var customer = await db.Customers
+            .Include(c => c.Addresses)
+            .SingleAsync(c => c.Email == CustomerEmail, cancellationToken);
+
+        return customer.Addresses.Single(a => a.IsDefault).Id;
     }
 
     private async Task<Guid> DeviceIdAsync(string serialNumber, CancellationToken cancellationToken)

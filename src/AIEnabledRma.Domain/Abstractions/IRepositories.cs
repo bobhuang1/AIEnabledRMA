@@ -176,6 +176,11 @@ public sealed record CustomerSearchQuery
 /// Persistence for RMA requests. Kept behind an interface so the workflow can be unit-tested
 /// without a database and so a deployment can swap in its own store.
 /// </summary>
+/// <remarks>
+/// There is no update call: a loaded aggregate is tracked by the caller's unit of work, so a step
+/// changes it in place and commits with <see cref="IUnitOfWork.SaveChangesAsync"/>. A re-attach
+/// API invites the caller to hand back a graph whose neighbouring rows it never meant to write.
+/// </remarks>
 public interface IRmaRepository
 {
     Task AddAsync(RmaRequest request, CancellationToken cancellationToken);
@@ -183,8 +188,6 @@ public interface IRmaRepository
     Task<RmaRequest?> GetByNumberAsync(string rmaNumber, CancellationToken cancellationToken);
 
     Task<RmaRequest?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
-
-    Task UpdateAsync(RmaRequest request, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<RmaRequest>> GetForCustomerAsync(Guid customerId, CancellationToken cancellationToken);
 

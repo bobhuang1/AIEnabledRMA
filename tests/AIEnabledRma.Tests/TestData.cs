@@ -259,9 +259,6 @@ internal sealed class FakeRmaRepository : IRmaRepository
     public Task<RmaRequest?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
         Task.FromResult(Requests.FirstOrDefault(r => r.Id == id));
 
-    public Task UpdateAsync(RmaRequest request, CancellationToken cancellationToken = default) =>
-        Task.CompletedTask;
-
     public Task<IReadOnlyList<RmaRequest>> GetForCustomerAsync(
         Guid customerId, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<RmaRequest>>(

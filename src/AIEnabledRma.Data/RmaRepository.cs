@@ -18,15 +18,6 @@ public sealed class RmaRepository(RmaDbContext db) : IRmaRepository
     public Task<RmaRequest?> GetByIdAsync(Guid id, CancellationToken cancellationToken) =>
         LoadQuery().FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
 
-    public Task UpdateAsync(RmaRequest request, CancellationToken cancellationToken)
-    {
-        // The repository hands out no-tracking entities, so a modified aggregate has to be
-        // explicitly re-attached. Update() marks the graph Unchanged-but-tracked, letting
-        // EF Core diff it and write only the columns that actually changed.
-        _db.RmaRequests.Update(request);
-        return Task.CompletedTask;
-    }
-
     public async Task<IReadOnlyList<RmaRequest>> GetForCustomerAsync(
         Guid customerId,
         CancellationToken cancellationToken) =>
@@ -72,6 +63,20 @@ public sealed class RmaRepository(RmaDbContext db) : IRmaRepository
         return string.Create(CultureInfo.InvariantCulture, $"{prefix}{next:D5}");
     }
 
+    /// <remarks>
+    /// Tracked, deliberately. A step loads the aggregate, changes it and commits, and EF Core then
+    /// writes the columns that actually changed.
+    /// <para>
+    /// The alternative, which this used to do, was to hand out a no-tracking graph and have the
+    /// workflow re-attach it with <c>Update()</c>. That marks every entity in the graph Modified, so
+    /// an RMA step rewrote the customer, address, device and product rows beside it, and it failed
+    /// outright with "another instance with the same key value is already being tracked" whenever
+    /// the customer had been loaded through the customer repository earlier in the same request —
+    /// which is exactly what picking a stored address on the shipping step does.
+    /// </para>
+    /// Lookups that only read a list (customer search) stay no-tracking; anything a step can
+    /// change is loaded here.
+    /// </remarks>
     private IQueryable<RmaRequest> LoadQuery() =>
         _db.RmaRequests
             .Include(r => r.Lines)
@@ -86,6 +91,5 @@ public sealed class RmaRepository(RmaDbContext db) : IRmaRepository
             .Include(r => r.Customer)
             .Include(r => r.ShipToAddress)
             .Include(r => r.Exclusions.OrderBy(e => e.SortOrder))
-            .AsSplitQuery()
-            .AsNoTracking();
+            .AsSplitQuery();
 }
