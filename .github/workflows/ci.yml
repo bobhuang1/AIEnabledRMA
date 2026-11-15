@@ -76,6 +76,21 @@ jobs:
       - name: Build
         run: dotnet build AIEnabledRma.slnx --no-restore -warnaserror
 
+      # A property renamed or a column widened without its migration still compiles and still
+      # passes every test that does not open a database. The live suites do notice it, but only as
+      # EF's PendingModelChangesWarning thrown out of Migrate(), and not at all on a machine with
+      # no database to point them at. So this runs the comparison the EF tooling already
+      # implements, before the suite and by its own name, and it needs none of the database
+      # service: only the assembly the build step produced.
+      - name: Model and migrations agree
+        run: |
+          set -euo pipefail
+          dotnet tool restore
+          dotnet ef migrations has-pending-model-changes \
+            --project src/AIEnabledRma.Data \
+            --no-build \
+            --configuration Debug
+
       - name: Test
         run: |
           set -o pipefail
