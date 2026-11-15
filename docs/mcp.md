@@ -155,6 +155,9 @@ The origin allow-list is also the CORS policy. A page served from an origin in
   CORS headers, which is what makes the browser refuse to send the real request; the server-side
   refusal is the `403` above.
 - `Mcp-Session-Id` is exposed, so a client can read a session id if the transport issues one.
+- The compose service leaves `AllowedOrigins` empty, so the browser path is off in the quick start
+  above and its preflight comes back with no allow-origin header. Add
+  `Mcp__Http__AllowedOrigins__0=<your origin>` to the `mcp-http` service to try it.
 - The token still has to come from somewhere. This realm defines no public client, so a browser
   client is only practical once one exists; that is a realm change, not a transport change.
 
