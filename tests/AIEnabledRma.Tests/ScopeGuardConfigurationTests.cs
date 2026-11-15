@@ -1,5 +1,6 @@
 using AIEnabledRma.Ai;
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Rag;
 using AIEnabledRma.Domain.Triage;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -128,6 +129,10 @@ public sealed class ScopeGuardConfigurationTests
             builder.UseSetting(
                 $"{FakePaymentGatewayOptions.SectionName}:{nameof(FakePaymentGatewayOptions.AllowInProduction)}",
                 "true");
+
+            // Testing is outside Development, and a host with no operator key refuses to start
+            // there because /health's detail would be open to anyone behind a proxy.
+            builder.UseSetting(RagAdminGate.ApiKeyConfigurationKey, "scope-tests-operator-key");
         }
     }
 }

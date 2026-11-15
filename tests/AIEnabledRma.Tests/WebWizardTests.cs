@@ -1611,6 +1611,10 @@ public sealed class WebWizardTests : IAsyncLifetime
             builder.UseSetting(
                 $"{FakePaymentGatewayOptions.SectionName}:{nameof(FakePaymentGatewayOptions.AllowInProduction)}",
                 "true");
+
+            // Testing is outside Development, where a host with no operator key refuses to start:
+            // /health's detail would be open to every caller behind a proxy.
+            builder.UseSetting(RagAdminGate.ApiKeyConfigurationKey, "wizard-tests-operator-key");
         }
 
         /// <summary>A <see cref="TimeProvider"/> that always reports the anchor instant.</summary>

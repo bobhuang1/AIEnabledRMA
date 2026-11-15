@@ -1,5 +1,6 @@
 using System.Net;
 using AIEnabledRma.Ai;
+using AIEnabledRma.Rag;
 using AIEnabledRma.Web;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -151,6 +152,9 @@ public sealed class TrustedProxyTests
             builder.UseSetting(
                 $"{FakePaymentGatewayOptions.SectionName}:{nameof(FakePaymentGatewayOptions.AllowInProduction)}",
                 "true");
+
+            // Testing is outside Development, where /health's operator detail needs a key.
+            builder.UseSetting(RagAdminGate.ApiKeyConfigurationKey, "proxy-tests-operator-key");
 
             builder.UseSetting($"{TrustedProxyOptions.SectionName}:TrustedProxies:0", Proxy.ToString());
 

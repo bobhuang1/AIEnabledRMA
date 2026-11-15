@@ -176,6 +176,13 @@ app.MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}");
 // inventing one for a status page would be a bigger surface than the thing it protects.
 var operatorKey = app.Configuration[RagAdminGate.ApiKeyConfigurationKey];
 
+// The same rule, the same key and the same reason as the RAG host's operator endpoints. When no
+// key is configured the gate admits loopback, and behind a reverse proxy on the same machine every
+// caller is loopback — so a keyless host outside Development would publish how large the corpus is,
+// which files failed to parse and which model is answering, to whoever can reach the proxy. That is
+// a configuration nobody notices, so it stops the host instead.
+RagAdminGate.EnsureStartupAllowed(operatorKey, app.Environment.IsDevelopment());
+
 app.MapGet("/health", (
     HttpContext context,
     KnowledgeIndexHolder holder,

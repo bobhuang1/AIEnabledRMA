@@ -60,7 +60,7 @@ Severity is for a deployment that faces real customers. None of these bite in th
 | F4 | Medium | **Knowledge-base ingestion trusts its input.** It loads every `*.md` under the root, recursively, with no file size or count cap, no provenance (author, review, hash), and no check for instructions planted in article bodies, which go straight into the prompt. A reload publishes whatever is on disk if it parses. | `Rag/Knowledge/KnowledgeBaseLoader.cs:86`, `TriagePipeline` reference block |
 | F5 | Medium | **The wizard's Start step can confirm whether a customer exists by email or phone.** It has no rate limiting, and capability GUIDs never expire, so a leaked step URL drives that return until it is confirmed. | `Web/Controllers/RmaWizardController.cs`, `Domain/Rma/RmaRequest.cs` |
 | F6 | Medium | **`FakePaymentGateway` is registered unconditionally,** so a Production build would "authorise" every payment. | `Web/Program.cs` |
-| F7 | Low | **Resolved.** The knowledge-base filesystem path is gone, the unused `RmaDbContext` injection is gone, and the README no longer describes a payments diagnostics endpoint that does not exist. `/health` now answers an anonymous caller with `{"status":"ok"}` only; the counts and the provider name sit behind the operator key, so the remaining question for a deployment is whether that key is configured. | `Web/Program.cs:173` |
+| F7 | Low | **Resolved.** The knowledge-base filesystem path is gone, the unused `RmaDbContext` injection is gone, and the README no longer describes a payments diagnostics endpoint that does not exist. `/health` now answers an anonymous caller with `{"status":"ok"}` only, and the counts and the provider name sit behind the operator key the RAG host uses; the host refuses to start outside Development without that key, so the remaining question is answered at startup rather than in review. | `Web/Program.cs:173` |
 | F8 | Low | **`docker-compose.yml` publishes PostgreSQL on all interfaces with default credentials.** Fine for a demo, but it should bind to `127.0.0.1`. | `docker-compose.yml` |
 | F9 | Low | **No CI, no dependency audit, and no lock files.** The live suites skip silently, so a green run can contain 0 database tests. | repo root |
 
@@ -398,9 +398,13 @@ bullets stay as requirements.
   uses (`Rag:Admin:ApiKey`, `X-Rag-Admin-Key`, fixed-time compare), and loopback when no key is configured.
   There is no account system on this host, so the alternative was inventing one for a status page.
   `Anonymous_health_reports_status_and_nothing_else` and `Operator_health_shows_counts_only_with_the_admin_key`
-  pin both halves, including that a wrong key is treated as a stranger. Unlike the RAG host, this one does not
-  refuse to start without a key, and behind a proxy every caller looks like loopback — so a deployment must set
-  `Rag:Admin:ApiKey`, which is P11's startup validation to enforce rather than this endpoint's.
+  pin both halves, including that a wrong key is treated as a stranger. The host refuses to start outside
+  Development when the key is unset, using the RAG host's own rule (`RagAdminGate.EnsureStartupAllowed`):
+  without a key the gate admits loopback, and behind a reverse proxy every caller is loopback, so the detail
+  would be public and nothing in the response would look wrong. `A_production_host_refuses_to_start_without_the_admin_key`
+  boots Production with no key and expects the throw; `A_production_host_with_a_key_starts_and_hides_the_detail`
+  proves a keyed host still starts and still answers an anonymous caller with one word. Deleting the guard makes
+  the first fail.
 - Capability expiry is tested with the clock moved:
   `An_unconfirmed_draft_stops_working_when_the_capability_window_passes` creates a real draft through the
   wizard's own steps, checks the same URL still answers inside the window, then advances the host's
