@@ -1,0 +1,132 @@
+{
+  "description": "Golden retrieval questions for the shipped knowledge base. A question is written the way a customer or a bench technician would ask it, and lists every article that would be a correct citation for it. recall@3 is the share of cases whose top three hits include one of the expected articles. P5's acceptance test is 'not worse than the lexical index measured here', so this file owns the floor and the cases, not a test constant.",
+  "acceptance": "recall@3 for KnowledgeIndex.Search must be at least recallAt3Floor. Raising the floor is allowed; lowering it needs a note here saying which question the change broke and why that is acceptable.",
+  "recallAt3Floor": 0.71,
+  "baseline": {
+    "measuredOn": "2026-11-15",
+    "index": "KnowledgeIndex, BM25-style over article token sets, TopK 3, no product families enabled except those the scoped cases name",
+    "recallAt3": 0.714,
+    "mrr": 0.627,
+    "cases": 21,
+    "misses": ["rq-002", "rq-008", "rq-010", "rq-012", "rq-013", "rq-017"],
+    "notes": "The floor is the measurement, not a target: six questions miss today. Five of them lose to an article that matches generic words the query contains (no stopword list, so 'the', 'and' and 'now' are scored terms) or to an inflected form the token sets do not contain ('spilled' against 'spill'). Those are lexical gaps for P5 to close, and this file is how closing them is measured. Do not raise the floor to 1.0 by rewriting the questions into the articles' own wording; the questions are the customer's."
+  },
+  "cases": [
+    {
+      "id": "rq-001",
+      "question": "the screen is black but the lights are still on",
+      "expected": ["kb-0004"],
+      "note": "Power present, no image: the blank-screen article rather than the no-power one."
+    },
+    {
+      "id": "rq-002",
+      "question": "it will not switch on at all and there are no lights",
+      "expected": ["kb-0003", "kb-0001"],
+      "note": "No power at all. The indicator article is also correct, because it is the first check the power-on article sends you to."
+    },
+    {
+      "id": "rq-003",
+      "question": "what does the amber light on the top of the unit mean",
+      "expected": ["kb-0001"]
+    },
+    {
+      "id": "rq-004",
+      "question": "the cradle is not charging the scanner at all",
+      "expected": ["kb-0002", "kb-0018"],
+      "note": "No charge in any slot. The multi-slot article is scoped, so it can only be a correct citation when that product family is enabled."
+    },
+    {
+      "id": "rq-005",
+      "question": "bluetooth will not pair with my phone",
+      "expected": ["kb-0005"]
+    },
+    {
+      "id": "rq-006",
+      "question": "it keeps disconnecting when I walk to the far end of the warehouse",
+      "expected": ["kb-0006"],
+      "note": "Distance-dependent instability: link range, not pairing and not host detection."
+    },
+    {
+      "id": "rq-007",
+      "question": "the computer does not detect the scanner when I plug it in",
+      "expected": ["kb-0007"]
+    },
+    {
+      "id": "rq-008",
+      "question": "nothing happens when I pull the trigger",
+      "expected": ["kb-0008"]
+    },
+    {
+      "id": "rq-009",
+      "question": "it beeps but the barcode never reads",
+      "expected": ["kb-0009"],
+      "note": "A scan event happens, so this is decode rather than trigger."
+    },
+    {
+      "id": "rq-010",
+      "question": "there is a deep scratch across the scanner window",
+      "expected": ["kb-0010"]
+    },
+    {
+      "id": "rq-011",
+      "question": "I dropped it and the corner of the case is cracked",
+      "expected": ["kb-0011"],
+      "note": "Impact damage is an excluded cause, so the citation has to be the physical-damage article."
+    },
+    {
+      "id": "rq-012",
+      "question": "coffee spilled into the unit and now it misbehaves",
+      "expected": ["kb-0012"]
+    },
+    {
+      "id": "rq-013",
+      "question": "the firmware update stopped halfway and now it will not start",
+      "expected": ["kb-0013"]
+    },
+    {
+      "id": "rq-014",
+      "question": "it restarts by itself every few minutes",
+      "expected": ["kb-0014"]
+    },
+    {
+      "id": "rq-015",
+      "question": "I need to return a usb cable and a spare mount",
+      "expected": ["kb-0015"]
+    },
+    {
+      "id": "rq-016",
+      "question": "what can this assistant actually help with",
+      "expected": ["kb-0016"]
+    },
+    {
+      "id": "rq-017",
+      "question": "what evidence do you need before you accept the unit is faulty",
+      "expected": ["kb-0017"]
+    },
+    {
+      "id": "rq-018",
+      "question": "the multi slot dock charges one scanner but not the second one",
+      "expected": ["kb-0018"],
+      "scope": ["Vertex Widget"],
+      "note": "Product-scoped article: only reachable with the family enabled and named in the session scope."
+    },
+    {
+      "id": "rq-019",
+      "question": "the Nimbus Beacon dock says the charge has stalled",
+      "expected": ["kb-0019"],
+      "scope": ["Nimbus Beacon"]
+    },
+    {
+      "id": "rq-020",
+      "question": "how do I get lint off the scan window without damaging it",
+      "expected": ["kb-0009", "kb-0010"],
+      "note": "Cleaning advice lives in the decode article; the window-damage article is a fair citation for the same action."
+    },
+    {
+      "id": "rq-021",
+      "question": "will you tell me whether it is still under warranty",
+      "expected": ["kb-0001", "kb-0016"],
+      "note": "Both articles say the decision is made by the returns system against the serial, not by the assistant."
+    }
+  ]
+}

@@ -327,9 +327,25 @@ bullets stay as requirements.
   a generation atomically.
 - Tests:
   - chunk-boundary fixtures;
-  - hybrid retrieval against a golden question set (recall@3 not worse than today's lexical index on the 15
+  - hybrid retrieval against a golden question set (recall@3 not worse than today's lexical index on the 19
     articles);
   - live pgvector tests in CI (P0's service container).
+
+**Status: not started; its acceptance test now exists, so the first line of it is measurable.**
+- `eval/retrieval-golden.json` holds 21 questions written in a customer's or a bench technician's wording, each
+  naming every article that would be a correct citation, plus the recall@3 floor. It also owns two coverage
+  rules the scorer enforces: a case may not name an article the corpus has dropped, and every article must
+  appear in at least one case, so the number cannot quietly measure a shrinking share of the corpus.
+- `RetrievalGoldenSetTests` loads the shipped corpus with review on, builds the real `KnowledgeIndex` with the
+  product families the scoped cases name, and scores recall@3 and MRR. It prints every case's rank, so a P5
+  change shows which question it broke rather than only that the average moved.
+- Baseline, measured 2026-11-15: **recall@3 = 0.714 (15/21), MRR = 0.627**. The floor in the file is 0.71, so
+  losing one case fails the build and gaining cases is a reviewable diff in the data.
+- The eval immediately found two causes worth fixing before or alongside the vector work: the tokeniser has no
+  stopword list, so `the`, `and` and `now` are scored terms that let a scanning article outrank "will not switch
+  on"; and there is no stemming, so `spilled` does not match `spill`. Neither is fixed here — they are the
+  lexical end of P5, and this file is how the improvement is measured. The six misses are listed in the file's
+  `baseline` block.
 
 ### P6. CRM support-case ingestion with PII removed (L) — D1, after P3 and P5
 
