@@ -17,7 +17,10 @@ RUN dotnet restore src/AIEnabledRma.Mcp/AIEnabledRma.Mcp.csproj
 COPY . .
 RUN dotnet publish src/AIEnabledRma.Mcp -c Release -o /app --no-restore
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
+# The ASP.NET runtime, not the plain one: the same binary serves the streamable HTTP transport,
+# which needs the shared framework the stdio path never touches. stdio on this image behaves
+# exactly as before — it simply carries a framework it does not use.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app ./
 

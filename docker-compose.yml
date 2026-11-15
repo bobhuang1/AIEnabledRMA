@@ -22,3 +22,68 @@ services:
       timeout: 5s
       retries: 20
     restart: unless-stopped
+
+  # The identity provider behind the MCP HTTP transport. The realm is imported on every start,
+  # from infra/keycloak/realm-aienabledrma.json: the realm, the rma:read client scope and the
+  # audience mapper that puts aienabledrma-mcp into aud are what the tool server's JWT checks are
+  # written against, and a realm built by hand on one machine is a realm nobody else can reproduce.
+  #
+  # No volume on purpose. The import only runs when the realm is absent, so a container that keeps
+  # its data would ignore edits to the file; recreating the container re-imports the realm exactly
+  # as committed. Nothing here is worth keeping across a restart.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: aienabledrma-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      # Development mode serves http and derives the issuer from the request host. That is what
+      # lets both recipes in docs/mcp.md work: a host-run server validates http://localhost:8080/...
+      # and a containerised one validates http://keycloak:8080/..., each minting tokens by the same
+      # hostname it validates.
+      KC_HTTP_ENABLED: "true"
+    ports:
+      # Loopback only, like the database: the realm carries a committed client secret and the
+      # admin account is a demo one.
+      - "127.0.0.1:${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      # A TCP connect, not an HTTP status: the point is whether Kestrel is listening yet, and the
+      # image has no curl. `start-dev` finishes the realm import before it opens the port.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080'"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+    restart: unless-stopped
+
+  # The remote transport, under a profile so `docker compose up` still brings up only the database
+  # and the identity provider. Built from the same Dockerfile as the stdio server; the image is the
+  # ASP.NET runtime because this mode listens.
+  mcp-http:
+    profiles: ["mcp-http"]
+    build:
+      context: .
+      dockerfile: src/AIEnabledRma.Mcp/Dockerfile
+    container_name: aienabledrma-mcp-http
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    environment:
+      # An http issuer is accepted in Development only, and this is a local realm.
+      DOTNET_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      Mcp__Transport: http
+      # The hostname Keycloak is reached by, which must be the one the token's iss names. Inside
+      # the compose network that is the service name, not localhost.
+      Mcp__Http__Issuer: http://keycloak:8080/realms/aienabledrma
+      Mcp__Http__Audience: aienabledrma-mcp
+      Mcp__Http__RequiredScope: rma:read
+      Mcp__Http__AllowedClientIds__0: mcp-agent
+      ConnectionStrings__Rma: Host=postgres;Port=5432;Database=${POSTGRES_DB:-rmadev};Username=${POSTGRES_USER:-rmauser};Password=${POSTGRES_PASSWORD:-rmapassword}
+    ports:
+      - "127.0.0.1:${MCP_HTTP_PORT:-5080}:8080"
+    restart: unless-stopped

@@ -158,6 +158,11 @@ It is a stdio MCP server by default. Configure it in Claude / an MCP client via
 `npx`-style launch, or test the tools directly through their classes in
 `src/AIEnabledRma.Mcp/Tools`.
 
+For the remote transport — the same tools behind a Keycloak-issued token — see
+[`docs/mcp.md`](docs/mcp.md). It starts the realm from
+`infra/keycloak/realm-aienabledrma.json` with `docker compose up -d keycloak`, mints a token for
+the `mcp-agent` client, and ends with a `200` from `/mcp` and a `401` without one.
+
 Tools:
 
 | Tool | What it does |
@@ -179,13 +184,14 @@ is masked; terms shorter than three characters are refused outright.
 
 Every call of every MCP tool — these four, the device lookups, and the policy tools — writes a row
 to `mcp_tool_calls` (tool, caller, argument hashes rather than values, result count, latency) and
-counts against a session limit of 60 calls a minute, configurable under `Mcp:Budget`. Both happen
+counts against a per-caller limit of 60 calls a minute, configurable under `Mcp:Budget` — one
+caller is the process on stdio and the token's client and subject on the HTTP transport. Both happen
 at one choke point on the `tools/call` request rather than inside each tool, so a tool added later
 is audited and throttled without anyone remembering to wrap it; a refused call is recorded before
 it reaches the tool. On top of that, the customer tools above are limited to 200 customer lookups
-per session, because that cap is about what a call is for rather than how many there are.
-Exposing contact data to an authenticated support role needs an identity provider, which arrives
-with P2.
+per caller, because that cap is about what a call is for rather than how many there are.
+Exposing contact data to an authenticated support role still needs a role check; the identity
+provider the transport uses (P2) identifies a client, not a person.
 
 Example agent question: *"AX2-0001-0005 is dead on arrival and out of warranty — what happens
 if the customer returns it, and how much would it cost?"* — `check_coverage` routes it to a

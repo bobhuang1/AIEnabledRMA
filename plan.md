@@ -180,7 +180,7 @@ bullets stay as requirements.
   reaches the tools.
 - Add a `docs/mcp.md` runbook.
 
-**Status: transport and its checks shipped; the runbook, RFC 9728 metadata and a committed realm are not.**
+**Status: transport, its checks, the committed realm and the runbook shipped; RFC 9728 metadata and a browser client are not.**
 - `McpTransportMode` picks the transport from `Mcp:Transport` (default `stdio`) and refuses any other value,
   so a deployment that mistypes `http` fails to start instead of coming up as a process that never listens.
 - `McpHttpHost` serves `MapMcp` at `Mcp:Http:Path` from the same `McpServices` registrations stdio uses, so a
@@ -205,10 +205,28 @@ bullets stay as requirements.
   `http://localhost:8080/realms/aienabledrma`, which is accepted in Development only, and the realm needs an
   audience mapper adding `aienabledrma-mcp` to `aud` and a client scope granting `rma:read`. Without those two
   the checks fail closed — a 401 rather than an agent that silently reaches nothing.
-- **Outstanding:** `docs/mcp.md`; protected-resource metadata (RFC 9728) so a client can discover the
-  authorization server from a 401; no realm export or compose service in the repo, so the realm, the audience
-  mapper and the `rma:read` scope are still configured by hand; the audit row's caller is unit-tested, not
-  asserted end-to-end against a tool call.
+- The realm is committed and started by compose: `infra/keycloak/realm-aienabledrma.json` imports realm
+  `aienabledrma`, the `rma:read` client scope carrying the `oidc-audience-mapper` that adds `aienabledrma-mcp` to
+  `aud`, and the `mcp-agent` service-account client whose default scope is `rma:read`. `docker compose up -d
+  keycloak` imports it on every start — the container has no volume, so the file is the source of truth and an
+  edit cannot be pinned by an old copy — and the `mcp-http` compose profile runs the transport beside it with
+  `Mcp__Http__Issuer=http://keycloak:8080/realms/aienabledrma`. The image is the ASP.NET runtime now, because
+  this mode listens.
+- Verified against that realm rather than against a test-held key: the imported client's token carries
+  `iss=http://localhost:8080/realms/aienabledrma`, `aud=aienabledrma-mcp`, `scope=rma:read` and `azp=mcp-agent`;
+  `POST /mcp` with it answers `200` with the `initialize` result as one server-sent event, `tools/list` answers
+  `200` twice with the nine tools, and the same request without a token answers `401`. A token minted through
+  `localhost` presented to a server validating the compose service name answers `401` naming the issuer, which
+  is the runbook's "both sides use the same hostname" rule observed rather than assumed.
+- `docs/mcp.md` is the runbook: what the realm must provide, start-up, the token request, both ways to run the
+  server, the 200 and 401 checks, a failure table carrying the exact issuer error, the configuration keys, and
+  what the path does not cover yet.
+- **Outstanding:**
+  - Protected-resource metadata (RFC 9728): a `401` carries `WWW-Authenticate: Bearer` without
+    `resource_metadata`, so a client cannot discover the authorization server from the response.
+  - No CORS policy, so an allow-listed origin still receives no `Access-Control-Allow-Origin` and its preflight
+    goes unanswered: the origin list stops a page from driving the endpoint, it does not enable one.
+  - The audit row's caller is unit-tested, not asserted end-to-end against a tool call.
 
 ### P3. Redact before every model call (M) — F3
 
