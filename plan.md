@@ -274,7 +274,7 @@ bullets stay as requirements.
 - Tests: oversize, symlink, unreviewed and injected-instruction fixtures are each refused or neutralised. An
   injection eval runs against triage (the model must not obey article text).
 
-**Status: shipped except the audit trail and the review itself.** Commits
+**Status: shipped except the review itself.** Commits
 `6577f78`, `f072698`, `f3ef418`, `6ad56da`, `8946532`, `2432487`, `15897b1`, `f80d363`.
 - The operator endpoints sit behind `RagAdminGate`: a key in `X-Rag-Admin-Key` compared in fixed time, or
   loopback when no key is configured, and a refusal is a 404. A keyless host refuses to start outside
@@ -296,9 +296,15 @@ bullets stay as requirements.
   Putting the raw title back in the loader makes the test fail on that assertion. It had existed since
   `f072698`, but fed the pipeline from a stub retriever and looked for the marker anywhere in the prompt, so
   what it proved was weaker than what it was cited for; both halves are now the real thing.
+- `POST /rag/reload` is audited. Each attempt records the credential that admitted it (`admin-key` or
+  `loopback`), the remote address, the time, the article counts before and after, the duration and, when it
+  was refused, the reason — through `IRagReloadAudit`, which is a structured log line by default and a seam a
+  deployment can replace with a durable sink. A refusal is recorded as carefully as a success, because after a
+  bad deploy the question is who asked and what the corpus looked like at the time.
+  `A_reload_records_who_asked_and_what_it_did` and `A_refused_reload_is_recorded_as_a_refusal` pin both.
+  The record names a credential rather than a person: the key is shared, so the honest answer is which kind of
+  credential was presented and from where.
 - **Outstanding:**
-  - `POST /rag/reload` is gated but **not audited**. A state change that swaps the corpus leaves no record of
-    who asked for it.
   - **The provenance is synthetic.** `reviewed_by: docs-team` and `reviewed_at: 2026-09-29` were written by
     the implementer, and `REVIEWED.sha256` was generated from the same files, so it proves the articles have
     not changed since that commit — not that anyone reviewed them. A deployment must re-review the corpus

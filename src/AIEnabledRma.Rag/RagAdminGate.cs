@@ -59,6 +59,17 @@ public static class RagAdminGate
             + "every caller loopback.");
     }
 
+    /// <summary>
+    /// Which credential admitted this request, for the record a state change writes.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not an identity: the key is shared, so all it can honestly say is that the
+    /// admin key was presented or that no key is configured and the caller is local. The address
+    /// travels beside it in <see cref="RagReloadAttempt.RemoteAddress"/> for the same reason.
+    /// </remarks>
+    public static string DescribeCaller(string? configuredKey) =>
+        string.IsNullOrEmpty(configuredKey) ? "loopback" : "admin-key";
+
     /// <summary>True when this request may use the operational endpoints.</summary>
     public static bool IsAllowed(HttpContext context, string? configuredKey)
     {

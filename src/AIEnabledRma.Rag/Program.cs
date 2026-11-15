@@ -94,9 +94,30 @@ operations.MapPost("/retrieve", (RetrieveRequest request, KnowledgeIndexHolder h
 // operator applying a reviewed knowledge-base change; it is not a file watcher.
 operations.MapPost("/rag/reload", async (
     IServiceProvider services,
+    KnowledgeIndexHolder holder,
+    IRagReloadAudit audit,
+    HttpContext context,
     CancellationToken cancellationToken) =>
 {
+    // Recorded whether the swap succeeds or is refused. A refusal is an attempt too, and after a
+    // bad deploy the question is who asked and what the corpus looked like at the time; a
+    // success-only record answers neither.
+    var before = holder.Current.Articles.Count;
+    var started = System.Diagnostics.Stopwatch.GetTimestamp();
+
     var reloaded = await services.ReloadAsync(cancellationToken);
+
+    audit.Record(new RagReloadAttempt
+    {
+        AtUtc = DateTimeOffset.UtcNow,
+        Caller = RagAdminGate.DescribeCaller(adminKey),
+        RemoteAddress = context.Connection.RemoteIpAddress?.ToString(),
+        Succeeded = reloaded,
+        ArticleCountBefore = before,
+        ArticleCountAfter = holder.Current.Articles.Count,
+        DurationMilliseconds = (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+        RefusalReason = reloaded ? null : "the corpus produced load errors",
+    });
 
     return reloaded
         ? Results.Ok(new { status = "reloaded" })

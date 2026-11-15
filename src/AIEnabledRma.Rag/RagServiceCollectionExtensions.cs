@@ -30,6 +30,11 @@ public static class RagServiceCollectionExtensions
             .Bind(configuration.GetSection(RagOptions.SectionName))
             .ValidateOnStart();
 
+        // The reload audit is registered here so the Web host, which also calls AddRag, cannot end
+        // up with a corpus that can be swapped without a record; only the RAG host maps the
+        // endpoint, and a deployment can replace the sink without touching the endpoint.
+        services.AddSingleton<IRagReloadAudit, LoggingRagReloadAudit>();
+
         services.AddOptions<RagRetrievalOptions>()
             .Bind(configuration.GetSection(RagRetrievalOptions.SectionName))
             .Validate(o => o.MaxRelatedExpansions >= 0, "MaxRelatedExpansions cannot be negative.")

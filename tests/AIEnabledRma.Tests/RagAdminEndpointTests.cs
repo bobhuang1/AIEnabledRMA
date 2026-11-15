@@ -189,6 +189,62 @@ public sealed class RagAdminEndpointTests
     }
 
     [Fact]
+    public async Task A_reload_records_who_asked_and_what_it_did()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var audit = new CapturingReloadAudit();
+
+        using var factory = new RagFactory(AdminKey, peer: OffHost, reloadAudit: audit);
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(RagAdminGate.HeaderName, AdminKey);
+
+        var response = await client.PostAsync("/rag/reload", content: null, ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // The swap is the only operation that changes what the next customer is told, and it is a
+        // shared credential that performs it: the record has to name the credential and the
+        // address, because the key itself identifies nobody.
+        var attempt = Assert.Single(audit.Attempts);
+        Assert.True(attempt.Succeeded);
+        Assert.Equal("admin-key", attempt.Caller);
+        Assert.Equal(OffHost.ToString(), attempt.RemoteAddress);
+        Assert.True(attempt.ArticleCountBefore > 0);
+        Assert.True(attempt.ArticleCountAfter > 0);
+        Assert.Null(attempt.RefusalReason);
+        Assert.InRange(attempt.DurationMilliseconds, 0, 60_000);
+    }
+
+    [Fact]
+    public async Task A_refused_reload_is_recorded_as_a_refusal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var audit = new CapturingReloadAudit();
+
+        using var corpus = new CorpusDirectory();
+        corpus.Write("kb-9001-broken.md", "just some prose with no front matter");
+
+        using var factory = new RagFactory(
+            adminKey: null,
+            peer: Loopback,
+            knowledgeBasePath: corpus.Root,
+            reloadAudit: audit);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync("/rag/reload", content: null, ct);
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+
+        // A refusal is an attempt: without this row the only trace of a rejected deploy is a 422
+        // in whatever happened to be watching, and the operator after a shift change has nothing.
+        var attempt = Assert.Single(audit.Attempts);
+        Assert.False(attempt.Succeeded);
+        Assert.Equal("loopback", attempt.Caller);
+        Assert.Equal(0, attempt.ArticleCountAfter);
+        Assert.Contains("load errors", attempt.RefusalReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_production_host_with_a_key_boots_and_keeps_the_endpoints_gated()
     {
         // With a key the host comes up, and the corpus is reachable through the gate. The gating
@@ -202,6 +258,14 @@ public sealed class RagAdminEndpointTests
 
         using var diagnostics = await GetJsonAsync(client, "/diagnostics", ct);
         Assert.True(diagnostics.RootElement.GetProperty("articleCount").GetInt32() > 0);
+    }
+
+    /// <summary>Collects what the host would have written to its log, so assertions are about records.</summary>
+    private sealed class CapturingReloadAudit : IRagReloadAudit
+    {
+        public List<RagReloadAttempt> Attempts { get; } = [];
+
+        public void Record(RagReloadAttempt attempt) => Attempts.Add(attempt);
     }
 
     /// <summary>All three operational endpoints, so no case can accidentally cover only two.</summary>
@@ -277,7 +341,8 @@ public sealed class RagAdminEndpointTests
         string? adminKey,
         IPAddress peer,
         string environment = "Development",
-        string? knowledgeBasePath = null)
+        string? knowledgeBasePath = null,
+        IRagReloadAudit? reloadAudit = null)
         : WebApplicationFactory<global::RagAppAnchor>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -291,7 +356,14 @@ public sealed class RagAdminEndpointTests
             }
 
             builder.ConfigureTestServices(services =>
-                services.AddSingleton<IStartupFilter>(new PeerAddressStartupFilter(peer)));
+            {
+                services.AddSingleton<IStartupFilter>(new PeerAddressStartupFilter(peer));
+
+                if (reloadAudit is not null)
+                {
+                    services.AddSingleton(reloadAudit);
+                }
+            });
         }
 
         private static string KnowledgeBasePath()
