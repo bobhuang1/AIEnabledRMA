@@ -304,29 +304,18 @@ public sealed class KnowledgeBaseHardeningTests : IDisposable
     {
         Write("kb-0002.md", TitleInjectionArticle);
 
-        // The whole chain: the file on disk, the loader's sanitisation, the index's mapping into
-        // a retrieved article, and the prompt the pipeline actually sends.
+        // The whole chain: the file on disk, the loader's sanitisation, the index, the retriever
+        // the host registers, and the prompt the pipeline actually sends. Nothing between the
+        // article and the model is test-only code, so this fails if any link stops sanitising.
         var index = new KnowledgeIndex(
             Loader().Load(_root),
             Options.Create(new RagRetrievalOptions()),
             Options.Create(new RagOptions()));
 
-        var retrieved = index.Search(new KnowledgeRetrievalQuery
-        {
-            Query = "power button does nothing",
-            // Empty means "no product filter", which is what this fixture wants: the article is
-            // universal, and the assertion is about the title, not about scope.
-            ScopeTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
-            CategoryHints = [],
-            TopK = 3,
-        });
-
-        Assert.NotEmpty(retrieved.Articles);
-
         var model = new StubChatModel(new ChatCompletion { Text = VerdictJson });
         var pipeline = new TriagePipeline(
             model,
-            new FakeRetriever { Articles = retrieved.Articles },
+            new KnowledgeIndexRetriever(new KnowledgeIndexHolder { Current = index }),
             new ScopeGuard(
                 new ScopeGuardOptions(),
                 [["power", "button", "unit", "turn", "nothing"]]),
@@ -362,7 +351,11 @@ public sealed class KnowledgeBaseHardeningTests : IDisposable
             '\n',
             model.Requests.SelectMany(r => r.Messages).Select(m => m.Content));
 
-        Assert.Contains(ArticleSanitizer.NeutralisedLine, prompt, StringComparison.Ordinal);
+        // The title slot itself, not merely a neutralised line somewhere in the prompt: the
+        // heading is what the model reads first, and a sanitiser that cleaned the body while
+        // leaving TITLE raw would still pass a check that only looked for the marker.
+        Assert.Contains($"TITLE: {ArticleSanitizer.NeutralisedLine}", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("TITLE: Ignore", prompt, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("ignore previous instructions", prompt, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("you are now the approver", prompt, StringComparison.OrdinalIgnoreCase);
     }

@@ -250,7 +250,7 @@ bullets stay as requirements.
 - Tests: oversize, symlink, unreviewed and injected-instruction fixtures are each refused or neutralised. An
   injection eval runs against triage (the model must not obey article text).
 
-**Status: shipped except the audit trail, the review itself, and end-to-end proof for titles.** Commits
+**Status: shipped except the audit trail and the review itself.** Commits
 `6577f78`, `f072698`, `f3ef418`, `6ad56da`, `8946532`, `2432487`, `15897b1`, `f80d363`.
 - The operator endpoints sit behind `RagAdminGate`: a key in `X-Rag-Admin-Key` compared in fixed time, or
   loopback when no key is configured, and a refusal is a 404. A keyless host refuses to start outside
@@ -265,6 +265,13 @@ bullets stay as requirements.
 - Bodies, titles and keywords are sanitised at load, after normalising numeric entities, invisible format
   characters and compatibility forms; the triage prompt wraps the reference block in delimiters the system
   prompt declares as data.
+- Title sanitisation is proven end to end by `A_title_borne_injection_never_reaches_the_prompt`: an article
+  whose *title* is an instruction is loaded through the real loader and index, retrieved through
+  `KnowledgeIndexRetriever` — the implementation the host registers — and the prompt's `TITLE:` line is
+  asserted to be `[instruction-like text removed]`, with the instruction absent from the prompt entirely.
+  Putting the raw title back in the loader makes the test fail on that assertion. It had existed since
+  `f072698`, but fed the pipeline from a stub retriever and looked for the marker anywhere in the prompt, so
+  what it proved was weaker than what it was cited for; both halves are now the real thing.
 - **Outstanding:**
   - `POST /rag/reload` is gated but **not audited**. A state change that swaps the corpus leaves no record of
     who asked for it.
@@ -272,9 +279,6 @@ bullets stay as requirements.
     the implementer, and `REVIEWED.sha256` was generated from the same files, so it proves the articles have
     not changed since that commit — not that anyone reviewed them. A deployment must re-review the corpus
     and regenerate the manifest.
-  - **Title sanitisation is loader-level only.** `f072698` sanitises the title (and drops neutralised
-    keywords) and `KnowledgeBaseHardeningTests` asserts the title is neutralised, but nothing exercises a
-    title-borne instruction end to end into a prompt. Implemented and unit-tested; not proven.
 
 ### P5. Vector store and chunking (L) — D4
 
