@@ -416,9 +416,11 @@ bullets stay as requirements.
   wizard's own steps, checks the same URL still answers inside the window, then advances the host's
   `TimeProvider` 31 days and asserts the `Expired` page with 410 — on `Triage`, `Problems`, `Shipping` and
   `Confirm` — and that the request is still a draft, so expiring a link does not quietly change the return.
-  Making `RefuseIfExpired` return null turns it red (`Expected: Gone, Actual: OK`). The POST variants are not
-  asserted directly: they call the same helper first, so the risk a test would catch is a step that stopped
-  calling it, which the per-step GET loop covers.
+  A POST to `Triage`, carrying the anti-forgery token the still-valid page minted before the window closed,
+  gets the same 410 with the `Expired` body, so the write path is exercised and not only the read one.
+  Making `RefuseIfExpired` return null turns the test red (`Expected: Gone, Actual: OK`). The host's `TimeProvider`
+  and the workflow's `IClock` are one instance behind both seams now, so the clock this test moves is the clock
+  every step sees; a test that moved only one of them could not post a step that reads the other.
 
 ### P9. Real payment gateway (M) — D5
 

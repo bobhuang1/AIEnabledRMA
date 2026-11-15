@@ -1025,6 +1025,10 @@ public sealed class WebWizardTests : IAsyncLifetime
         var fresh = await client.GetAsync($"/RmaWizard/Triage/{rmaId}", ct);
         Assert.Equal(HttpStatusCode.OK, fresh.StatusCode);
 
+        // Minted while the link is still alive: the POST below is then a request a real browser
+        // could make from a page it had already loaded before the window closed.
+        var token = TokenOf(await fresh.Content.ReadAsStringAsync(ct));
+
         // Thirty days is the default the wizard is configured with; a day past it is the moment
         // the capability is supposed to stop being one.
         clock.Now = clock.Now.AddDays(31);
@@ -1046,6 +1050,24 @@ public sealed class WebWizardTests : IAsyncLifetime
 
             Assert.Equal(HttpStatusCode.Gone, later.StatusCode);
         }
+
+        // The write path as well as the read one, asserted on the POST response itself rather
+        // than on whatever a redirect leads to: the client does not follow redirects here, so a
+        // step that accepted the statement and moved on would show up as a 302, not as the GET
+        // step's expired page.
+        var form = new FormUrlEncodedContent(
+        [
+            new KeyValuePair<string, string>("__RequestVerificationToken", token),
+            new KeyValuePair<string, string>("Statement", "The screen stays black although the fan is running."),
+        ]);
+
+        var posted = await client.PostAsync($"/RmaWizard/Triage/{rmaId}", form, ct);
+
+        Assert.Equal(HttpStatusCode.Gone, posted.StatusCode);
+        Assert.Contains(
+            "This return has expired",
+            await posted.Content.ReadAsStringAsync(ct),
+            StringComparison.Ordinal);
 
         // Expiring the link must not quietly change the return: it is still an unconfirmed draft
         // the customer can re-enter from the start, not a cancelled or confirmed request.
@@ -1579,6 +1601,17 @@ public sealed class WebWizardTests : IAsyncLifetime
         public override DateTimeOffset GetUtcNow() => Now;
     }
 
+    /// <summary>
+    /// The workflow's <see cref="IClock"/>, read from the host's <see cref="TimeProvider"/> so the
+    /// two cannot drift apart when a test moves time.
+    /// </summary>
+    private sealed class ClockOver(TimeProvider time) : IClock
+    {
+        public DateTimeOffset UtcNow => time.GetUtcNow();
+
+        public DateOnly Today => DateOnly.FromDateTime(UtcNow.UtcDateTime);
+    }
+
     private sealed class WizardFactory(
         string connectionString,
         DateOnly anchor,
@@ -1596,8 +1629,13 @@ public sealed class WebWizardTests : IAsyncLifetime
                 // turns red for a reason that has nothing to do with the code under test.
                 var at = new DateTimeOffset(anchor.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
 
-                services.AddSingleton(clock ?? new FrozenTimeProvider(at));
-                services.AddSingleton<IClock>(new FakeClock(at));
+                // One clock behind both seams. The controller asks TimeProvider and the workflow
+                // asks IClock, so a test that moved only one of them could not exercise a step
+                // that consults both without the two disagreeing about what day it is.
+                var time = clock ?? (TimeProvider)new FrozenTimeProvider(at);
+
+                services.AddSingleton(time);
+                services.AddSingleton<IClock>(new ClockOver(time));
             });
 
             // The checked-in configuration carries a placeholder connection string, so without
