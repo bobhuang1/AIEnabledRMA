@@ -34,6 +34,11 @@ public sealed class McpHttpOptions
     /// Origins allowed to call the transport from a browser. Empty means no browser client is
     /// accepted; a server-side agent sends no <c>Origin</c> header and is unaffected.
     /// </summary>
+    /// <remarks>
+    /// The same list becomes the CORS policy, so a listed page is admitted by the browser and by
+    /// the check rather than only refused by the second one. Origins are compared exactly: a
+    /// different port or a subdomain is a different page.
+    /// </remarks>
     public string[] AllowedOrigins { get; set; } = [];
 
     /// <summary>

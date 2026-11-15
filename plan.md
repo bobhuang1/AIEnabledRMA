@@ -221,11 +221,18 @@ bullets stay as requirements.
 - `docs/mcp.md` is the runbook: what the realm must provide, start-up, the token request, both ways to run the
   server, the 200 and 401 checks, a failure table carrying the exact issuer error, the configuration keys, and
   what the path does not cover yet.
+- The origin allow-list is also the CORS policy, so a listed page can drive the endpoint instead of only being
+  refused by it. The policy is applied to the whole host rather than as endpoint metadata because a preflight
+  `OPTIONS` matches no route. `An_allowed_origin_can_preflight_the_endpoint` asserts the 204 with
+  `Access-Control-Allow-Origin` and `authorization` among the allowed headers,
+  `An_allowed_origin_can_read_the_headers_the_transport_returns` asserts `Mcp-Session-Id` is exposed, and
+  `A_preflight_from_a_disallowed_origin_grants_nothing` asserts an unlisted origin gets no CORS headers — the
+  framework answers every preflight 204, so it is the missing header that makes the browser refuse, and the
+  real request from that origin is the existing 403. Removing `UseCors` fails the first two.
 - **Outstanding:**
   - Protected-resource metadata (RFC 9728): a `401` carries `WWW-Authenticate: Bearer` without
     `resource_metadata`, so a client cannot discover the authorization server from the response.
-  - No CORS policy, so an allow-listed origin still receives no `Access-Control-Allow-Origin` and its preflight
-    goes unanswered: the origin list stops a page from driving the endpoint, it does not enable one.
+
   - The audit row's caller is unit-tested, not asserted end-to-end against a tool call.
 
 ### P3. Redact before every model call (M) — F3

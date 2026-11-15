@@ -12,6 +12,8 @@ namespace AIEnabledRma.Mcp;
 /// </summary>
 public static class McpHttpHost
 {
+    /// <summary>The CORS policy derived from <see cref="McpHttpOptions.AllowedOrigins"/>.</summary>
+    public const string CorsPolicyName = "mcp-browser-clients";
     /// <summary>
     /// Builds the remote host without running it. Tests build it with <c>UseTestServer</c> so the
     /// real pipeline — routing, the origin check, authentication, authorization, the MCP endpoint —
@@ -39,10 +41,32 @@ public static class McpHttpHost
             .WithToolsFromAssembly();
         builder.Services.AddMcpHttpAuthentication(http, builder.Environment.IsDevelopment());
 
+        // The origin allow-list is also the CORS policy. It is the set of pages the operator said
+        // may drive these tools, and without CORS headers the list could only ever refuse browsers
+        // rather than admit them: an allowed page's preflight would be answered by nothing, so no
+        // browser client could call the endpoint at all.
+        //
+        // An empty list configures a policy that admits no origin, which is the same meaning it has
+        // in the check below. Both read the one setting, so a page cannot be allowed by one and
+        // refused by the other.
+        builder.Services.AddCors(options => options.AddPolicy(
+            CorsPolicyName,
+            policy => policy
+                .WithOrigins(http.AllowedOrigins)
+                .AllowAnyHeader()
+                .AllowAnyMethod()
+                // A browser client cannot read a header it was not told about, and the session id
+                // is the one the transport may hand back on initialize.
+                .WithExposedHeaders("Mcp-Session-Id")));
+
         configureHost?.Invoke(builder.WebHost);
         configureServices?.Invoke(builder.Services);
 
         var app = builder.Build();
+
+        // First, so a preflight from an allowed origin is answered here rather than falling through
+        // to the check below, which sees an OPTIONS request with no token and no route to run.
+        app.UseCors(CorsPolicyName);
 
         // Before authentication, so a page from an origin that was never allowed is refused
         // without the host validating, logging or rate-limiting its token first. A request with no
@@ -64,6 +88,9 @@ public static class McpHttpHost
         app.UseAuthentication();
         app.UseAuthorization();
 
+        // The policy is applied globally rather than as endpoint metadata on purpose: a preflight
+        // OPTIONS does not match the POST route, so endpoint-scoped CORS would never see it and an
+        // allowed page's preflight would fall through to the origin check and be refused.
         app.MapMcp(http.Path).RequireAuthorization(McpHttpAuthentication.PolicyName);
 
         return app;

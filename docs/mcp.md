@@ -142,6 +142,22 @@ docker compose --profile mcp-http exec mcp-http \
 | `500` at startup | `EnsureUsable` refused the configuration: an `http` issuer outside Development, an empty client allow-list, a wildcard or empty origin, an empty scope, a path that does not start with `/` |
 | connection refused | the transport is not listening: check `Mcp:Transport` is `http`, not the default `stdio` |
 
+## Browser clients
+
+The origin allow-list is also the CORS policy. A page served from an origin in
+`Mcp:Http:AllowedOrigins` may call the endpoint; one that is not gets no
+`Access-Control-Allow-Origin`, and if it sends the request anyway the origin check answers `403`.
+
+- The policy is applied to the whole host rather than to the endpoint, because a preflight
+  `OPTIONS` matches no route — endpoint-scoped CORS would never see it.
+- A preflight is answered `204` with `Access-Control-Allow-Headers: authorization, content-type`
+  and the caller's origin echoed back. A disallowed origin gets `204` from the framework with **no**
+  CORS headers, which is what makes the browser refuse to send the real request; the server-side
+  refusal is the `403` above.
+- `Mcp-Session-Id` is exposed, so a client can read a session id if the transport issues one.
+- The token still has to come from somewhere. This realm defines no public client, so a browser
+  client is only practical once one exists; that is a realm change, not a transport change.
+
 ## Configuration
 
 Bound from `Mcp:Http`; environment variables use `__` as the separator.
@@ -153,7 +169,7 @@ Bound from `Mcp:Http`; environment variables use `__` as the separator.
 | `Mcp:Http:Audience` | `aienabledrma-mcp` | required `aud` |
 | `Mcp:Http:RequiredScope` | `rma:read` | scope every caller must hold |
 | `Mcp:Http:AllowedClientIds` | empty | clients allowed to call; empty is a startup failure |
-| `Mcp:Http:AllowedOrigins` | empty | browser origins allowed; empty means no browser client |
+| `Mcp:Http:AllowedOrigins` | empty | browser origins allowed, and the CORS policy; empty means no browser client |
 | `Mcp:Http:Path` | `/mcp` | endpoint path |
 
 The JWT checks read `scope` or `scp` for the scope claim and accept `client_id` or `azp` for the
@@ -164,9 +180,12 @@ client, because issuers differ in which they mint.
 - **Protected-resource metadata (RFC 9728) is not implemented.** A `401` carries
   `WWW-Authenticate: Bearer` without the `resource_metadata` parameter, so a client cannot discover
   the authorization server from the response and has to be configured with the realm.
-- **No browser client can use the transport yet.** There is no CORS policy, so even an
-  allow-listed origin gets no `Access-Control-Allow-Origin` and its preflight is unanswered. The
-  origin list currently protects against a page driving the endpoint, not to enable one.
+- **A browser client holds its token where page scripts can reach it.** The transport now admits
+  allow-listed origins (see below), but a token in a browser is a token any script on that page can
+  read; keep its lifetime short and list only origins you would trust with it.
+- **The realm's client is a service account, not a browser flow.** `mcp-agent` is confidential and
+  uses `client_credentials`. A real browser client needs a public client with PKCE, which this realm
+  does not define.
 - **The realm is a development realm.** `sslRequired: none`, a committed client secret, admin
   `admin`/`admin`, and a five-minute token lifetime. A deployment needs its own realm, a secret from
   a secret store, https, and an issuer that is not a loopback name.

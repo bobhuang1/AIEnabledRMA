@@ -228,6 +228,81 @@ public sealed class McpHttpTransportTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
+    private static string? AllowedOriginOf(HttpResponseMessage response) =>
+        response.Headers.TryGetValues("Access-Control-Allow-Origin", out var values)
+            ? string.Join(",", values)
+            : null;
+
+    [Fact]
+    public async Task An_allowed_origin_can_preflight_the_endpoint()
+    {
+        using var app = await BuildHostAsync();
+        using var client = app.GetTestClient();
+
+        using var preflight = new HttpRequestMessage(HttpMethod.Options, "/mcp");
+        preflight.Headers.Add("Origin", AllowedOrigin);
+        preflight.Headers.Add("Access-Control-Request-Method", "POST");
+        preflight.Headers.Add("Access-Control-Request-Headers", "authorization, content-type");
+
+        using var response = await client.SendAsync(preflight, TestContext.Current.CancellationToken);
+
+        // A preflight carries no token and matches no POST route: before the policy existed this
+        // was the one request the origin check answered, so an allowed page could never get as far
+        // as sending the real one.
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal(AllowedOrigin, AllowedOriginOf(response));
+
+        var allowedHeaders = response.Headers.TryGetValues("Access-Control-Allow-Headers", out var values)
+            ? string.Join(",", values)
+            : string.Empty;
+
+        Assert.Contains("authorization", allowedHeaders, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("content-type", allowedHeaders, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task An_allowed_origin_can_read_the_headers_the_transport_returns()
+    {
+        using var app = await BuildHostAsync();
+        using var client = app.GetTestClient();
+
+        using var response = await client.SendAsync(
+            Initialize(Token(), AllowedOrigin),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(AllowedOrigin, AllowedOriginOf(response));
+
+        // Without the expose header a page can send Mcp-Session-Id back but cannot read it, which
+        // breaks the transport the moment the SDK starts issuing sessions.
+        var exposed = response.Headers.TryGetValues("Access-Control-Expose-Headers", out var values)
+            ? string.Join(",", values)
+            : string.Empty;
+
+        Assert.Contains("Mcp-Session-Id", exposed, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_preflight_from_a_disallowed_origin_grants_nothing()
+    {
+        using var app = await BuildHostAsync();
+        using var client = app.GetTestClient();
+
+        using var preflight = new HttpRequestMessage(HttpMethod.Options, "/mcp");
+        preflight.Headers.Add("Origin", "https://evil.example");
+        preflight.Headers.Add("Access-Control-Request-Method", "POST");
+
+        using var response = await client.SendAsync(preflight, TestContext.Current.CancellationToken);
+
+        // The framework answers every preflight 204; what decides whether the browser proceeds is
+        // the absence of an allow-origin header. So the assertion is that the policy granted
+        // nothing here — and the real request from that origin is the 403 in
+        // A_page_from_an_origin_that_is_not_allowed_is_forbidden, which is what a browser would
+        // send if it ignored this answer.
+        Assert.Null(AllowedOriginOf(response));
+        Assert.False(response.Headers.Contains("Access-Control-Allow-Headers"));
+    }
+
     [Fact]
     public async Task An_allowed_origin_reaches_the_tools_with_a_session()
     {
