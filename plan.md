@@ -5,9 +5,10 @@ Written 2026-11-14 from a code review of `main` (`e96156b`).
 **Baseline:** `dotnet test` gives 190 passed and 9 skipped. The 9 live-PostgreSQL tests skip when
 `RMA_TEST_CONNECTION` is unset.
 
-**Updated 2026-11-15** with what has shipped since the review. The suite is at 320 passed, 0 skipped with
-`RMA_TEST_CONNECTION` set; the workstream status lines below say what each item is proven by, and an item is
-only marked done where a test would fail if the behaviour regressed.
+**Updated 2026-11-15** with what has shipped since the review. The suite is at 335 passed, 0 skipped with
+`RMA_TEST_CONNECTION` set, and the same commands are what `.github/workflows/ci.yml` runs; the workstream status
+lines below say what each item is proven by, and an item is only marked done where a test would fail if the
+behaviour regressed.
 
 ## 1. Where the project stands
 
@@ -23,22 +24,27 @@ only marked done where a test would fail if the behaviour regressed.
   - The AI is advisory only, and any model failure becomes human review.
   - Citations are intersected with the retrieved set.
   - `ScopeGuard` refuses questions outside the configured scope.
+  - The customer's free text is redacted before it is sent to a provider.
   - Two providers ship: an OpenAI-compatible client and an offline `example-local` model.
-- **Knowledge base:** 15 markdown articles under `knowledge-base/`, loaded into an in-memory BM25-style index
+- **Knowledge base:** 19 markdown articles under `knowledge-base/`, loaded into an in-memory BM25-style index
   (`AIEnabledRma.Rag`), plus a small RAG host with `/diagnostics`, `/retrieve` and `/rag/reload`.
 - **MCP server** (`src/AIEnabledRma.Mcp`): a stdio server with 9 read-only tools: `find_customer`,
   `get_customer_addresses`, `get_customer_returns`, `resolve_shipping_address`, `find_device`, `search_devices`,
-  `get_open_returns_for_device`, `check_warranty_coverage` and `get_fee_quote`.
+  `get_open_returns_for_device`, `check_warranty_coverage` and `get_fee_quote`. Every customer tool returns a
+  masked projection, every call writes an audit row and spends a budget, and with `Mcp:Transport=http` the same
+  tools are served over streamable HTTP behind Keycloak-issued tokens.
 - **Payments:** only `FakePaymentGateway` exists (accept-all, in memory).
 - **Ops:** Dockerfiles for Web and MCP (non-root) and `tools/DbAdmin`.
+- **CI** (`.github/workflows/ci.yml`): pull requests and manual runs only — restore in `--locked-mode`, build
+  with `-warnaserror`, the EF model-and-migration comparison, the suite against a `postgres:16` service, a
+  refusal when any test was skipped, and a vulnerability audit; actions pinned by commit, `contents: read`.
 
 **Missing:**
-- CI of any kind (there is no `.github/`).
-- Authentication anywhere.
+- An authenticated *user* anywhere: the wizard is anonymous by design, the RAG admin endpoints take a shared key
+  or loopback, and only the MCP HTTP transport validates a token.
 - An operator or back-office view.
 - Any CRM or support-case data.
 - Vector search or chunking: articles are indexed whole.
-- PII handling on the AI path.
 - A real payment provider.
 - A production configuration.
 
@@ -54,7 +60,7 @@ Severity is for a deployment that faces real customers. None of these bite in th
 | F4 | Medium | **Knowledge-base ingestion trusts its input.** It loads every `*.md` under the root, recursively, with no file size or count cap, no provenance (author, review, hash), and no check for instructions planted in article bodies, which go straight into the prompt. A reload publishes whatever is on disk if it parses. | `Rag/Knowledge/KnowledgeBaseLoader.cs:86`, `TriagePipeline` reference block |
 | F5 | Medium | **The wizard's Start step can confirm whether a customer exists by email or phone.** It has no rate limiting, and capability GUIDs never expire, so a leaked step URL drives that return until it is confirmed. | `Web/Controllers/RmaWizardController.cs`, `Domain/Rma/RmaRequest.cs` |
 | F6 | Medium | **`FakePaymentGateway` is registered unconditionally,** so a Production build would "authorise" every payment. | `Web/Program.cs` |
-| F7 | Low | **Web `/health` shows the knowledge-base filesystem path and the AI provider name** to anonymous callers. It injects `RmaDbContext` and never uses it. The README describes a payments diagnostics endpoint that does not exist. | `Web/Program.cs`, `README.md` |
+| F7 | Low | **Web `/health` still returns `articleCount`, `loadErrorCount` and the AI provider name** to anonymous callers, with nothing authenticated in front of it. The knowledge-base filesystem path is gone, the unused `RmaDbContext` injection is gone, and the README no longer describes a payments diagnostics endpoint that does not exist; what remains is a payload that describes the deployment, where the RAG host's status-only `/health` is the shape to follow. | `Web/Program.cs:173` |
 | F8 | Low | **`docker-compose.yml` publishes PostgreSQL on all interfaces with default credentials.** Fine for a demo, but it should bind to `127.0.0.1`. | `docker-compose.yml` |
 | F9 | Low | **No CI, no dependency audit, and no lock files.** The live suites skip silently, so a green run can contain 0 database tests. | repo root |
 
@@ -105,6 +111,27 @@ bullets stay as requirements.
 - Enable NuGet lock files (`RestorePackagesWithLockFile`) and run `dotnet list package --vulnerable` in CI.
 - Bind compose PostgreSQL to `127.0.0.1` (F8). Make the README match the code (F7).
 - **Done when** CI is green with 199 run and 0 skipped.
+
+**Status: shipped, except that no run of the workflow has been observed.**
+- `.github/workflows/ci.yml` runs on pull requests and manual dispatch, ignores root markdown and `docs/` but
+  not `knowledge-base/` (its markdown is data the retrieval tests read), cancels a superseded run, and has a
+  25-minute timeout. Actions are pinned by commit, `permissions` is `contents: read`, and the NuGet cache is
+  keyed on the checked-in lock files.
+- Restore is `--locked-mode` and the build is `-warnaserror`. The job starts a `postgres:16` service so the live
+  suites run, and the step after the tests fails the job if the log shows `Skipped: N` *or* no tests at all — a
+  run that quietly skipped the database is red, not green.
+- `dotnet list package --vulnerable --include-transitive` runs in the job and fails it on a vulnerable package.
+  Lock files are enabled (`RestorePackagesWithLockFile`) and every `packages.lock.json` is committed.
+- F8 is fixed: compose publishes PostgreSQL on `127.0.0.1` only.
+- Added beyond the bullets above: the EF model/migration comparison (`39fb628`), with the CLI pinned to the
+  runtime's own version in `.config/dotnet-tools.json` and `has-pending-model-changes` running before the tests,
+  so a widened column fails by name rather than only failing the live suites through
+  `PendingModelChangesWarning`.
+- Evidence: the same commands in an SDK 10 container against a throwaway PostgreSQL give 335 passed, 0 skipped
+  and "No changes have been made to the model since the last migration". The bullet's "199 run" is the
+  baseline's count and is now stale.
+- **Unproven:** the workflow has never executed on a runner — the tree is not pushed — so what is evidenced is
+  the command list and the file's structure, not a green check on a pull request.
 
 ### P1. Lock down the MCP data surface (M) — F1
 
