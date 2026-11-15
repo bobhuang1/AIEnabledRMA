@@ -131,6 +131,64 @@ public sealed class RagAdminEndpointTests
     }
 
     [Fact]
+    public void A_production_host_refuses_to_boot_when_the_corpus_has_load_errors()
+    {
+        // A key is configured so the key guard passes and the corpus rule is the one that fails.
+        // Without that, this would go green on the other refusal and the new check would never run.
+        using var corpus = new CorpusDirectory();
+        var broken = corpus.Write("kb-9001-broken.md", "just some prose with no front matter");
+
+        using var factory = new RagFactory(
+            AdminKey,
+            peer: Loopback,
+            environment: "Production",
+            knowledgeBasePath: corpus.Root);
+
+        var thrown = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        // The test host wraps startup failures, so the assertion reads the chain: what matters is
+        // that the process did not come up, and that the failure names the article to fix.
+        Assert.Contains("load error", thrown.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(broken, thrown.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_production_host_refuses_to_boot_when_the_corpus_is_empty()
+    {
+        // A directory that exists and holds no articles produces its own load error but no
+        // per-file reason, so this case is about the count rather than about any one file.
+        using var corpus = new CorpusDirectory();
+        Directory.CreateDirectory(corpus.Root);
+
+        using var factory = new RagFactory(
+            AdminKey,
+            peer: Loopback,
+            environment: "Production",
+            knowledgeBasePath: corpus.Root);
+
+        var thrown = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        Assert.Contains("no articles were loaded", thrown.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_development_host_boots_on_a_broken_corpus_so_the_error_can_be_inspected()
+    {
+        // The refusal is Development-only on purpose: on a developer's machine the useful behaviour
+        // is to come up and name the file through /diagnostics, not to crash-loop with no output.
+        var ct = TestContext.Current.CancellationToken;
+        using var corpus = new CorpusDirectory();
+        corpus.Write("kb-9001-broken.md", "just some prose with no front matter");
+
+        using var factory = new RagFactory(adminKey: null, peer: Loopback, knowledgeBasePath: corpus.Root);
+        using var client = factory.CreateClient();
+
+        using var diagnostics = await GetJsonAsync(client, "/diagnostics", ct);
+        Assert.Equal(0, diagnostics.RootElement.GetProperty("articleCount").GetInt32());
+        Assert.NotEmpty(diagnostics.RootElement.GetProperty("errors").EnumerateArray());
+    }
+
+    [Fact]
     public async Task A_production_host_with_a_key_boots_and_keeps_the_endpoints_gated()
     {
         // With a key the host comes up, and the corpus is reachable through the gate. The gating
@@ -182,19 +240,50 @@ public sealed class RagAdminEndpointTests
     }
 
     /// <summary>
+    /// A corpus directory this test owns, so a broken article is never written into the shipped
+    /// corpus and one case cannot leave state behind for another.
+    /// </summary>
+    private sealed class CorpusDirectory : IDisposable
+    {
+        public string Root { get; } = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            "rag-corpus-" + Guid.NewGuid().ToString("N"));
+
+        public string Write(string fileName, string content)
+        {
+            Directory.CreateDirectory(Root);
+            var file = System.IO.Path.Combine(Root, fileName);
+            File.WriteAllText(file, content);
+            return file;
+        }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Root))
+            {
+                Directory.Delete(Root, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
     /// Boots the RAG host with a stated caller address. TestServer reports no peer address, and
     /// the gate trusts no unknown caller, so every host has to say where its requests come from.
     /// The knowledge-base path is made absolute by walking up from the test binary, because the
     /// host resolves a relative path against the working directory, which differs between a
     /// developer's shell, CI, and this suite.
     /// </summary>
-    private sealed class RagFactory(string? adminKey, IPAddress peer, string environment = "Development")
+    private sealed class RagFactory(
+        string? adminKey,
+        IPAddress peer,
+        string environment = "Development",
+        string? knowledgeBasePath = null)
         : WebApplicationFactory<global::RagAppAnchor>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment(environment);
-            builder.UseSetting("Rag:KnowledgeBasePath", KnowledgeBasePath());
+            builder.UseSetting("Rag:KnowledgeBasePath", knowledgeBasePath ?? KnowledgeBasePath());
 
             if (adminKey is not null)
             {

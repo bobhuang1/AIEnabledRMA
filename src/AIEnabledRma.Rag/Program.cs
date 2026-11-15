@@ -20,6 +20,13 @@ var adminKey = app.Configuration[RagAdminGate.ApiKeyConfigurationKey];
 // fails here rather than serving the operational endpoints to a proxy on the same machine.
 RagAdminGate.EnsureStartupAllowed(adminKey, app.Environment.IsDevelopment());
 
+// The corpus is a second startup precondition, checked before anything is mapped. Resolving the
+// load result here is also what makes the initial load eager: a host that only reads its corpus
+// when the first request arrives can report healthy indefinitely while serving nothing, and the
+// guard would never run.
+var loadedAtStartup = app.Services.GetRequiredService<KnowledgeBaseLoadResult>();
+KnowledgeBaseGate.EnsureStartupAllowed(loadedAtStartup, app.Environment.IsDevelopment());
+
 var operations = app.MapGroup(string.Empty)
     .AddEndpointFilter(async (context, next) =>
         RagAdminGate.IsAllowed(context.HttpContext, adminKey)
