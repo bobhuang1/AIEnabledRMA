@@ -33,6 +33,25 @@ Body in Markdown.
 `id` must be unique. The loader fails closed on duplicates rather than silently dropping one,
 because a duplicate makes citation verification ambiguous.
 
+### Reviewed hashes
+
+`REVIEWED.sha256` records, for every article, the SHA-256 of the file the reviewer read. The
+loader refuses an article whose bytes no longer match its line, so "reviewed" describes the file
+in front of you rather than a hash taken while loading. The check runs wherever provenance is
+required, which is every environment except Development, and an article with no line is refused
+for the same reason: nothing has recorded what a reviewer read.
+
+The format is `sha256sum` output with paths relative to this directory and forward slashes:
+
+```sh
+cd knowledge-base
+sha256sum power/kb-0001-charge-indicator.md
+```
+
+Add that line in the same commit as the article, and replace it whenever the text changes after a
+re-review. `.gitattributes` pins these files to LF, so the bytes — and therefore the hashes — are
+identical on a Windows checkout and on the Linux host that serves them.
+
 ## Scoping
 
 `product_scope` is what keeps the assistant from answering questions about products the

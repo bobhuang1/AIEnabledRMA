@@ -22,9 +22,13 @@ public sealed class ShippedKnowledgeBaseTests
     public void Every_shipped_article_loads_with_no_errors_and_nothing_neutralised()
     {
         var root = KnowledgeBaseDirectory();
+
+        // Loaded with the provenance rule on, so this also covers the reviewed hashes in
+        // REVIEWED.sha256: an article edited without a re-review fails here even though the
+        // loader would accept it in Development.
         var loader = new KnowledgeBaseLoader(
             NullLogger<KnowledgeBaseLoader>.Instance,
-            Options.Create(new KnowledgeBaseOptions()));
+            Options.Create(new KnowledgeBaseOptions { RequireReview = true }));
 
         var result = loader.Load(root);
 

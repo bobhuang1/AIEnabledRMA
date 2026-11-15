@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Rules;
@@ -84,6 +85,22 @@ public sealed class KnowledgeBaseHardeningTests : IDisposable
         return path;
     }
 
+    /// <summary>
+    /// Writes the manifest in the format a reviewer produces with <c>sha256sum</c>.
+    /// </summary>
+    private void WriteReviewedHashes(params (string Path, string Hash)[] entries)
+    {
+        Directory.CreateDirectory(_root);
+
+        File.WriteAllText(
+            Path.Combine(_root, KnowledgeBaseLoader.ReviewedHashesFileName),
+            string.Join("\n", entries.Select(e => $"{e.Hash}  {e.Path}")) + "\n",
+            new UTF8Encoding(false));
+    }
+
+    private static string HashOf(string path) =>
+        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+
     [Fact]
     public void A_reviewed_article_records_its_provenance_and_hash()
     {
@@ -117,6 +134,66 @@ public sealed class KnowledgeBaseHardeningTests : IDisposable
 
         Assert.Empty(result.Articles);
         Assert.Contains(result.Errors, e => e.Contains("provenance", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void A_matching_reviewed_hash_is_accepted()
+    {
+        var article = Write("kb-0001.md", ValidArticle);
+        WriteReviewedHashes(("kb-0001.md", HashOf(article)));
+
+        var result = Loader(new KnowledgeBaseOptions { RequireReview = true }).Load(_root);
+
+        Assert.Empty(result.Errors);
+        Assert.Single(result.Articles);
+    }
+
+    [Fact]
+    public void An_article_edited_after_review_is_refused()
+    {
+        // The reviewer approved the ten-second hold; someone lightened it to two without a
+        // re-review. The body is valid markdown with valid provenance, so only the recorded hash
+        // can tell the difference between this file and the one that was read.
+        var article = Write("kb-0001.md", ValidArticle);
+        WriteReviewedHashes(("kb-0001.md", HashOf(article)));
+
+        File.WriteAllText(
+            article,
+            ValidArticle.Replace("ten seconds", "two seconds", StringComparison.Ordinal),
+            new UTF8Encoding(false));
+
+        var result = Loader(new KnowledgeBaseOptions { RequireReview = true }).Load(_root);
+
+        Assert.Empty(result.Articles);
+        Assert.Contains(result.Errors, e => e.Contains("changed after review", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void An_article_with_no_reviewed_hash_is_refused()
+    {
+        // A new article added without its manifest line is the same failure as a tampered one:
+        // nothing has recorded what a reviewer read.
+        Write("kb-0001.md", ValidArticle);
+        WriteReviewedHashes(("kb-0002.md", new string('a', 64)));
+
+        var result = Loader(new KnowledgeBaseOptions { RequireReview = true }).Load(_root);
+
+        Assert.Empty(result.Articles);
+        Assert.Contains(
+            result.Errors,
+            e => e.Contains(KnowledgeBaseLoader.ReviewedHashesFileName, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_corpus_with_no_reviewed_hashes_file_is_refused()
+    {
+        Write("kb-0001.md", ValidArticle);
+
+        var result = Loader(new KnowledgeBaseOptions { RequireReview = true }).Load(_root);
+
+        Assert.Contains(
+            result.Errors,
+            e => e.Contains(KnowledgeBaseLoader.ReviewedHashesFileName, StringComparison.Ordinal));
     }
 
     [Fact]

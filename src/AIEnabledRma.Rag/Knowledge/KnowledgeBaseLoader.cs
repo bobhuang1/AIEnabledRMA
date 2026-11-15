@@ -78,8 +78,10 @@ public sealed class KnowledgeBaseOptions
     public int MaxFrontMatterCharacters { get; set; } = 4096;
 
     /// <summary>
-    /// When true, an article without <c>reviewed_by</c> and <c>reviewed_at</c> is refused.
-    /// Set by the host in Production, where an unreviewed page is an unreviewed policy answer.
+    /// When true, an article without <c>reviewed_by</c> and <c>reviewed_at</c> is refused, and its
+    /// bytes must match the hash the reviewer recorded in <c>REVIEWED.sha256</c>.
+    /// Set by the host in Production, where an unreviewed page is an unreviewed policy answer —
+    /// and an edited one is an answer nobody has read.
     /// </summary>
     public bool RequireReview { get; set; }
 }
@@ -101,6 +103,20 @@ public sealed class KnowledgeBaseOptions
 public sealed partial class KnowledgeBaseLoader
 {
     private const string FrontMatterFence = "---";
+
+    /// <summary>
+    /// The checked-in file that records, per article, the hash of the bytes a reviewer read. It
+    /// sits at the corpus root and is read only when provenance is required; it is not an article
+    /// (the loader reads <c>*.md</c>) and it is reviewed in the same pull request as the articles
+    /// it pins.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="KnowledgeArticle.ContentHash"/> is computed while loading, so it can only say
+    /// what the file is now. A hash recorded at review time is what says the file is still what
+    /// was reviewed: without it, an article edited after approval — a dose halved, a step removed
+    /// — loads and is cited exactly like the reviewed text.
+    /// </remarks>
+    public const string ReviewedHashesFileName = "REVIEWED.sha256";
 
     /// <summary>Strict UTF-8: a file that is not valid UTF-8 is refused, not repaired.</summary>
     private static readonly UTF8Encoding StrictUtf8 =
@@ -141,6 +157,12 @@ public sealed partial class KnowledgeBaseLoader
         }
 
         var rootFull = Path.GetFullPath(rootPath);
+
+        // Read once per load. Null means the manifest is absent or unreadable, and the reason is
+        // already recorded: the rest of the corpus is still loaded so /diagnostics can show what
+        // else is wrong, and the load result as a whole is not servable.
+        var reviewed = _options.RequireReview ? ReadReviewedHashes(rootFull, errors) : null;
+
         var files = Directory
             .EnumerateFiles(rootPath, "*.md", SearchOption.AllDirectories)
             .OrderBy(f => f, StringComparer.Ordinal)
@@ -189,6 +211,12 @@ public sealed partial class KnowledgeBaseLoader
                     continue;
                 }
 
+                if (reviewed is not null
+                    && !TryConfirmReviewedHash(file, rootFull, article, reviewed, errors))
+                {
+                    continue;
+                }
+
                 articles.Add(article);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -216,6 +244,108 @@ public sealed partial class KnowledgeBaseLoader
             RootPath = rootPath,
         };
     }
+
+    /// <summary>
+    /// Reads the reviewed-hash manifest, in <c>sha256sum</c> format: a 64-character digest, then
+    /// whitespace, then the article path relative to the corpus root with forward slashes.
+    /// Blank lines and <c>#</c> comments are allowed.
+    /// </summary>
+    /// <remarks>
+    /// Parsed rather than trusted. A truncated paste has to be an error, because the alternative
+    /// is comparing a real article against a digest that never belonged to anything. A malformed
+    /// line is reported and skipped, which leaves the article it was meant to pin without an
+    /// entry, so the article is refused for that reason as well.
+    /// </remarks>
+    private Dictionary<string, string>? ReadReviewedHashes(string rootFull, List<string> errors)
+    {
+        var manifestPath = Path.Combine(rootFull, ReviewedHashesFileName);
+
+        if (!File.Exists(manifestPath))
+        {
+            errors.Add(
+                $"{ReviewedHashesFileName} is missing from {rootFull}. Every article needs a "
+                + "reviewed hash before the corpus can be served outside Development.");
+            return null;
+        }
+
+        string[] lines;
+        try
+        {
+            lines = File.ReadAllLines(manifestPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            errors.Add($"Could not read {manifestPath}: {ex.Message}");
+            return null;
+        }
+
+        var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i].Trim();
+
+            if (line.Length == 0 || line.StartsWith('#'))
+            {
+                continue;
+            }
+
+            // Whitespace-separated into two parts at most, so a path containing spaces survives.
+            var parts = line.Split((char[]?)null, 2, StringSplitOptions.RemoveEmptyEntries);
+
+            if (parts.Length != 2
+                || parts[0].Length != 64
+                || !parts[0].All(Uri.IsHexDigit))
+            {
+                errors.Add(
+                    $"{ReviewedHashesFileName} line {i + 1} is not '<sha256>  <path>': {line}");
+                continue;
+            }
+
+            hashes[NormalisePath(parts[1])] = parts[0];
+        }
+
+        return hashes;
+    }
+
+    /// <summary>
+    /// Confirms the article still hashes to what the reviewer recorded, refusing it otherwise.
+    /// </summary>
+    private static bool TryConfirmReviewedHash(
+        string file,
+        string rootFull,
+        KnowledgeArticle article,
+        Dictionary<string, string> reviewed,
+        List<string> errors)
+    {
+        var key = NormalisePath(Path.GetRelativePath(rootFull, file));
+
+        if (!reviewed.TryGetValue(key, out var recorded))
+        {
+            errors.Add(
+                $"{file} ({article.Id}) has no line in {ReviewedHashesFileName}. The recorded hash "
+                + "is how a reviewed article is told apart from one edited after review; add it in "
+                + "the same change as the article.");
+            return false;
+        }
+
+        if (!string.Equals(recorded, article.ContentHash, StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add(
+                $"{file} ({article.Id}) changed after review: {ReviewedHashesFileName} records "
+                + $"{recorded} but the file hashes to {article.ContentHash}. Re-read the article "
+                + "and, if the new text is the reviewed text, update its line.");
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Manifest paths are written with forward slashes relative to the corpus root, so they mean
+    /// the same thing on a Windows checkout and on the Linux host that serves them.
+    /// </summary>
+    private static string NormalisePath(string path) => path.Trim().Replace('\\', '/');
 
     /// <summary>
     /// Refuses files the loader cannot vouch for before reading them: symlinks, paths that

@@ -1,0 +1,5 @@
+# A reviewed hash only means something if the bytes are the same everywhere. With core.autocrlf
+# a Windows checkout would hand the loader CRLF articles and a Linux CI LF ones, and every hash
+# in knowledge-base/REVIEWED.sha256 would match on at most one of them.
+knowledge-base/**/*.md text eol=lf
+knowledge-base/REVIEWED.sha256 text eol=lf
