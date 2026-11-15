@@ -166,14 +166,26 @@ app.MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}");
 // each fail independently and both of which look like "the assistant is useless" from the
 // customer's side: the corpus and the AI provider.
 //
-// This endpoint answers without authentication on the customer-facing host, so it reports
-// counts and nothing that describes the deployment: no path on disk, and no per-file load
-// error text, which names files and parse positions. An operator who needs that detail has
-// GET /diagnostics on the RAG host, which is behind RagAdminGate.
+// This endpoint is public, and the counts and the provider name describe the deployment: how big
+// the corpus is, how many of its files failed to parse, which model is answering. A caller who is
+// nobody gets the same one word the RAG host's /health gives.
+//
+// The detail sits behind the operator key the RAG host already uses, rather than a second secret
+// for one endpoint: the header is compared in fixed time, and when no key is configured only
+// loopback is admitted. There is no account system on this host to authenticate against, and
+// inventing one for a status page would be a bigger surface than the thing it protects.
+var operatorKey = app.Configuration[RagAdminGate.ApiKeyConfigurationKey];
+
 app.MapGet("/health", (
+    HttpContext context,
     KnowledgeIndexHolder holder,
     IChatModel chatModel) =>
 {
+    if (!RagAdminGate.IsAllowed(context, operatorKey))
+    {
+        return Results.Ok(new { status = "ok" });
+    }
+
     var index = holder.Current;
 
     return Results.Ok(new

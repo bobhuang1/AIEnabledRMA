@@ -60,7 +60,7 @@ Severity is for a deployment that faces real customers. None of these bite in th
 | F4 | Medium | **Knowledge-base ingestion trusts its input.** It loads every `*.md` under the root, recursively, with no file size or count cap, no provenance (author, review, hash), and no check for instructions planted in article bodies, which go straight into the prompt. A reload publishes whatever is on disk if it parses. | `Rag/Knowledge/KnowledgeBaseLoader.cs:86`, `TriagePipeline` reference block |
 | F5 | Medium | **The wizard's Start step can confirm whether a customer exists by email or phone.** It has no rate limiting, and capability GUIDs never expire, so a leaked step URL drives that return until it is confirmed. | `Web/Controllers/RmaWizardController.cs`, `Domain/Rma/RmaRequest.cs` |
 | F6 | Medium | **`FakePaymentGateway` is registered unconditionally,** so a Production build would "authorise" every payment. | `Web/Program.cs` |
-| F7 | Low | **Web `/health` still returns `articleCount`, `loadErrorCount` and the AI provider name** to anonymous callers, with nothing authenticated in front of it. The knowledge-base filesystem path is gone, the unused `RmaDbContext` injection is gone, and the README no longer describes a payments diagnostics endpoint that does not exist; what remains is a payload that describes the deployment, where the RAG host's status-only `/health` is the shape to follow. | `Web/Program.cs:173` |
+| F7 | Low | **Resolved.** The knowledge-base filesystem path is gone, the unused `RmaDbContext` injection is gone, and the README no longer describes a payments diagnostics endpoint that does not exist. `/health` now answers an anonymous caller with `{"status":"ok"}` only; the counts and the provider name sit behind the operator key, so the remaining question for a deployment is whether that key is configured. | `Web/Program.cs:173` |
 | F8 | Low | **`docker-compose.yml` publishes PostgreSQL on all interfaces with default credentials.** Fine for a demo, but it should bind to `127.0.0.1`. | `docker-compose.yml` |
 | F9 | Low | **No CI, no dependency audit, and no lock files.** The live suites skip silently, so a green run can contain 0 database tests. | repo root |
 
@@ -345,7 +345,7 @@ bullets stay as requirements.
 - Security headers (CSP, nosniff, referrer, frame-ancestors). `/health` shows details only to authenticated
   operators.
 
-**Status: shipped except `/health` and one untested rule.** Commits `6577f78`, `12969a0`.
+**Status: shipped except one untested rule.** Commits `6577f78`, `12969a0`.
 - Rate limiting on Start and every anonymous POST, partitioned on the caller's address, with `TrustedProxyTests`
   covering the proxy rule and `WebWizardTests` the 429. Live host tests.
 - One chooser response for a known account or none, so the Start step is not an existence oracle. The known
@@ -353,10 +353,15 @@ bullets stay as requirements.
 - `FakePaymentGateway` refuses to register outside Development without the explicit opt-in flag
   (`AiProviderRegistrationTests`, a registration test rather than a host boot).
 - The security headers are asserted on a real response in `WebWizardTests`.
+- `/health` is public liveness only: an anonymous caller gets `{"status":"ok"}` and nothing else, the shape the
+  RAG host's `/health` uses. The counts and the provider name are behind the operator key that host already
+  uses (`Rag:Admin:ApiKey`, `X-Rag-Admin-Key`, fixed-time compare), and loopback when no key is configured.
+  There is no account system on this host, so the alternative was inventing one for a status page.
+  `Anonymous_health_reports_status_and_nothing_else` and `Operator_health_shows_counts_only_with_the_admin_key`
+  pin both halves, including that a wrong key is treated as a stranger. Unlike the RAG host, this one does not
+  refuse to start without a key, and behind a proxy every caller looks like loopback — so a deployment must set
+  `Rag:Admin:ApiKey`, which is P11's startup validation to enforce rather than this endpoint's.
 - **Outstanding:**
-  - **`/health`** on the Web host still returns `articleCount`, `loadErrorCount` and the AI provider name to
-    anonymous callers. The filesystem path F7 named is gone, but there is no operator authentication, and the
-    RAG host's status-only `/health` is the shape this one should follow.
   - **Capability expiry is untested.** `RefuseIfExpired` is wired into every route-id step, but no test
     advances the clock past the window and asserts the refusal, so nothing fails if it stops working.
 

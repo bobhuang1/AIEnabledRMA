@@ -5,6 +5,7 @@ using AIEnabledRma.Data;
 using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Domain.Rules;
+using AIEnabledRma.Rag;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -998,7 +999,7 @@ public sealed class WebWizardTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Health_reports_a_loaded_knowledge_base()
+    public async Task Anonymous_health_reports_status_and_nothing_else()
     {
         var ct = TestContext.Current.CancellationToken;
         var client = CreateClient();
@@ -1007,12 +1008,48 @@ public sealed class WebWizardTests : IAsyncLifetime
         var body = await response.Content.ReadAsStringAsync(ct);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains("\"status\":\"ok\"", body, StringComparison.Ordinal);
-        Assert.Contains("articleCount", body, StringComparison.Ordinal);
 
-        // Counts only. This endpoint answers without authentication on the customer-facing
-        // host, so where the corpus lives and which of its files failed to parse are operator
-        // detail: they belong to the RAG host's gated /diagnostics, not here.
+        // The same one-word answer the RAG host gives. The counts and the provider name describe
+        // the deployment — corpus size, files that failed to parse, which model answers — and a
+        // caller who is nobody has no business reading them.
+        Assert.Equal("{\"status\":\"ok\"}", body);
+        Assert.DoesNotContain("articleCount", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("loadErrorCount", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("provider", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Operator_health_shows_counts_only_with_the_admin_key()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string key = "health-test-operator-key";
+
+        using var factory = _factory!.WithWebHostBuilder(
+            builder => builder.UseSetting(RagAdminGate.ApiKeyConfigurationKey, key));
+
+        // A caller with no key, or the wrong one, is a stranger: the detail is not a reward for
+        // guessing. Once a key is configured it is required from every caller, loopback
+        // included — the same rule, from the same gate, as the RAG host's operator endpoints.
+        using var stranger = factory.CreateClient();
+        stranger.DefaultRequestHeaders.Add(RagAdminGate.HeaderName, "not-the-key");
+
+        var refused = await stranger.GetAsync("/health", ct);
+
+        Assert.Equal("{\"status\":\"ok\"}", await refused.Content.ReadAsStringAsync(ct));
+
+        using var operatorClient = factory.CreateClient();
+        operatorClient.DefaultRequestHeaders.Add(RagAdminGate.HeaderName, key);
+
+        var response = await operatorClient.GetAsync("/health", ct);
+        var body = await response.Content.ReadAsStringAsync(ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("\"status\":\"ok\"", body, StringComparison.Ordinal);
+
+        // Still counts only: where the corpus lives and which file failed to parse stay with the
+        // RAG host's gated /diagnostics.
+        Assert.Contains("articleCount", body, StringComparison.Ordinal);
+        Assert.Contains("provider", body, StringComparison.Ordinal);
         Assert.DoesNotContain("path", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("loadErrors", body, StringComparison.Ordinal);
     }
