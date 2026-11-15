@@ -5,6 +5,10 @@ Written 2026-11-14 from a code review of `main` (`e96156b`).
 **Baseline:** `dotnet test` gives 190 passed and 9 skipped. The 9 live-PostgreSQL tests skip when
 `RMA_TEST_CONNECTION` is unset.
 
+**Updated 2026-11-15** with what has shipped since the review. The suite is at 320 passed, 0 skipped with
+`RMA_TEST_CONNECTION` set; the workstream status lines below say what each item is proven by, and an item is
+only marked done where a test would fail if the behaviour regressed.
+
 ## 1. Where the project stands
 
 **Built and working:**
@@ -86,6 +90,12 @@ Severity is for a deployment that faces real customers. None of these bite in th
 Each one is a branch and a PR. Every PR runs the build plus tests. Sizes: S is under a day, M is 1–3 days, L is
 about a week.
 
+**Status lines** record what exists in the tree today and what proves it. Three levels are used, and they
+are not interchangeable: *live* means a test boots the host or talks to PostgreSQL; *loader-level* or
+*pipeline-level* means the seam is exercised with a fixture and a fake; *untested* means the code exists and
+nothing fails if it is deleted. A workstream is only "shipped" where the bullets say so — the rest of the
+bullets stay as requirements.
+
 ### P0. Baseline and CI (S) — do first
 
 - Add `.github/workflows/ci.yml`:
@@ -113,6 +123,19 @@ about a week.
   - an audit row written per call;
   - a budget refusal.
 
+**Status: shipped, except the unmask tool.** Commits `aa6531c`, `f308981`, `25ca72a`, `cb62e82`.
+- Masking through `CustomerProjection`, shared with the wizard; `externalCustomerId` is gone from output and
+  `find_customer` refuses short terms and matches email or phone exactly. Pinned by `McpCustomerToolTests`,
+  including the enumeration case (a partial email returns nothing).
+- The audit sink and its `mcp_tool_calls` migration, with `EfToolAuditSinkTests` running both against a real
+  PostgreSQL — the live level, not a stub.
+- Budgets enforced in `ToolCallGuard` at the MCP `tools/call` filter rather than inside each of the four
+  tools, so a tool added later cannot skip them. `McpToolGuardTests` drives the real server over the loopback
+  transport. These are in-process tests, not a networked deployment.
+- **Outstanding:** `reveal_customer_contact`. D3's default was "masked by default, with an audited unmask
+  tool for an authenticated support role"; only the masked half exists, so no role can see a full contact
+  record. Nothing is exposed that should not be — the decision is simply not implemented.
+
 ### P2. Remote MCP transport with OAuth (M) — D2
 
 - Add a streamable HTTP transport (`ModelContextProtocol.AspNetCore`) beside stdio.
@@ -139,6 +162,20 @@ about a week.
   - a fake `IChatModel` that records what it received;
   - the gate: zero planted values reach the model.
 
+**Status: shipped; proven against a fake, not a provider.** Commit `de4bde3`.
+- `AIEnabledRma.Privacy` recognises email, phone, card numbers (Luhn-checked), postal addresses, serial-like
+  and order-like numbers, and the customer names supplied with the request. Serial, SKU and product are
+  protected values rather than redacted, because the policy needs them. Placeholders are stable within a
+  session.
+- `TriagePipeline` redacts the statement and every conversation turn before retrieval and before the model
+  call, scans the returned summary and steps for a surviving identifier and routes the case to human review
+  if one is found, and logs entity counts only.
+- Evidence is at the pipeline seam: `PiiRedactorTests` for the recognisers and the planted corpus,
+  `TriagePipelineTests` with a fake `IChatModel` that records what it received. **No test runs a real model
+  or provider**, so "zero planted values reached the model" is proven against the fake only.
+- **Outstanding:** the name/NER pass. No local model is configured, so the redactor knows no names except
+  those the caller hands it; a third party's name typed into a fault description is not recognised.
+
 ### P4. Secure knowledge-base ingestion (M) — F2, F4
 
 - Authenticate the RAG host's operator endpoints (API key or JWT with an `rma:kb-admin` scope).
@@ -155,6 +192,32 @@ about a week.
   - wrap each article in delimiters the system prompt declares as data.
 - Tests: oversize, symlink, unreviewed and injected-instruction fixtures are each refused or neutralised. An
   injection eval runs against triage (the model must not obey article text).
+
+**Status: shipped except the audit trail, the review itself, and end-to-end proof for titles.** Commits
+`6577f78`, `f072698`, `f3ef418`, `6ad56da`, `8946532`, `2432487`, `15897b1`, `f80d363`.
+- The operator endpoints sit behind `RagAdminGate`: a key in `X-Rag-Admin-Key` compared in fixed time, or
+  loopback when no key is configured, and a refusal is a 404. A keyless host refuses to start outside
+  Development (`f3ef418`) and `6ad56da` boots Production and expects the throw; `RagAdminGateTests` covers
+  the decisions, `RagAdminEndpointTests` the wiring.
+- Loader limits: file size, article count, front-matter size, strict UTF-8, symlinks and paths that escape the
+  root. `KnowledgeBaseLoaderTests` and `KnowledgeBaseHardeningTests` cover each refusal.
+- Provenance: `reviewed_by` and `reviewed_at` are required where the host requires review (Production), and
+  the checked-in `REVIEWED.sha256` pins the bytes a reviewer read, so an article edited after review is
+  refused rather than cited. `ShippedKnowledgeBaseTests` loads the real corpus with review on, and `15897b1`
+  makes the RAG host refuse to start on a corpus with load errors or no articles.
+- Bodies, titles and keywords are sanitised at load, after normalising numeric entities, invisible format
+  characters and compatibility forms; the triage prompt wraps the reference block in delimiters the system
+  prompt declares as data.
+- **Outstanding:**
+  - `POST /rag/reload` is gated but **not audited**. A state change that swaps the corpus leaves no record of
+    who asked for it.
+  - **The provenance is synthetic.** `reviewed_by: docs-team` and `reviewed_at: 2026-09-29` were written by
+    the implementer, and `REVIEWED.sha256` was generated from the same files, so it proves the articles have
+    not changed since that commit — not that anyone reviewed them. A deployment must re-review the corpus
+    and regenerate the manifest.
+  - **Title sanitisation is loader-level only.** `f072698` sanitises the title (and drops neutralised
+    keywords) and `KnowledgeBaseHardeningTests` asserts the title is neutralised, but nothing exercises a
+    title-borne instruction end to end into a prompt. Implemented and unit-tested; not proven.
 
 ### P5. Vector store and chunking (L) — D4
 
@@ -220,6 +283,21 @@ about a week.
   in Production with no real gateway.
 - Security headers (CSP, nosniff, referrer, frame-ancestors). `/health` shows details only to authenticated
   operators.
+
+**Status: shipped except `/health` and one untested rule.** Commits `6577f78`, `12969a0`.
+- Rate limiting on Start and every anonymous POST, partitioned on the caller's address, with `TrustedProxyTests`
+  covering the proxy rule and `WebWizardTests` the 429. Live host tests.
+- One chooser response for a known account or none, so the Start step is not an existence oracle. The known
+  path is exercised by the wizard tests; the unknown-contact path is code, not an assertion.
+- `FakePaymentGateway` refuses to register outside Development without the explicit opt-in flag
+  (`AiProviderRegistrationTests`, a registration test rather than a host boot).
+- The security headers are asserted on a real response in `WebWizardTests`.
+- **Outstanding:**
+  - **`/health`** on the Web host still returns `articleCount`, `loadErrorCount` and the AI provider name to
+    anonymous callers. The filesystem path F7 named is gone, but there is no operator authentication, and the
+    RAG host's status-only `/health` is the shape this one should follow.
+  - **Capability expiry is untested.** `RefuseIfExpired` is wired into every route-id step, but no test
+    advances the clock past the window and asserts the refusal, so nothing fails if it stops working.
 
 ### P9. Real payment gateway (M) — D5
 
