@@ -406,6 +406,14 @@ bullets stay as requirements.
 - `FakePaymentGateway` refuses to register outside Development without the explicit opt-in flag
   (`AiProviderRegistrationTests`, a registration test rather than a host boot).
 - The security headers are asserted on a real response in `WebWizardTests`.
+- Every response addressed by a request id sends `Cache-Control: no-store, no-cache, max-age=0` and
+  `Pragma: no-cache`, set by a middleware that runs after routing and keys on the `id` route value under
+  `/RmaWizard`. Expiry bounds drafts, not caches: a page kept by a shared browser or an intermediary would
+  hand the next person on that machine a working capability link for a return that has already been confirmed.
+  Antiforgery already marks the pages that render a token, so the `max-age` and the 302 a step POSTs are what
+  this adds — with the middleware disabled, `A_capability_step_cannot_be_stored_by_a_browser_or_a_cache` fails
+  on the redirect carrying no `Cache-Control` at all. The test also asserts an ordinary page gets no directive,
+  so the header is scoped rather than sprayed.
 - `/health` is public liveness only: an anonymous caller gets `{"status":"ok"}` and nothing else, the shape the
   RAG host's `/health` uses. The counts and the provider name are behind the operator key that host already
   uses (`Rag:Admin:ApiKey`, `X-Rag-Admin-Key`, fixed-time compare), and loopback when no key is configured.

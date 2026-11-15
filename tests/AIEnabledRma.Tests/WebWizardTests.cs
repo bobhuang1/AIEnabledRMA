@@ -999,6 +999,52 @@ public sealed class WebWizardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_capability_step_cannot_be_stored_by_a_browser_or_a_cache()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        var startStep = await BeginAsync(client, CustomerEmail, EligibleSerial, ct);
+        var rmaId = IdFromPath(startStep.Path);
+
+        var page = await client.GetAsync($"/RmaWizard/Triage/{rmaId}", ct);
+
+        Assert.Equal(HttpStatusCode.OK, page.StatusCode);
+
+        // The request id in the address bar is the capability. A page kept by a shared browser or
+        // an intermediary outlives the session that produced it, and expiry only bounds drafts: a
+        // page for a confirmed return would sit there indefinitely. no-store rather than no-cache,
+        // because the second still allows a copy to be written to disk. Antiforgery marks this page
+        // too, so the max-age is what distinguishes this middleware here; the redirect below is the
+        // response only this middleware marks.
+        Assert.NotNull(page.Headers.CacheControl);
+        Assert.True(page.Headers.CacheControl!.NoStore);
+        Assert.True(page.Headers.CacheControl.NoCache);
+        Assert.Equal(TimeSpan.Zero, page.Headers.CacheControl.MaxAge);
+        Assert.Contains("no-cache", page.Headers.Pragma.ToString(), StringComparison.OrdinalIgnoreCase);
+
+        // The 302 a step POSTs carries the next capability address, so it must not be storable
+        // either, or a cache would hold the redirect and keep sending people to that step.
+        var token = TokenOf(await page.Content.ReadAsStringAsync(ct));
+        var posted = await client.PostAsync(
+            $"/RmaWizard/Triage/{rmaId}",
+            new FormUrlEncodedContent(
+            [
+                new KeyValuePair<string, string>("__RequestVerificationToken", token),
+                new KeyValuePair<string, string>("Statement", "The screen stays black although the fan is running."),
+            ]),
+            ct);
+
+        Assert.Equal(HttpStatusCode.Found, posted.StatusCode);
+        Assert.True(posted.Headers.CacheControl?.NoStore);
+
+        // Scoped to the wizard: an ordinary page is not handed the directive by accident.
+        var home = await client.GetAsync("/", ct);
+
+        Assert.Null(home.Headers.CacheControl);
+    }
+
+    [Fact]
     public async Task An_unconfirmed_draft_stops_working_when_the_capability_window_passes()
     {
         var ct = TestContext.Current.CancellationToken;

@@ -155,6 +155,31 @@ if (!app.Environment.IsDevelopment())
 app.UseStaticFiles();
 app.UseRouting();
 
+// After routing, because the route values are what identify a capability page. A step addressed by
+// the request id is one: the id in the address bar is the whole secret. A shared browser or an
+// intermediary that keeps a copy hands the next person on that machine a working link, and expiry
+// only bounds drafts — a page for a confirmed return would never expire. no-store is the directive
+// that also forbids writing it to disk; no-cache alone would let it be stored and revalidated.
+// The antiforgery middleware already marks the pages that render a token, but it leaves the 302 a
+// step POSTs unmarked and sends no max-age, so this is not a duplicate of it.
+app.Use(async (context, next) =>
+{
+    var isCapabilityStep = context.Request.RouteValues.ContainsKey("id")
+        && context.Request.Path.StartsWithSegments("/RmaWizard", StringComparison.OrdinalIgnoreCase);
+
+    if (isCapabilityStep)
+    {
+        context.Response.OnStarting(() =>
+        {
+            context.Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
+            context.Response.Headers.Pragma = "no-cache";
+            return Task.CompletedTask;
+        });
+    }
+
+    await next();
+});
+
 // After routing, because the limiter reads the endpoint's policy metadata, and before
 // antiforgery, so a refused request stops before any of the work it was trying to make us do.
 app.UseRateLimiter();
