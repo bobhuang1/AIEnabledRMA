@@ -999,6 +999,62 @@ public sealed class WebWizardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_unconfirmed_draft_stops_working_when_the_capability_window_passes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        // The host's clock, held here so this test can move it. The seed data stays authored
+        // against the anchor; what changes is how long the link has been sitting in an inbox.
+        var clock = new SettableTimeProvider(new DateTimeOffset(
+            SeedAnchor.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)));
+
+        using var factory = new WizardFactory(_database.ConnectionString, SeedAnchor, clock);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            HandleCookies = true,
+            AllowAutoRedirect = false,
+        });
+
+        client.DefaultRequestHeaders.Add("User-Agent", "WebWizardTests");
+
+        var startStep = await BeginAsync(client, CustomerEmail, EligibleSerial, ct);
+        var rmaId = IdFromPath(startStep.Path);
+
+        // Inside the window the same URL works, which is what makes the refusal below the
+        // window's doing rather than the page having been broken all along.
+        var fresh = await client.GetAsync($"/RmaWizard/Triage/{rmaId}", ct);
+        Assert.Equal(HttpStatusCode.OK, fresh.StatusCode);
+
+        // Thirty days is the default the wizard is configured with; a day past it is the moment
+        // the capability is supposed to stop being one.
+        clock.Now = clock.Now.AddDays(31);
+
+        var expired = await client.GetAsync($"/RmaWizard/Triage/{rmaId}", ct);
+        var page = await expired.Content.ReadAsStringAsync(ct);
+
+        // 410 rather than 404: the return really was here, and the customer needs to be told to
+        // start again rather than to suspect a typo in the link.
+        Assert.Equal(HttpStatusCode.Gone, expired.StatusCode);
+        Assert.Contains("This return has expired", page, StringComparison.Ordinal);
+        Assert.Contains("30 days", page, StringComparison.Ordinal);
+
+        // Every later route-id step, not just the first: the guard is called at the top of each,
+        // and a step that forgot to call it would otherwise hand out a page for a dead link.
+        foreach (var action in new[] { "Problems", "Shipping", "Confirm" })
+        {
+            using var later = await client.GetAsync($"/RmaWizard/{action}/{rmaId}", ct);
+
+            Assert.Equal(HttpStatusCode.Gone, later.StatusCode);
+        }
+
+        // Expiring the link must not quietly change the return: it is still an unconfirmed draft
+        // the customer can re-enter from the start, not a cancelled or confirmed request.
+        await using var db = CreateContext();
+        var stored = await db.RmaRequests.SingleAsync(r => r.Id == rmaId, ct);
+        Assert.Equal(RmaRequestStatus.Draft, stored.Status);
+    }
+
+    [Fact]
     public async Task Anonymous_health_reports_status_and_nothing_else()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -1512,7 +1568,21 @@ public sealed class WebWizardTests : IAsyncLifetime
             ? id
             : throw new InvalidOperationException($"'{path}' does not end in a request id.");
 
-    private sealed class WizardFactory(string connectionString, DateOnly anchor)
+    /// <summary>
+    /// The host's clock, held by a test that needs to move time forward. Every other test uses
+    /// the frozen one, because the fixture is authored against a single date.
+    /// </summary>
+    private sealed class SettableTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    private sealed class WizardFactory(
+        string connectionString,
+        DateOnly anchor,
+        TimeProvider? clock = null)
         : WebApplicationFactory<global::WebAppAnchor>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -1526,7 +1596,7 @@ public sealed class WebWizardTests : IAsyncLifetime
                 // turns red for a reason that has nothing to do with the code under test.
                 var at = new DateTimeOffset(anchor.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
 
-                services.AddSingleton<TimeProvider>(new FrozenTimeProvider(at));
+                services.AddSingleton(clock ?? new FrozenTimeProvider(at));
                 services.AddSingleton<IClock>(new FakeClock(at));
             });
 

@@ -345,7 +345,7 @@ bullets stay as requirements.
 - Security headers (CSP, nosniff, referrer, frame-ancestors). `/health` shows details only to authenticated
   operators.
 
-**Status: shipped except one untested rule.** Commits `6577f78`, `12969a0`.
+**Status: shipped.** Commits `6577f78`, `12969a0`.
 - Rate limiting on Start and every anonymous POST, partitioned on the caller's address, with `TrustedProxyTests`
   covering the proxy rule and `WebWizardTests` the 429. Live host tests.
 - One chooser response for a known account or none, so the Start step is not an existence oracle. The known
@@ -361,9 +361,14 @@ bullets stay as requirements.
   pin both halves, including that a wrong key is treated as a stranger. Unlike the RAG host, this one does not
   refuse to start without a key, and behind a proxy every caller looks like loopback — so a deployment must set
   `Rag:Admin:ApiKey`, which is P11's startup validation to enforce rather than this endpoint's.
-- **Outstanding:**
-  - **Capability expiry is untested.** `RefuseIfExpired` is wired into every route-id step, but no test
-    advances the clock past the window and asserts the refusal, so nothing fails if it stops working.
+- Capability expiry is tested with the clock moved:
+  `An_unconfirmed_draft_stops_working_when_the_capability_window_passes` creates a real draft through the
+  wizard's own steps, checks the same URL still answers inside the window, then advances the host's
+  `TimeProvider` 31 days and asserts the `Expired` page with 410 — on `Triage`, `Problems`, `Shipping` and
+  `Confirm` — and that the request is still a draft, so expiring a link does not quietly change the return.
+  Making `RefuseIfExpired` return null turns it red (`Expected: Gone, Actual: OK`). The POST variants are not
+  asserted directly: they call the same helper first, so the risk a test would catch is a step that stopped
+  calling it, which the per-step GET loop covers.
 
 ### P9. Real payment gateway (M) — D5
 
