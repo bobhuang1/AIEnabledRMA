@@ -269,16 +269,20 @@ bullets stay as requirements.
   included so a client asks its authorization server for the right one. `A_401_names_the_metadata_document_and_the_document_answers`
   follows the header to the document and asserts every field; `The_metadata_is_also_at_the_root_well_known_path`
   pins the fallback. Replacing the challenge with the framework default fails the first on the missing pointer.
-- **Outstanding:**
-
-- The audit row's caller is now asserted where it is produced: `A_tool_call_over_http_is_audited_as_the_token_s_client_and_subject`
-  sends a real `tools/call` with a token carrying `client_id` and `sub` and asserts the row says
-  `rma-agent:agent-1`. It replaces the sink and the device repository so no database is needed; routing, token
-  validation and the tools/call filter are the real ones. Making `HttpContextCallerIdentity` answer with the local
-  name — the exact failure a transport change could introduce unnoticed — fails it with
-  `Expected: "rma-agent:agent-1", Actual: "stdio:local"`.
-- That test immediately found a real defect the identity unit test could not see: JWT inbound claim mapping
-  renames `sub` to a schema URI, so every HTTP audit row recorded `unknown-subject` for a perfectly valid token.
+- **Outstanding:** none.
+- The audit trail's identity claim is asserted against the table, not inferred from a unit or from the sink:
+  `A_tool_call_over_http_writes_the_token_s_client_and_subject_to_the_audit_table` sends a real `tools/call`
+  over the HTTP transport with a token carrying `client_id` and `sub`, then reads the row back from
+  `mcp_tool_calls` and asserts `rma-agent:agent-1`, not `stdio:local`. Only the device catalogue and the call
+  counter are replaced — routing, token validation, the tools/call filter, the guard, the identity and
+  `EfToolAuditSink` are the real ones, against a real PostgreSQL — because the two halves can break
+  independently: a correct caller name written by a sink that never gets reached leaves the same empty trail.
+  Making `HttpContextCallerIdentity` answer with the local name — the exact failure a transport change could
+  introduce unnoticed — fails it with `Expected: "rma-agent:agent-1", Actual: "stdio:local"`.
+- That test, in its earlier sink-level form, found a real defect the identity unit test could not see: JWT inbound claim mapping
+  renames `sub` to a schema URI, so every HTTP audit row recorded `unknown-subject` for a perfectly valid token
+  (the sink-level version of this test asserted `rma-agent:unknown-subject`; only the row read from the table
+  would have been caught either way).
   The host now sets `MapInboundClaims = false` and reads the token's own claim names, which is what the identity
   class and `NameClaimType` already assumed.
 

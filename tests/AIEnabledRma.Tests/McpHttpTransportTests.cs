@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using AIEnabledRma.Data;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Catalog;
 using AIEnabledRma.Domain.Rules;
@@ -12,6 +13,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 
@@ -40,16 +42,27 @@ public sealed class McpHttpTransportTests
     /// the request the test sends is the request the server routes.
     /// </summary>
     private static async Task<WebApplication> BuildHostAsync(
-        Action<IServiceCollection>? configureServices = null)
+        Action<IServiceCollection>? configureServices = null,
+        string? connectionString = null)
     {
+        List<string> settings =
+        [
+            $"--{McpHttpOptions.SectionName}:Issuer={Issuer}",
+            $"--{McpHttpOptions.SectionName}:Audience={Audience}",
+            $"--{McpHttpOptions.SectionName}:RequiredScope={ReadScope}",
+            $"--{McpHttpOptions.SectionName}:AllowedOrigins:0={AllowedOrigin}",
+            $"--{McpHttpOptions.SectionName}:AllowedClientIds:0={ClientId}",
+        ];
+
+        // Only the audit-table test needs a database. The others build the host with the
+        // connection string the committed appsettings carries, which they never use.
+        if (connectionString is not null)
+        {
+            settings.Add($"--ConnectionStrings:Rma={connectionString}");
+        }
+
         var app = McpHttpHost.Build(
-            [
-                $"--{McpHttpOptions.SectionName}:Issuer={Issuer}",
-                $"--{McpHttpOptions.SectionName}:Audience={Audience}",
-                $"--{McpHttpOptions.SectionName}:RequiredScope={ReadScope}",
-                $"--{McpHttpOptions.SectionName}:AllowedOrigins:0={AllowedOrigin}",
-                $"--{McpHttpOptions.SectionName}:AllowedClientIds:0={ClientId}",
-            ],
+            [.. settings],
             host => host.UseTestServer(),
             services =>
             {
@@ -162,32 +175,42 @@ public sealed class McpHttpTransportTests
     }
 
     /// <summary>
-    /// The audit row's caller, asserted where it is actually produced: a real <c>tools/call</c> over
-    /// HTTP, with a token that names a client and a subject.
+    /// The audit row's caller as it reaches the table: a real <c>tools/call</c> over HTTP, a token
+    /// naming a client and a subject, and the row read back from <c>mcp_tool_calls</c>.
     /// </summary>
     /// <remarks>
-    /// The caller identity is unit-tested on its own, which is exactly how a transport change can
-    /// leave every HTTP row saying <c>stdio:local</c> without a test noticing: the unit test builds
-    /// its own <c>HttpContext</c>, so it passes while the host has none. This test asks the host.
-    /// The sink and the catalogue are replaced so no database is needed; everything between the
-    /// request and the sink — routing, token validation, the tools/call filter — is the real one.
+    /// Asserting at the sink proved the identity reached the guard; it did not prove the row exists.
+    /// The sink writes through EF into PostgreSQL, and both halves of that — the caller name and the
+    /// write — can break while the other is correct: this ran with the real sink and found that an
+    /// inbound claim mapping renamed <c>sub</c>, so every HTTP row recorded <c>unknown-subject</c> for
+    /// a valid token. Only the row in the table answers the question the audit trail is asked.
+    /// The catalogue and the counter are replaced so no seed data is needed; routing, token
+    /// validation, the filter, the guard, the identity and the sink are the real ones.
     /// </remarks>
     [Fact]
-    public async Task A_tool_call_over_http_is_audited_as_the_token_s_client_and_subject()
+    public async Task A_tool_call_over_http_writes_the_token_s_client_and_subject_to_the_audit_table()
     {
-        var audit = new RecordingAuditSink();
+        await using var database = new LiveDatabase("mcpaudit_http");
+        await database.InitializeAsync();
 
-        using var app = await BuildHostAsync(services =>
+        await using (var setup = AuditContext(database.ConnectionString))
         {
-            services.AddSingleton<IToolAuditSink>(audit);
-            services.AddSingleton<IDeviceRepository, NoSuchDeviceRepository>();
-            services.AddSingleton<IEligibilityService, UnusedEligibilityService>();
+            await SchemaBootstrapper.InitializeAsync(
+                setup,
+                cancellationToken: TestContext.Current.CancellationToken);
+        }
 
-            // The production meter counts in PostgreSQL; this test is about the audit row and has
-            // no database, so the counter is replaced the same way the sink is. Everything else —
-            // routing, token validation, the filter, the guard, the identity — stays real.
-            services.AddSingleton<ICallMeter>(new InMemoryCallMeter());
-        });
+        using var app = await BuildHostAsync(
+            services =>
+            {
+                services.AddSingleton<IDeviceRepository, NoSuchDeviceRepository>();
+                services.AddSingleton<IEligibilityService, UnusedEligibilityService>();
+
+                // The production meter counts in PostgreSQL; this test is about the audit row, and
+                // its own rows would only add noise to the table being read.
+                services.AddSingleton<ICallMeter>(new InMemoryCallMeter());
+            },
+            database.ConnectionString);
 
         using var client = app.GetTestClient();
 
@@ -211,16 +234,27 @@ public sealed class McpHttpTransportTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        var record = Assert.Single(audit.Records);
+        await using var read = AuditContext(database.ConnectionString);
 
-        Assert.Equal("check_warranty_coverage", record.Tool);
+        var row = Assert.Single(await read.McpToolCalls
+            .AsNoTracking()
+            .ToListAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal("check_warranty_coverage", row.Tool);
 
         // The token minted above carries client_id rma-agent and sub agent-1, so that is what the
         // row has to say. The stdio name here would mean the host's HttpContext never reached the
         // guard, which is the failure a unit test on the identity class cannot see.
-        Assert.Equal($"{ClientId}:agent-1", record.Caller);
-        Assert.NotEqual(ToolCallGuard.CallerName, record.Caller);
+        Assert.Equal($"{ClientId}:agent-1", row.Caller);
+        Assert.NotEqual(ToolCallGuard.CallerName, row.Caller);
+        Assert.False(row.Refused);
     }
+
+    private static RmaDbContext AuditContext(string connectionString) =>
+        new(new DbContextOptionsBuilder<RmaDbContext>()
+            .UseNpgsql(connectionString)
+            .UseSnakeCaseNamingConvention()
+            .Options);
 
     [Fact]
     public async Task A_401_names_the_metadata_document_and_the_document_answers()
@@ -484,35 +518,6 @@ public sealed class McpHttpTransportTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains("check_warranty_coverage", body, StringComparison.Ordinal);
-    }
-
-    /// <summary>Keeps the rows instead of writing them, so a test can read what the guard produced.</summary>
-    private sealed class RecordingAuditSink : IToolAuditSink
-    {
-        private readonly List<ToolCallRecord> _records = [];
-
-        public IReadOnlyList<ToolCallRecord> Records
-        {
-            get
-            {
-                lock (_records)
-                {
-                    return [.. _records];
-                }
-            }
-        }
-
-        public Task RecordAsync(ToolCallRecord record, CancellationToken cancellationToken)
-        {
-            ArgumentNullException.ThrowIfNull(record);
-
-            lock (_records)
-            {
-                _records.Add(record);
-            }
-
-            return Task.CompletedTask;
-        }
     }
 
     /// <summary>
