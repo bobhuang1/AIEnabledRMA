@@ -1,15 +1,15 @@
 {
-  "description": "Golden retrieval questions for the shipped knowledge base. A question is written the way a customer or a bench technician would ask it, and lists every article that would be a correct citation for it. recall@3 is the share of cases whose top three hits include one of the expected articles. P5's acceptance test is 'not worse than the lexical index measured here', so this file owns the floor and the cases, not a test constant.",
+  "description": "Golden retrieval questions for the shipped knowledge base. A question is written the way a customer or a bench technician would ask it, and lists every article that would be a correct citation for it. Forty cases covering all nineteen articles, deliberately including near-miss pairs (trigger vs firmware, decode vs window damage, freeze vs blank screen, cradle vs accessory, who decides vs what evidence) and scoped cases for both product-specific articles. recall@3 is the share of cases whose top three hits include one of the expected articles. P5's acceptance test is 'not worse than the lexical index measured here', so this file owns the floor and the cases, not a test constant.",
   "acceptance": "recall@3 for KnowledgeIndex.Search must be at least recallAt3Floor. Raising the floor is allowed; lowering it needs a note here saying which question the change broke and why that is acceptable.",
-  "recallAt3Floor": 0.71,
+  "recallAt3Floor": 0.77,
   "baseline": {
-    "measuredOn": "2026-11-15",
+    "measuredOn": "2026-11-16",
     "index": "KnowledgeIndex, BM25-style over article token sets, TopK 3, no product families enabled except those the scoped cases name",
-    "recallAt3": 0.714,
-    "mrr": 0.627,
-    "cases": 21,
-    "misses": ["rq-002", "rq-008", "rq-010", "rq-012", "rq-013", "rq-017"],
-    "notes": "The floor is the measurement, not a target: six questions miss today. Five of them lose to an article that matches generic words the query contains (no stopword list, so 'the', 'and' and 'now' are scored terms) or to an inflected form the token sets do not contain ('spilled' against 'spill'). Those are lexical gaps for P5 to close, and this file is how closing them is measured. Do not raise the floor to 1.0 by rewriting the questions into the articles' own wording; the questions are the customer's."
+    "recallAt3": 0.775,
+    "mrr": 0.646,
+    "cases": 40,
+    "misses": ["rq-002", "rq-008", "rq-010", "rq-012", "rq-013", "rq-017", "rq-022", "rq-028", "rq-033"],
+    "notes": "The floor is the measurement, not a target: nine of forty miss today, and they are lexical rather than conceptual, because in each one the questions' distinguishing word never appears in the article — 'switch on' against 'turn on', 'scratch' against 'scratched', 'spilled' against 'spill', 'photos' against 'documentation'. The winners share only the question's generic words ('it', 'not', 'unit', 'now'), which score because there is no stopword list, no stemming and no synonyms. Every miss names the three articles that beat it in the scorer's output. The floor is the measurement rounded down; with forty cases one lost question is 0.025 and fails it, so this is at least as strict as the twenty-one-case file was. Do not raise the floor to 1.0 by rewriting the questions into the articles' own wording; the questions are the customer's."
   },
   "cases": [
     {
@@ -127,6 +127,122 @@
       "question": "will you tell me whether it is still under warranty",
       "expected": ["kb-0001", "kb-0016"],
       "note": "Both articles say the decision is made by the returns system against the serial, not by the assistant."
+    },
+    {
+      "id": "rq-022",
+      "question": "I held the power button for fifteen seconds and it still will not come on",
+      "expected": ["kb-0003", "kb-0001"],
+      "note": "The hard reset is step two of the power-on article; the indicator article is the flat-battery check it sends you to first. Near miss against the reboot article, which is about a unit that comes up."
+    },
+    {
+      "id": "rq-023",
+      "question": "the unit sits on the dock but the light goes out instead of charging",
+      "expected": ["kb-0002", "kb-0001"],
+      "note": "The indicator table sends 'off, unit on the cradle' straight to the cradle article, so either is a fair citation."
+    },
+    {
+      "id": "rq-024",
+      "question": "it was working and then the screen went dark and the touch does nothing",
+      "expected": ["kb-0004"],
+      "note": "Same early words as the freeze article, but the unit is powered and simply not drawing anything: display, not software."
+    },
+    {
+      "id": "rq-025",
+      "question": "it freezes every time I open the stock count app",
+      "expected": ["kb-0014"],
+      "note": "Trigger-specific freeze, which is the reboot article's own advice: record the action, not the count."
+    },
+    {
+      "id": "rq-026",
+      "question": "it rained on the cart and the scanner got soaked",
+      "expected": ["kb-0012"],
+      "note": "The article says any ingress counts, even when the unit still works, so this is liquid rather than impact."
+    },
+    {
+      "id": "rq-027",
+      "question": "it fell off the forklift and the corner is smashed in",
+      "expected": ["kb-0011"],
+      "note": "A second impact case in different words, because 'smashed' is not a keyword in the article and 'cracked' is."
+    },
+    {
+      "id": "rq-028",
+      "question": "the trigger stopped working after our app was updated",
+      "expected": ["kb-0008", "kb-0013"],
+      "note": "Near miss against the firmware article: an app update that drops the scan binding is the trigger article's most common cause, and a failed firmware update is a fair second citation."
+    },
+    {
+      "id": "rq-029",
+      "question": "the label is wrinkled and it beeps without reading the code",
+      "expected": ["kb-0009"],
+      "note": "Label condition and distance are the decode article's step three; the beep means the trigger fired."
+    },
+    {
+      "id": "rq-030",
+      "question": "I lose the connection when I walk behind the racking",
+      "expected": ["kb-0006", "kb-0005"],
+      "note": "Place-dependent loss, phrased without the word 'range': the connectivity articles share the vocabulary of dropping, so both are defensible."
+    },
+    {
+      "id": "rq-031",
+      "question": "my phone never asks for a pairing code",
+      "expected": ["kb-0005"],
+      "note": "Pairing phrase in the customer's words, with no mention of Bluetooth."
+    },
+    {
+      "id": "rq-032",
+      "question": "Windows says unknown USB device after I plug the scanner in",
+      "expected": ["kb-0007"],
+      "note": "Host-side wording ('unknown device') rather than the article's 'not detected'."
+    },
+    {
+      "id": "rq-033",
+      "question": "does the return need photos of the damage",
+      "expected": ["kb-0017"],
+      "note": "Evidence requirements, asked as a yes/no about photos rather than with the article's words."
+    },
+    {
+      "id": "rq-034",
+      "question": "can you approve the replacement for me today",
+      "expected": ["kb-0016"],
+      "note": "Near miss against the evidence article, which is about what a specialist needs, not about who decides."
+    },
+    {
+      "id": "rq-035",
+      "question": "the clip on the belt holster snapped off",
+      "expected": ["kb-0015"],
+      "note": "'Snapped' is impact vocabulary, but a holster is merchandise with no electronics, so the accessory article is the citation."
+    },
+    {
+      "id": "rq-036",
+      "question": "the second scanner in the Vertex dock just sits there showing amber",
+      "expected": ["kb-0018", "kb-0002"],
+      "scope": ["Vertex Widget"],
+      "note": "Scoped article named by its model, with the generic cradle article as the fallback citation."
+    },
+    {
+      "id": "rq-037",
+      "question": "the beacon has been docked all night and the light never turns green",
+      "expected": ["kb-0019", "kb-0001"],
+      "scope": ["Nimbus Beacon"],
+      "note": "Scoped article, described as the customer sees it: amber that never resolves rather than the article's word 'stalled'."
+    },
+    {
+      "id": "rq-038",
+      "question": "what should I write down before the courier comes",
+      "expected": ["kb-0017", "kb-0016"],
+      "note": "Both articles tell the customer what to record; neither is wrong for this phrasing."
+    },
+    {
+      "id": "rq-039",
+      "question": "the scan window looks cloudy and the label will not read",
+      "expected": ["kb-0009", "kb-0010"],
+      "note": "Near miss between decode and window damage: a cloudy window is dirty (decode article, clean it) until it is damaged, so both are correct citations."
+    },
+    {
+      "id": "rq-040",
+      "question": "a glass of water went over the desk and the unit was sitting in it",
+      "expected": ["kb-0012"],
+      "note": "Liquid described by the accident rather than by the word 'spill'; the article is explicit that brief exposure still counts."
     }
   ]
 }

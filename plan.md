@@ -345,20 +345,26 @@ bullets stay as requirements.
   - live pgvector tests in CI (P0's service container).
 
 **Status: not started; its acceptance test now exists, so the first line of it is measurable.**
-- `eval/retrieval-golden.json` holds 21 questions written in a customer's or a bench technician's wording, each
-  naming every article that would be a correct citation, plus the recall@3 floor. It also owns two coverage
+- `eval/retrieval-golden.json` holds 40 questions written in a customer's or a bench technician's wording, each
+  naming every article that would be a correct citation, plus the recall@3 floor. All nineteen articles are
+  covered. Many of the cases are near-miss pairs — trigger vs firmware, decode vs window damage, freeze vs
+  blank screen, cradle vs accessory, who decides vs what evidence — so a scorer cannot pass by matching a
+  category; both product-scoped articles have cases in the customer's own description rather than the article's
+  title. It also owns two coverage
   rules the scorer enforces: a case may not name an article the corpus has dropped, and every article must
   appear in at least one case, so the number cannot quietly measure a shrinking share of the corpus.
 - `RetrievalGoldenSetTests` loads the shipped corpus with review on, builds the real `KnowledgeIndex` with the
   product families the scoped cases name, and scores recall@3 and MRR. It prints every case's rank, so a P5
   change shows which question it broke rather than only that the average moved.
-- Baseline, measured 2026-11-15: **recall@3 = 0.714 (15/21), MRR = 0.627**. The floor in the file is 0.71, so
-  losing one case fails the build and gaining cases is a reviewable diff in the data.
+- Baseline, measured 2026-11-16: **recall@3 = 0.775 (31/40), MRR = 0.646**. The floor in the file is 0.77, so
+  losing one case fails the build and gaining cases is a reviewable diff in the data. The first measurement on
+  21 cases was 0.714 (15/21) with MRR 0.627; the set was extended to forty without weakening any question, and
+  the baseline was re-recorded because the measurement moved, not because the acceptance bar moved down.
 - The eval immediately found two causes worth fixing before or alongside the vector work: the tokeniser has no
   stopword list, so `the`, `and` and `now` are scored terms that let a scanning article outrank "will not switch
   on"; and there is no stemming, so `spilled` does not match `spill`. Neither is fixed here — they are the
-  lexical end of P5, and this file is how the improvement is measured. The six misses are listed in the file's
-  `baseline` block.
+  lexical end of P5, and this file is how the improvement is measured. All nine misses are listed in the file's
+  `baseline` block, each with the articles that beat it.
 
 ### P6. CRM support-case ingestion with PII removed (L) — D1, after P3 and P5
 
