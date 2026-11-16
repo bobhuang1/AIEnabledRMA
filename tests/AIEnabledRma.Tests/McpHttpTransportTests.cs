@@ -182,6 +182,11 @@ public sealed class McpHttpTransportTests
             services.AddSingleton<IToolAuditSink>(audit);
             services.AddSingleton<IDeviceRepository, NoSuchDeviceRepository>();
             services.AddSingleton<IEligibilityService, UnusedEligibilityService>();
+
+            // The production meter counts in PostgreSQL; this test is about the audit row and has
+            // no database, so the counter is replaced the same way the sink is. Everything else —
+            // routing, token validation, the filter, the guard, the identity — stays real.
+            services.AddSingleton<ICallMeter>(new InMemoryCallMeter());
         });
 
         using var client = app.GetTestClient();

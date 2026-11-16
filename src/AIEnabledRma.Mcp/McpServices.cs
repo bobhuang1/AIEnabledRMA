@@ -27,6 +27,12 @@ public static class McpServices
         services.AddSingleton(TimeProvider.System);
         services.AddOptions<McpBudgetOptions>()
             .Bind(configuration.GetSection(McpBudgetOptions.SectionName));
+
+        // The counter is in PostgreSQL, not in this process: two replicas of the HTTP transport
+        // would otherwise each hand out the full allowance, and the limit would multiply by the
+        // replica count while every replica looked compliant. Both transports use the same meter,
+        // so stdio and HTTP cannot disagree about what a caller has spent.
+        services.AddSingleton<ICallMeter, PostgresCallMeter>();
         services.AddSingleton<CallBudget>();
         services.AddScoped<IToolAuditSink, EfToolAuditSink>();
         services.AddToolCallGuard();

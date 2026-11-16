@@ -50,7 +50,9 @@ public sealed class ToolCallGuard(
         var arguments = request.Params?.Arguments;
         var started = Stopwatch.GetTimestamp();
 
-        if (!budget.TryConsumeCall(out var refusal))
+        var budgetDecision = await budget.TryConsumeCallAsync(cancellationToken);
+
+        if (!budgetDecision.Allowed)
         {
             // Refused before the work: the tool is not invoked at all, so the row says the call
             // happened and did nothing.
@@ -59,7 +61,7 @@ public sealed class ToolCallGuard(
             return new CallToolResult
             {
                 IsError = true,
-                Content = [new TextContentBlock { Text = refusal! }],
+                Content = [new TextContentBlock { Text = budgetDecision.Refusal! }],
             };
         }
 

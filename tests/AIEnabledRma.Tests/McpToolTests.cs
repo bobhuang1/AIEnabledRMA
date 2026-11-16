@@ -245,6 +245,7 @@ public sealed class McpAddressResolutionTests
     {
         var customers = new FakeCustomerRepository();
         var budget = new CallBudget(
+            new InMemoryCallMeter(),
             Microsoft.Extensions.Options.Options.Create(new McpBudgetOptions()),
             TimeProvider.System,
             new StdioCallerIdentity());

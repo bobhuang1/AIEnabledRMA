@@ -30,6 +30,8 @@ public sealed class RmaDbContext(DbContextOptions<RmaDbContext> options) : DbCon
 
     public DbSet<McpToolCall> McpToolCalls => Set<McpToolCall>();
 
+    public DbSet<McpCallStamp> McpCallStamps => Set<McpCallStamp>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // snake_case naming is applied by UseSnakeCaseNamingConvention() on the options
@@ -247,6 +249,22 @@ public sealed class McpToolCallConfiguration : IEntityTypeConfiguration<McpToolC
         // agents look up yesterday" scans the newest rows first.
         builder.HasIndex(c => c.AtUtc).HasDatabaseName("ix_mcp_tool_calls_at");
         builder.HasIndex(c => new { c.Tool, c.AtUtc }).HasDatabaseName("ix_mcp_tool_calls_tool_at");
+    }
+}
+
+public sealed class McpCallStampConfiguration : IEntityTypeConfiguration<McpCallStamp>
+{
+    public void Configure(EntityTypeBuilder<McpCallStamp> builder)
+    {
+        builder.ToTable("mcp_call_stamps");
+        builder.HasKey(s => s.Id);
+        builder.Property(s => s.Caller).HasMaxLength(160).IsRequired();
+        builder.Property(s => s.Kind).HasMaxLength(16).IsRequired();
+
+        // Every read is "this caller's stamps of one kind inside the window", and every cleanup is
+        // the same predicate with an older cutoff. One index answers both.
+        builder.HasIndex(s => new { s.Caller, s.Kind, s.AtUtc })
+            .HasDatabaseName("ix_mcp_call_stamps_caller_kind_at");
     }
 }
 

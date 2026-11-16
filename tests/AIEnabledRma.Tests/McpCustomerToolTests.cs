@@ -46,11 +46,12 @@ public sealed class McpCustomerToolTests
     }
 
     private static (CustomerLookupTools Tools, FakeCustomerRepository Customers) Build(
-        int lookupsPerSession = 200)
+        int lookupsPerDay = 200)
     {
         var customers = new FakeCustomerRepository();
         var budget = new CallBudget(
-            Options.Create(new McpBudgetOptions { CustomerLookupsPerSession = lookupsPerSession }),
+            new InMemoryCallMeter(),
+            Options.Create(new McpBudgetOptions { CustomerLookupsPerDay = lookupsPerDay }),
             TimeProvider.System,
             new StdioCallerIdentity());
 
@@ -146,7 +147,7 @@ public sealed class McpCustomerToolTests
     [Fact]
     public async Task A_session_that_exhausts_its_lookup_budget_is_refused_without_querying()
     {
-        var (tools, customers) = Build(lookupsPerSession: 1);
+        var (tools, customers) = Build(lookupsPerDay: 1);
         customers.SearchResults.Add(Josephine());
 
         var first = await tools.FindCustomerAsync(

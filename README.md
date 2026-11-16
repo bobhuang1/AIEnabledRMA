@@ -189,7 +189,10 @@ caller is the process on stdio and the token's client and subject on the HTTP tr
 at one choke point on the `tools/call` request rather than inside each tool, so a tool added later
 is audited and throttled without anyone remembering to wrap it; a refused call is recorded before
 it reaches the tool. On top of that, the customer tools above are limited to 200 customer lookups
-per caller, because that cap is about what a call is for rather than how many there are.
+per caller per day, because that cap is about what a call is for rather than how many there are.
+The counters live in PostgreSQL (`mcp_call_stamps`), not in the process, so the limit is the caller's
+limit and not each replica's: two replicas of the HTTP transport spend one allowance, and a refused
+call leaves no stamp behind.
 Exposing contact data to an authenticated support role still needs a role check; the identity
 provider the transport uses (P2) identifies a client, not a person.
 

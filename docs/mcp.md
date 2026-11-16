@@ -309,5 +309,12 @@ client, because issuers differ in which they mint.
 - **The realm is a development realm.** `sslRequired: none`, a committed client secret, admin
   `admin`/`admin`, and a five-minute token lifetime. A deployment needs its own realm, a secret from
   a secret store, https, and an issuer that is not a loopback name.
-- **Audit and budgets are per process.** Two replicas of the transport each hold their own budget,
-  so the configured limit is per replica. The audit rows are shared, because they are in PostgreSQL.
+- **Budgets are shared, but they cost a database round trip.** The counters are rows in
+  `mcp_call_stamps`, written inside a transaction that takes a per-caller advisory lock, so any
+  number of replicas enforce one allowance and a concurrent pair of calls for the same caller cannot
+  both take the last slot. The cost is a transaction per tool call. The counter fails closed: if the
+  database cannot be reached the call is refused, because a budget that cannot count is not a budget.
+- **The customer-lookup cap is now a day, not a session.** "Session" meant a process, and a process
+  is the thing a deployment duplicates, so a per-session cap reset whenever a caller landed on a
+  fresh replica. `Mcp:Budget:CustomerLookupsPerDay` (default 200) is a rolling 24 hours per caller;
+  `CallsPerMinute` (default 60) is a rolling minute. Neither is reset by a restart.

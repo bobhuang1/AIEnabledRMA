@@ -74,9 +74,11 @@ public sealed class CustomerLookupTools(
                 + "is shorter. A shorter term matches a prefix of the customer table.");
         }
 
-        if (!budget.TryConsumeCustomerLookup(out var refusal))
+        var budgetDecision = await budget.TryConsumeCustomerLookupAsync(cancellationToken);
+
+        if (!budgetDecision.Allowed)
         {
-            return RefusedSearch(refusal!);
+            return RefusedSearch(budgetDecision.Refusal!);
         }
 
         var matches = (await customers.SearchAsync(
@@ -115,9 +117,11 @@ public sealed class CustomerLookupTools(
         Guid customerId,
         CancellationToken cancellationToken = default)
     {
-        if (!budget.TryConsumeCustomerLookup(out var refusal))
+        var budgetDecision = await budget.TryConsumeCustomerLookupAsync(cancellationToken);
+
+        if (!budgetDecision.Allowed)
         {
-            return RefusedAddresses(customerId, refusal!);
+            return RefusedAddresses(customerId, budgetDecision.Refusal!);
         }
 
         var customer = await customers.GetByIdAsync(customerId, cancellationToken);
@@ -160,9 +164,11 @@ public sealed class CustomerLookupTools(
         int take = 20,
         CancellationToken cancellationToken = default)
     {
-        if (!budget.TryConsumeCustomerLookup(out var refusal))
+        var budgetDecision = await budget.TryConsumeCustomerLookupAsync(cancellationToken);
+
+        if (!budgetDecision.Allowed)
         {
-            return RefusedReturns(customerId, refusal!);
+            return RefusedReturns(customerId, budgetDecision.Refusal!);
         }
 
         var all = await rmas.GetForCustomerAsync(customerId, cancellationToken);
@@ -209,9 +215,11 @@ public sealed class CustomerLookupTools(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(freeTextAddress);
 
-        if (!budget.TryConsumeCustomerLookup(out var refusal))
+        var budgetDecision = await budget.TryConsumeCustomerLookupAsync(cancellationToken);
+
+        if (!budgetDecision.Allowed)
         {
-            return RefusedResolution(customerId, refusal!);
+            return RefusedResolution(customerId, budgetDecision.Refusal!);
         }
 
         var resolution = await customers.ResolveAddressAsync(

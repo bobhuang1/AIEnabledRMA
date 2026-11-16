@@ -73,6 +73,7 @@ public sealed class McpToolGuardTests
         services.AddLogging();
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton(Options.Create(budget ?? new McpBudgetOptions()));
+        services.AddSingleton<ICallMeter>(new InMemoryCallMeter());
         services.AddSingleton<CallBudget>();
         services.AddScoped<IToolAuditSink>(_ => audit);
         services.AddSingleton<IDeviceRepository>(devices);
@@ -208,40 +209,43 @@ public sealed class McpToolGuardTests
     }
 
     [Fact]
-    public void Two_callers_spend_their_own_budgets_even_though_the_budget_is_a_singleton()
+    public async Task Two_callers_spend_their_own_budgets_through_one_budget_object()
     {
         // The HTTP transport registers one CallBudget for the whole process. Keyed on the process
         // it would be a shared allowance: the first agent to hit the minute would stop every
         // other agent, and the lookup cap would say nothing about what one agent had walked.
         var request = new RequestThatChanges();
         var budget = new CallBudget(
-            Options.Create(new McpBudgetOptions { CallsPerMinute = 1, CustomerLookupsPerSession = 1 }),
+            new InMemoryCallMeter(),
+            Options.Create(new McpBudgetOptions { CallsPerMinute = 1, CustomerLookupsPerDay = 1 }),
             TimeProvider.System,
             new HttpContextCallerIdentity(request));
 
         request.SignIn("agent-a", "subject-a");
-        Assert.True(budget.TryConsumeCall(out _));
-        Assert.False(budget.TryConsumeCall(out var spent));
-        Assert.NotNull(spent);
-        Assert.Contains("limit", spent, StringComparison.OrdinalIgnoreCase);
+        Assert.True((await budget.TryConsumeCallAsync(TestContext.Current.CancellationToken)).Allowed);
+        var spent = await budget.TryConsumeCallAsync(TestContext.Current.CancellationToken);
+        Assert.False(spent.Allowed);
+        Assert.NotNull(spent.Refusal);
+        Assert.Contains("limit", spent.Refusal, StringComparison.OrdinalIgnoreCase);
 
         // A different token, in the same minute, through the same singleton: its own window.
         request.SignIn("agent-b", "subject-b");
-        Assert.True(budget.TryConsumeCall(out _));
+        Assert.True((await budget.TryConsumeCallAsync(TestContext.Current.CancellationToken)).Allowed);
 
         // And A is still where it was, so the allowance was spent by A and not lent to B.
         request.SignIn("agent-a", "subject-a");
-        Assert.False(budget.TryConsumeCall(out _));
+        Assert.False((await budget.TryConsumeCallAsync(TestContext.Current.CancellationToken)).Allowed);
 
         // The same for the lookup cap: walking the customer table must count against the caller
         // that did it, not against whoever asks next.
         request.SignIn("agent-b", "subject-b");
-        Assert.True(budget.TryConsumeCustomerLookup(out _));
-        Assert.False(budget.TryConsumeCustomerLookup(out var lookups));
-        Assert.NotNull(lookups);
-        Assert.Contains("customer lookups", lookups, StringComparison.OrdinalIgnoreCase);
+        Assert.True((await budget.TryConsumeCustomerLookupAsync(TestContext.Current.CancellationToken)).Allowed);
+        var lookups = await budget.TryConsumeCustomerLookupAsync(TestContext.Current.CancellationToken);
+        Assert.False(lookups.Allowed);
+        Assert.NotNull(lookups.Refusal);
+        Assert.Contains("customer lookups", lookups.Refusal, StringComparison.OrdinalIgnoreCase);
 
         request.SignIn("agent-a", "subject-a");
-        Assert.True(budget.TryConsumeCustomerLookup(out _));
+        Assert.True((await budget.TryConsumeCustomerLookupAsync(TestContext.Current.CancellationToken)).Allowed);
     }
 }

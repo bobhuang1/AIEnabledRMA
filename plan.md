@@ -151,6 +151,27 @@ bullets stay as requirements.
   - a budget refusal.
 
 **Status: shipped, except the unmask tool.** Commits `aa6531c`, `f308981`, `25ca72a`, `cb62e82`.
+- **The budget is in PostgreSQL, because a process is the thing a deployment duplicates.** The first version
+  counted in a singleton dictionary. That is right on stdio, where one agent launches one process, and wrong on
+  the HTTP transport: two replicas each hand out the full allowance, so the configured limit multiplies by the
+  replica count while every replica's own numbers look compliant. The counter is now `mcp_call_stamps` — one row
+  per counted call, deleted as it ages out — and `PostgresCallMeter` takes a place in a transaction that holds a
+  per-caller advisory lock, counts, inserts, and commits only if there was room. Two replicas answering the same
+  caller at the same instant cannot both take the last slot, and a refusal rolls back rather than lengthening
+  the window that follows it. Both transports register the same meter (`McpServices`), so stdio and HTTP cannot
+  drift. `McpSharedBudgetTests` runs two service providers with their own contexts against one real PostgreSQL —
+  the closest thing to two replicas a test can build — and asserts the third call is refused on either replica,
+  a second caller keeps its own window, the lookup cap is shared, and a lookup does not spend the minute window.
+  Putting the counter back in the process (the meter replaced by an instance-level dictionary) fails those sharing
+  tests with `Expected: False, Actual: True` while the per-caller split test still passes — which is precisely how
+  the old budget looked correct on one replica.
+- **The lookup cap is a day, not a session.** "Session" was the process, which is exactly what the replica
+  multiplies, so `Mcp:Budget:CustomerLookupsPerSession` is now `CustomerLookupsPerDay` (default 200, rolling 24
+  hours per caller). A restart no longer refunds it. The minute window stays a rolling minute. Both windows are
+  rows that age out, so no background job is needed for them to move.
+- **The counter fails closed.** A call whose place cannot be counted is refused, not allowed: the budget exists
+  to bound disclosure, and a meter that silently stops metering is worse than a broken tool call. The cost is one
+  transaction and one advisory lock per call, which is the price of a bound that survives replication.
 - Masking through `CustomerProjection`, shared with the wizard; `externalCustomerId` is gone from output and
   `find_customer` refuses short terms and matches email or phone exactly. Pinned by `McpCustomerToolTests`,
   including the enumeration case (a partial email returns nothing).
@@ -159,12 +180,8 @@ bullets stay as requirements.
 - Budgets enforced in `ToolCallGuard` at the MCP `tools/call` filter rather than inside each of the four
   tools, so a tool added later cannot skip them. `McpToolGuardTests` drives the real server over the loopback
   transport. These are in-process tests, not a networked deployment.
-- Both counters are keyed on `ICallerIdentity.Describe()`. The budget is a singleton, which is one session on
-  stdio and one process on HTTP, so until this it was a shared allowance there: any caller could spend the
-  minute window every other caller was relying on, and the lookup cap counted the process rather than the
-  agent. `Two_callers_spend_their_own_budgets_even_though_the_budget_is_a_singleton` pins the split for calls
-  and for lookups. The map of tracked callers is capped at 1000 and forgets the coldest, counters included —
-  a reset for a caller nobody is serving is the price of not letting an identity flood grow it without bound.
+- Both counters are keyed on `ICallerIdentity.Describe()`, so one caller cannot spend another's allowance.
+  `Two_callers_spend_their_own_budgets_through_one_budget_object` pins that split for calls and for lookups.
 - **Outstanding:** `reveal_customer_contact`. D3's default was "masked by default, with an audited unmask
   tool for an authenticated support role"; only the masked half exists, so no role can see a full contact
   record. Nothing is exposed that should not be — the decision is simply not implemented.

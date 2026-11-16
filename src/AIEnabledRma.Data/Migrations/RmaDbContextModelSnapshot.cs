@@ -373,6 +373,38 @@ namespace AIEnabledRma.Data.Migrations
                     b.ToTable("customers", (string)null);
                 });
 
+            modelBuilder.Entity("AIEnabledRma.Domain.Operations.McpCallStamp", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("AtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("at_utc");
+
+                    b.Property<string>("Caller")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("character varying(160)")
+                        .HasColumnName("caller");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("kind");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mcp_call_stamps");
+
+                    b.HasIndex("Caller", "Kind", "AtUtc")
+                        .HasDatabaseName("ix_mcp_call_stamps_caller_kind_at");
+
+                    b.ToTable("mcp_call_stamps", (string)null);
+                });
+
             modelBuilder.Entity("AIEnabledRma.Domain.Operations.McpToolCall", b =>
                 {
                     b.Property<Guid>("Id")
