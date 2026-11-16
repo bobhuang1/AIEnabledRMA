@@ -353,9 +353,14 @@ bullets stay as requirements.
   title. It also owns two coverage
   rules the scorer enforces: a case may not name an article the corpus has dropped, and every article must
   appear in at least one case, so the number cannot quietly measure a shrinking share of the corpus.
-- `RetrievalGoldenSetTests` loads the shipped corpus with review on, builds the real `KnowledgeIndex` with the
-  product families the scoped cases name, and scores recall@3 and MRR. It prints every case's rank, so a P5
-  change shows which question it broke rather than only that the average moved.
+- `RetrievalGoldenSetTests` composes the host's own `AddRag` with review on and the product families the
+  scoped cases name, then scores whatever `IKnowledgeRetriever` that resolves to: recall@3 and MRR, printed per
+  case, so a P5 change shows which question it broke rather than only that the average moved. The scorer itself
+  (`RetrievalGoldenSet` in the RAG project) takes the retriever interface, so a vector store is measured by the
+  same cases, top-three rule and floor by being registered where `KnowledgeIndexRetriever` is — no edit to the
+  test, the data or the floor. `The_scorer_measures_the_retriever_it_is_given` pins that with two stubs, and
+  registering an empty retriever in `AddRag` fails the acceptance test with recall 0.000 without any change to
+  the cases, which is the proof that the number now follows the implementation rather than the class.
 - Baseline, measured 2026-11-16: **recall@3 = 0.775 (31/40), MRR = 0.646**. The floor in the file is 0.77, so
   losing one case fails the build and gaining cases is a reviewable diff in the data. The first measurement on
   21 cases was 0.714 (15/21) with MRR 0.627; the set was extended to forty without weakening any question, and

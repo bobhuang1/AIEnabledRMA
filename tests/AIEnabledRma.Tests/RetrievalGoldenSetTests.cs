@@ -1,97 +1,74 @@
-using System.Text.Json;
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Triage;
 using AIEnabledRma.Rag;
+using AIEnabledRma.Rag.Evaluation;
 using AIEnabledRma.Rag.Knowledge;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AIEnabledRma.Tests;
 
 /// <summary>
-/// P5's acceptance test, written before any vector work exists: retrieval must not get worse than
-/// the lexical index measured here.
+/// P5's acceptance test, written before any vector work exists: retrieval must not get worse than the
+/// lexical index measured here.
 /// </summary>
 /// <remarks>
 /// A recall number is only as good as the questions behind it, so the cases live in
 /// <c>eval/retrieval-golden.json</c> rather than in this file. That file also owns the floor, so a
 /// change that moves the bar is a reviewable diff in the data instead of an edit to one constant.
 ///
+/// Scoring goes through <see cref="IKnowledgeRetriever"/>: this test composes the host's own
+/// registration with <c>AddRag</c> and scores whatever that resolves. A keyed vector store becomes the
+/// measured implementation by being registered there, with no change to this file, the cases or the
+/// floor — which is what makes "not worse than the lexical index" a claim about the product rather
+/// than about one class.
+///
 /// The questions are aimed at the shipped corpus, which is why this loads the real directory rather
 /// than a fixture: a P5 chunker that splits articles differently, or an embedding model that ranks a
 /// sibling above the answer, shows up here as a specific question in the failure message.
-///
-/// Two coverage rules keep the number honest over time. A case may not name an article the corpus
-/// has dropped, or it fails for a reason that reads like a regression; and every article needs at
-/// least one case, or recall@3 silently measures a shrinking share of the corpus as articles are
-/// added.
 /// </remarks>
 public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
 {
-    private static readonly JsonSerializerOptions Json = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
-
-    private sealed record GoldenCase(
-        string Id,
-        string Question,
-        string[] Expected,
-        string[]? Scope = null,
-        string? Note = null);
-
-    private sealed record GoldenSet(
-        string Description,
-        double RecallAt3Floor,
-        GoldenCase[] Cases);
-
     [Fact]
-    public void The_lexical_index_meets_the_recorded_recall_at_three()
+    public async Task The_registered_retriever_meets_the_recorded_recall_at_three()
     {
+        var ct = TestContext.Current.CancellationToken;
         var root = RepositoryRoot();
         var goldenPath = Path.Combine(root, "eval", "retrieval-golden.json");
 
         Assert.True(File.Exists(goldenPath), $"the golden question set is missing at {goldenPath}");
 
-        var golden = JsonSerializer.Deserialize<GoldenSet>(File.ReadAllText(goldenPath), Json);
+        var golden = RetrievalGoldenSet.Load(goldenPath);
 
-        Assert.NotNull(golden);
         Assert.NotEmpty(golden.Cases);
         Assert.InRange(golden.RecallAt3Floor, 0d, 1d);
 
         Assert.Equal(
-            golden.Cases.Length,
+            golden.Cases.Count,
             golden.Cases.Select(c => c.Id).Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(
-            golden.Cases.Length,
+            golden.Cases.Count,
             golden.Cases.Select(c => c.Question).Distinct(StringComparer.OrdinalIgnoreCase).Count());
 
-        var loaded = new KnowledgeBaseLoader(
-            NullLogger<KnowledgeBaseLoader>.Instance,
-            Options.Create(new KnowledgeBaseOptions { RequireReview = true }))
-            .Load(Path.Combine(root, "knowledge-base"));
+        // The host's own registration, configured the way the eval states it measures: the real corpus
+        // path, review on, and the product families the scoped cases name. A vector store replaces
+        // IKnowledgeRetriever here and is measured by these same cases.
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(ConfigurationFor(root, golden))
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddRag(configuration);
+
+        await using var provider = services.BuildServiceProvider();
+
+        var loaded = provider.GetRequiredService<KnowledgeBaseLoadResult>();
 
         Assert.Empty(loaded.Errors);
 
-        // The families the golden set names, and only those. A scoped article is inert unless the
-        // deployment enables its family, so the eval states the configuration it measures instead
-        // of inheriting whatever a default happens to be.
-        var families = golden.Cases
-            .SelectMany(c => c.Scope ?? [])
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var index = new KnowledgeIndex(
-            loaded,
-            Options.Create(new RagRetrievalOptions()),
-            Options.Create(new RagOptions { EnabledProductFamilies = families }));
-
-        var corpusIds = loaded.Articles.Select(a => a.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var unknown = golden.Cases
-            .SelectMany(c => c.Expected.Select(id => (Case: c.Id, Article: id)))
-            .Where(x => !corpusIds.Contains(x.Article))
-            .Select(x => $"{x.Case} expects {x.Article}")
-            .ToList();
+        var corpusIds = loaded.Articles.Select(a => a.Id).ToList();
+        var (unknown, uncovered) = RetrievalGoldenSet.Coverage(golden, corpusIds);
 
         Assert.True(
             unknown.Count == 0,
@@ -100,16 +77,6 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
             + Environment.NewLine
             + string.Join(Environment.NewLine, unknown));
 
-        var expectedIds = golden.Cases
-            .SelectMany(c => c.Expected)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var uncovered = loaded.Articles
-            .Select(a => a.Id)
-            .Where(id => !expectedIds.Contains(id))
-            .OrderBy(id => id, StringComparer.Ordinal)
-            .ToList();
-
         Assert.True(
             uncovered.Count == 0,
             "no golden question expects these articles, so the eval would measure less and less of "
@@ -117,53 +84,132 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
             + Environment.NewLine
             + string.Join(Environment.NewLine, uncovered));
 
-        var results = golden.Cases
-            .Select(goldenCase =>
-            {
-                var retrieval = index.Search(new KnowledgeRetrievalQuery
-                {
-                    Query = goldenCase.Question,
-                    ScopeTokens = (goldenCase.Scope ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase),
-                    CategoryHints = [],
-                    TopK = 3,
-                });
+        var retriever = provider.GetRequiredService<IKnowledgeRetriever>();
+        var score = await RetrievalGoldenSet.ScoreAsync(golden, retriever, ct);
 
-                var top3 = retrieval.Articles.Select(a => a.Id).ToArray();
-                var rank = top3
-                    .Select((id, position) => (Id: id, Position: position))
-                    .Where(x => goldenCase.Expected.Contains(x.Id, StringComparer.OrdinalIgnoreCase))
-                    .Select(x => x.Position + 1)
-                    .DefaultIfEmpty(0)
-                    .First();
-
-                output.WriteLine(
-                    $"{goldenCase.Id} {(rank > 0 ? "hit " : "MISS")} rank={rank} [{string.Join(",", top3)}] "
-                    + $"<- {goldenCase.Question}");
-
-                return (Case: goldenCase, Rank: rank);
-            })
-            .ToList();
-
-        var hits = results.Count(r => r.Rank > 0);
-        var recall = hits / (double)results.Count;
-        var meanReciprocalRank = results.Average(r => r.Rank == 0 ? 0d : 1d / r.Rank);
+        foreach (var caseScore in score.Cases)
+        {
+            output.WriteLine(
+                $"{caseScore.Case.Id} {(caseScore.Rank > 0 ? "hit " : "MISS")} rank={caseScore.Rank} "
+                + $"[{string.Join(",", caseScore.Top)}] <- {caseScore.Case.Question}");
+        }
 
         output.WriteLine(
-            $"recall@3 = {recall:0.000} ({hits}/{results.Count}); MRR = {meanReciprocalRank:0.000}; "
-            + $"floor = {golden.RecallAt3Floor:0.000}");
+            $"recall@3 = {score.RecallAt3:0.000} ({score.Hits}/{score.Cases.Count}); "
+            + $"MRR = {score.Mrr:0.000}; floor = {score.Floor:0.000}");
 
-        var misses = results
-            .Where(r => r.Rank == 0)
-            .Select(r => $"{r.Case.Id} '{r.Case.Question}' expected one of [{string.Join(",", r.Case.Expected)}]")
+        var misses = score.Misses
+            .Select(c =>
+                $"{c.Case.Id} '{c.Case.Question}' expected one of [{string.Join(",", c.Case.Expected)}]")
             .ToList();
 
         Assert.True(
-            recall >= golden.RecallAt3Floor,
-            $"recall@3 is {recall:0.000} ({hits}/{results.Count}), below the recorded floor "
-            + $"{golden.RecallAt3Floor:0.000}. Either retrieval got worse or the floor was "
+            score.MeetsFloor,
+            $"recall@3 is {score.RecallAt3:0.000} ({score.Hits}/{score.Cases.Count}), below the "
+            + $"recorded floor {score.Floor:0.000}. Either retrieval got worse or the floor was "
             + "deliberately lowered; say which in eval/retrieval-golden.json."
             + Environment.NewLine
             + string.Join(Environment.NewLine, misses));
+    }
+
+    /// <summary>
+    /// Pins the seam rather than the index: the same cases and floor, two different retrievers, and the
+    /// score follows the retriever. Without this the eval could pass while measuring nothing but the
+    /// class it happens to construct.
+    /// </summary>
+    [Fact]
+    public async Task The_scorer_measures_the_retriever_it_is_given()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var golden = new GoldenSet
+        {
+            Description = "in memory, for the seam only",
+            RecallAt3Floor = 1d,
+            Cases =
+            [
+                new GoldenSetCase { Id = "s-1", Question = "first", Expected = ["kb-0001"] },
+                new GoldenSetCase { Id = "s-2", Question = "second", Expected = ["kb-0002"] },
+                new GoldenSetCase
+                {
+                    Id = "s-3",
+                    Question = "scoped",
+                    Expected = ["kb-0019"],
+                    Scope = ["Nimbus Beacon"],
+                },
+            ],
+        };
+
+        var queries = new List<KnowledgeRetrievalQuery>();
+
+        var partial = new StubRetriever(query =>
+        {
+            queries.Add(query);
+
+            // Only the scoped question is answered correctly: enough to prove the rank rule, and that
+            // the scope each case declares reaches the retriever unchanged.
+            return Articles(query.Query == "scoped" ? "kb-0019" : "kb-0007");
+        });
+
+        var measured = await RetrievalGoldenSet.ScoreAsync(golden, partial, ct);
+
+        Assert.Equal(1, measured.Hits);
+        Assert.Equal(1d / 3, measured.RecallAt3, 3);
+        Assert.Equal(1d / 3, measured.Mrr, 3);
+        Assert.False(measured.MeetsFloor);
+        Assert.All(queries, query => Assert.Equal(RetrievalGoldenSet.TopK, query.TopK));
+        Assert.Contains(queries, query => query.ScopeTokens.Contains("Nimbus Beacon"));
+
+        var perfect = new StubRetriever(query =>
+            Articles(golden.Cases.Single(c => c.Question == query.Query).Expected[0]));
+
+        var passing = await RetrievalGoldenSet.ScoreAsync(golden, perfect, ct);
+
+        Assert.Equal(1d, passing.RecallAt3);
+        Assert.Equal(1d, passing.Mrr);
+        Assert.True(passing.MeetsFloor);
+    }
+
+    /// <summary>The corpus path, review, and families the eval states it measures with.</summary>
+    private static Dictionary<string, string?> ConfigurationFor(string root, GoldenSet golden)
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["Rag:KnowledgeBasePath"] = Path.Combine(root, "knowledge-base"),
+
+            // On, because the published corpus is reviewed and the eval should not pass on an article
+            // the host would refuse to serve.
+            ["Rag:KnowledgeBase:RequireReview"] = "true",
+        };
+
+        var families = RetrievalGoldenSet.RequiredFamilies(golden);
+
+        for (var index = 0; index < families.Count; index++)
+        {
+            settings[$"Rag:EnabledProductFamilies:{index}"] = families[index];
+        }
+
+        return settings;
+    }
+
+    private static IReadOnlyList<RetrievedArticle> Articles(string id) =>
+    [
+        new RetrievedArticle
+        {
+            Id = id,
+            Title = id,
+            Category = "evaluation",
+            Score = 1d,
+        },
+    ];
+
+    private sealed class StubRetriever(
+        Func<KnowledgeRetrievalQuery, IReadOnlyList<RetrievedArticle>> respond) : IKnowledgeRetriever
+    {
+        public Task<KnowledgeRetrievalResult> RetrieveAsync(
+            KnowledgeRetrievalQuery query,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new KnowledgeRetrievalResult { Articles = respond(query) });
     }
 
     /// <summary>
