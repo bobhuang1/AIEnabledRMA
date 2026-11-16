@@ -29,3 +29,21 @@ azure-pipelines.yml
 docs/
 *.md
 !README.md
+
+# Sources of things that are not built into the image. Restore and publish name the MCP and Web
+# projects directly, so the test suite, the retrieval evaluation set and the DbAdmin tool are never
+# compiled here; they only made the context bigger and every `COPY . .` layer different.
+tests/
+eval/
+tools/
+.githooks/
+.config/
+.freebuff/
+
+# Local secrets and logs. A build layer keeps what it was handed even when the file is absent from
+# the final stage, so a .env with a real key in the context is a key in the cache on this machine and
+# in anything that pushes the layer. None of these belong in an image.
+.env
+.env.*
+*.log
+**/TestResults/
