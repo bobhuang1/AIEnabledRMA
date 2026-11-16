@@ -254,7 +254,16 @@ bullets stay as requirements.
   pins the fallback. Replacing the challenge with the framework default fails the first on the missing pointer.
 - **Outstanding:**
 
-  - The audit row's caller is unit-tested, not asserted end-to-end against a tool call.
+- The audit row's caller is now asserted where it is produced: `A_tool_call_over_http_is_audited_as_the_token_s_client_and_subject`
+  sends a real `tools/call` with a token carrying `client_id` and `sub` and asserts the row says
+  `rma-agent:agent-1`. It replaces the sink and the device repository so no database is needed; routing, token
+  validation and the tools/call filter are the real ones. Making `HttpContextCallerIdentity` answer with the local
+  name — the exact failure a transport change could introduce unnoticed — fails it with
+  `Expected: "rma-agent:agent-1", Actual: "stdio:local"`.
+- That test immediately found a real defect the identity unit test could not see: JWT inbound claim mapping
+  renames `sub` to a schema URI, so every HTTP audit row recorded `unknown-subject` for a perfectly valid token.
+  The host now sets `MapInboundClaims = false` and reads the token's own claim names, which is what the identity
+  class and `NameClaimType` already assumed.
 
 ### P3. Redact before every model call (M) — F3
 

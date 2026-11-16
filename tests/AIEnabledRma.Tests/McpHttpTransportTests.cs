@@ -3,6 +3,9 @@ using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Catalog;
+using AIEnabledRma.Domain.Rules;
 using AIEnabledRma.Mcp;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
@@ -36,7 +39,8 @@ public sealed class McpHttpTransportTests
     /// The real host, built by the same code a deployment runs, on the in-memory test server so
     /// the request the test sends is the request the server routes.
     /// </summary>
-    private static async Task<WebApplication> BuildHostAsync()
+    private static async Task<WebApplication> BuildHostAsync(
+        Action<IServiceCollection>? configureServices = null)
     {
         var app = McpHttpHost.Build(
             [
@@ -47,27 +51,36 @@ public sealed class McpHttpTransportTests
                 $"--{McpHttpOptions.SectionName}:AllowedClientIds:0={ClientId}",
             ],
             host => host.UseTestServer(),
-            services => services.PostConfigure<JwtBearerOptions>(
-                JwtBearerDefaults.AuthenticationScheme,
-                options =>
-                {
-                    // No realm is running here. The issuer and audience the host validated are
-                    // kept; the discovery document is replaced by a key this test controls, so a
-                    // token signed with anything else is refused exactly as a forged one would be.
-                    options.Authority = null;
-                    options.RequireHttpsMetadata = false;
-                    options.TokenValidationParameters = new TokenValidationParameters
+            services =>
+            {
+                services.PostConfigure<JwtBearerOptions>(
+                    JwtBearerDefaults.AuthenticationScheme,
+                    options =>
                     {
-                        ValidateIssuer = true,
-                        ValidIssuer = Issuer,
-                        ValidateAudience = true,
-                        ValidAudience = Audience,
-                        ValidateLifetime = true,
-                        RequireExpirationTime = true,
-                        ValidateIssuerSigningKey = true,
-                        IssuerSigningKey = new SymmetricSecurityKey(SigningKey),
-                    };
-                }));
+                        // No realm is running here. The issuer and audience the host validated are
+                        // kept; the discovery document is replaced by a key this test controls, so
+                        // a token signed with anything else is refused exactly as a forged one
+                        // would be.
+                        options.Authority = null;
+                        options.RequireHttpsMetadata = false;
+                        options.TokenValidationParameters = new TokenValidationParameters
+                        {
+                            ValidateIssuer = true,
+                            ValidIssuer = Issuer,
+                            ValidateAudience = true,
+                            ValidAudience = Audience,
+                            ValidateLifetime = true,
+                            RequireExpirationTime = true,
+                            ValidateIssuerSigningKey = true,
+                            IssuerSigningKey = new SymmetricSecurityKey(SigningKey),
+                        };
+                    });
+
+                // A caller can swap the sink and the repositories: a test that needs a tool to run
+                // without a database replaces them here, and the swap does not touch the pipeline
+                // under test.
+                configureServices?.Invoke(services);
+            });
 
         await app.StartAsync(TestContext.Current.CancellationToken);
 
@@ -146,6 +159,62 @@ public sealed class McpHttpTransportTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    /// <summary>
+    /// The audit row's caller, asserted where it is actually produced: a real <c>tools/call</c> over
+    /// HTTP, with a token that names a client and a subject.
+    /// </summary>
+    /// <remarks>
+    /// The caller identity is unit-tested on its own, which is exactly how a transport change can
+    /// leave every HTTP row saying <c>stdio:local</c> without a test noticing: the unit test builds
+    /// its own <c>HttpContext</c>, so it passes while the host has none. This test asks the host.
+    /// The sink and the catalogue are replaced so no database is needed; everything between the
+    /// request and the sink — routing, token validation, the tools/call filter — is the real one.
+    /// </remarks>
+    [Fact]
+    public async Task A_tool_call_over_http_is_audited_as_the_token_s_client_and_subject()
+    {
+        var audit = new RecordingAuditSink();
+
+        using var app = await BuildHostAsync(services =>
+        {
+            services.AddSingleton<IToolAuditSink>(audit);
+            services.AddSingleton<IDeviceRepository, NoSuchDeviceRepository>();
+            services.AddSingleton<IEligibilityService, UnusedEligibilityService>();
+        });
+
+        using var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+        {
+            Content = new StringContent(
+                """
+                {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"check_warranty_coverage","arguments":{"identifier":"AX2-0001-0001","today":"2026-11-16"}}}
+                """,
+                Encoding.UTF8,
+                "application/json"),
+        };
+
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Token());
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+
+        using var response = await client.SendAsync(
+            request,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var record = Assert.Single(audit.Records);
+
+        Assert.Equal("check_warranty_coverage", record.Tool);
+
+        // The token minted above carries client_id rma-agent and sub agent-1, so that is what the
+        // row has to say. The stdio name here would mean the host's HttpContext never reached the
+        // guard, which is the failure a unit test on the identity class cannot see.
+        Assert.Equal($"{ClientId}:agent-1", record.Caller);
+        Assert.NotEqual(ToolCallGuard.CallerName, record.Caller);
     }
 
     [Fact]
@@ -410,6 +479,80 @@ public sealed class McpHttpTransportTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains("check_warranty_coverage", body, StringComparison.Ordinal);
+    }
+
+    /// <summary>Keeps the rows instead of writing them, so a test can read what the guard produced.</summary>
+    private sealed class RecordingAuditSink : IToolAuditSink
+    {
+        private readonly List<ToolCallRecord> _records = [];
+
+        public IReadOnlyList<ToolCallRecord> Records
+        {
+            get
+            {
+                lock (_records)
+                {
+                    return [.. _records];
+                }
+            }
+        }
+
+        public Task RecordAsync(ToolCallRecord record, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+
+            lock (_records)
+            {
+                _records.Add(record);
+            }
+
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// An empty catalogue. The tool's miss path still returns a result, which is all the test needs:
+    /// the row is written for the call, not for a hit.
+    /// </summary>
+    private sealed class NoSuchDeviceRepository : IDeviceRepository
+    {
+        public Task<Device?> GetBySerialAsync(string serialNumber, CancellationToken cancellationToken) =>
+            Task.FromResult<Device?>(null);
+
+        public Task<IReadOnlyList<Device>> FindByIdentifierAsync(
+            string identifier,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<Device>>([]);
+
+        public Task<IReadOnlyList<Device>> SearchAsync(
+            DeviceSearchQuery query,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<Device>>([]);
+
+        public Task<DeviceLookupResult> LookupAsync(
+            string identifier,
+            DateOnly today,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new DeviceLookupResult { Device = null, Identifier = identifier });
+
+        public Task<DeviceLookupResult> LookupExactAsync(
+            string identifier,
+            DateOnly today,
+            CancellationToken cancellationToken) =>
+            LookupAsync(identifier, today, cancellationToken);
+
+        public Task<bool> HasReturnInProgressAsync(
+            Guid deviceId,
+            Guid? excludingRequestId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(false);
+    }
+
+    /// <summary>Reached only when the tool finds a device, which the empty catalogue prevents.</summary>
+    private sealed class UnusedEligibilityService : IEligibilityService
+    {
+        public RmaEligibilityDecision Evaluate(RmaPolicyRequest request) =>
+            throw new InvalidOperationException("No device resolved, so policy must not be evaluated.");
     }
 }
 

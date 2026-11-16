@@ -39,6 +39,12 @@ public static class McpHttpAuthentication
 
                 options.Audience = http.Audience;
 
+                // Keep the JWT's own claim names. The default inbound mapping renames `sub` to a
+                // schema URI, and this host reads `sub`, `client_id` and `scope` by name — with the
+                // mapping on, every audit row recorded `unknown-subject` for a valid token, which
+                // the HTTP-level audit test caught and the identity unit test could not.
+                options.MapInboundClaims = false;
+
                 options.TokenValidationParameters = new TokenValidationParameters
                 {
                     ValidateIssuer = true,
