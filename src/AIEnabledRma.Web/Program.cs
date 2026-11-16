@@ -250,18 +250,15 @@ static bool AnswersWithACapability(HttpContext context)
         return true;
     }
 
-    // These answer with a 302 whose Location carries one of the above, so a stored response would
-    // send a later visitor to a step belonging to whoever came before. Start is a GET when the form
-    // is rendered — nothing is pending yet — and a POST when it is submitted, which is the one with
-    // somewhere to point.
-    if (HttpMethods.IsGet(context.Request.Method)
-        || context.Request.RouteValues["action"] is not string action)
-    {
-        return false;
-    }
-
-    return string.Equals(action, "Start", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(action, "ChooseCustomer", StringComparison.OrdinalIgnoreCase);
+    // Everything else that is not a GET is a step being submitted, and every one of them answers
+    // with a 302 whose Location is the next address in that visit: a return id for Problems,
+    // Shipping, Payment and Confirm, the chooser's offer key for Start. A stored copy would send a
+    // later visitor into a step belonging to whoever came before. The rule is the verb rather than a
+    // list of action names, because a list means the next step added to the wizard is quietly
+    // storable until someone remembers to extend it — which is how this predicate already missed the
+    // chooser once. A GET renders a form and has nothing pending yet, so it is left alone unless the
+    // address itself carries a capability.
+    return !HttpMethods.IsGet(context.Request.Method);
 }
 
 app.Run();

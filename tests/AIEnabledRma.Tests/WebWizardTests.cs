@@ -1038,6 +1038,36 @@ public sealed class WebWizardTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Found, posted.StatusCode);
         Assert.True(posted.Headers.CacheControl?.NoStore);
 
+        // Every step POST answers the same way, and the rule is the verb rather than a list of
+        // action names: /Problems, /Shipping, /Payment and /Confirm were all storable while the
+        // predicate named Start and ChooseCustomer. Asserting one of them here is what keeps the
+        // verb rule honest, because a list would pass everything above and fail only this.
+        var problemsPage = await client.GetAsync($"/RmaWizard/Problems/{rmaId}", ct);
+        Assert.Equal(HttpStatusCode.OK, problemsPage.StatusCode);
+
+        var deviceId = await DeviceIdAsync(EligibleSerial, ct);
+        var problems = await client.PostAsync(
+            "/RmaWizard/Problems",
+            new FormUrlEncodedContent(
+            [
+                new KeyValuePair<string, string>(
+                    "__RequestVerificationToken",
+                    TokenOf(await problemsPage.Content.ReadAsStringAsync(ct))),
+                new KeyValuePair<string, string>("RmaId", rmaId.ToString()),
+                new KeyValuePair<string, string>("Lines[0].DeviceId", deviceId.ToString()),
+                new KeyValuePair<string, string>("Lines[0].SerialNumber", EligibleSerial),
+                new KeyValuePair<string, string>("Lines[0].Description", "Screen stays black although the fan is running."),
+                new KeyValuePair<string, string>("Lines[0].WhatCustomerTried", "Reseated the cable and tried a second outlet."),
+            ]),
+            ct);
+
+        Assert.Equal(HttpStatusCode.Found, problems.StatusCode);
+        Assert.StartsWith(
+            $"/RmaWizard/Shipping/{rmaId}",
+            problems.Headers.Location!.OriginalString,
+            StringComparison.Ordinal);
+        Assert.True(problems.Headers.CacheControl?.NoStore);
+
         // Scoped to the wizard: an ordinary page is not handed the directive by accident.
         var home = await client.GetAsync("/", ct);
 

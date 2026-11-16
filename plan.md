@@ -430,8 +430,9 @@ bullets stay as requirements.
 - The security headers are asserted on a real response in `WebWizardTests`.
 - Every response that answers a capability sends `Cache-Control: no-store, no-cache, max-age=0` and
   `Pragma: no-cache`, set by a middleware that runs after routing. A capability is either a return id in
-  the route or the chooser's `offer`/`identifiers`, plus the POST steps whose 302 carries one into `Location`
-  (`Start` and `ChooseCustomer`): the chooser's offer key resolves server-side to the accounts the visitor was
+  the route or the chooser's `offer`/`identifiers`, plus *every* non-GET `/RmaWizard` request, because every step POST
+  answers with a 302 whose `Location` is the next capability address — the rule is the verb, not an action list, after
+  a list missed the chooser and then the Problems/Shipping/Payment/Confirm redirects: the chooser's offer key resolves server-side to the accounts the visitor was
   shown and the page hands back the account id to pick, so a cached chooser lets the next person on that
   machine start a return as the previous customer without knowing their address. Expiry bounds drafts, not caches: a page kept by a shared browser or an intermediary would
   hand the next person on that machine a working capability link for a return that has already been confirmed.
@@ -439,7 +440,8 @@ bullets stay as requirements.
   this adds — with the middleware disabled, `A_capability_step_cannot_be_stored_by_a_browser_or_a_cache` fails
   on the redirect carrying no `Cache-Control` at all. `The_chooser_cannot_be_stored_because_the_offer_key_is_a_capability`
   covers the chooser side: the 302 out of `Start`, the chooser page itself, and the 302 out of `ChooseCustomer`,
-  each of which used to carry no `Cache-Control`. The tests also assert an ordinary page gets no directive, so
+  each of which used to carry no `Cache-Control`. The capability-step test also submits the Problems step and
+  asserts its 302 is marked, so narrowing the predicate back to an action list fails there. The tests also assert an ordinary page gets no directive, so
   the header is scoped rather than sprayed. `Start` as a GET is deliberately unmarked: nothing is pending yet.
 - `/health` is public liveness only: an anonymous caller gets `{"status":"ok"}` and nothing else, the shape the
   RAG host's `/health` uses. The counts and the provider name are behind the operator key that host already
