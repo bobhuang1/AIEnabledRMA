@@ -17,7 +17,7 @@ not a signing key held by a test.
 
 ## What the realm has to provide
 
-Three things, all committed in `infra/keycloak/realm-aienabledrma.json`:
+Four things, all committed in `infra/keycloak/realm-aienabledrma.json`:
 
 1. **Realm** `aienabledrma` — the issuer is `{keycloak}/realms/aienabledrma`.
 2. **Client scope** `rma:read` — grants the scope the tool server requires, and is a default
@@ -26,9 +26,15 @@ Three things, all committed in `infra/keycloak/realm-aienabledrma.json`:
    Keycloak does not put an audience for another service in a token by default, and the server
    checks `aud` exactly, so the mapper is the difference between a `401` and a working agent.
 
+4. **Public client** `mcp-browser` — the authorization-code flow with PKCE (`S256` enforced), no
+   secret, and one accepted redirect (`http://localhost:5173/*`). It exists so a page can get a
+   token; without it an allow-listed origin had permission to call the transport and no way to
+   obtain the credential.
+
 The realm also carries one machine client, `mcp-agent`, with `serviceAccountsEnabled: true` and
-the committed secret `mcp-agent-secret`. Both the secret and the admin account are demo values for
-a loopback-only container; nothing here belongs in a deployment.
+the committed secret `mcp-agent-secret`, plus a development user `browser-demo` whose password is
+in the file. Every one of those is a demo value for a loopback-only container; nothing here
+belongs in a deployment.
 
 ## Start the identity provider
 
@@ -155,11 +161,84 @@ The origin allow-list is also the CORS policy. A page served from an origin in
   CORS headers, which is what makes the browser refuse to send the real request; the server-side
   refusal is the `403` above.
 - `Mcp-Session-Id` is exposed, so a client can read a session id if the transport issues one.
-- The compose service leaves `AllowedOrigins` empty, so the browser path is off in the quick start
-  above and its preflight comes back with no allow-origin header. Add
-  `Mcp__Http__AllowedOrigins__0=<your origin>` to the `mcp-http` service to try it.
-- The token still has to come from somewhere. This realm defines no public client, so a browser
-  client is only practical once one exists; that is a realm change, not a transport change.
+- The compose service lists `http://localhost:5173` and the `mcp-browser` client, so the flow below
+  works against it as checked out. A different page origin needs both
+  `Mcp__Http__AllowedOrigins__0=<your origin>` and, if it signs in as itself, an entry in
+  `AllowedClientIds`.
+
+### Signing in from a browser (PKCE)
+
+`mcp-browser` is public: there is no secret, so PKCE is what binds the code to the page that asked
+for it, and the realm rejects an authorize request without a `code_challenge`.
+
+1. Generate a verifier and its SHA-256 challenge:
+
+   ```bash
+   VERIFIER=$(openssl rand -hex 32)
+   CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary \
+     | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+   ```
+
+2. Send the browser to the authorization endpoint. `scope` must include `openid` for the flow and
+   `rma:read` for the tools:
+
+   ```text
+   http://localhost:8080/realms/aienabledrma/protocol/openid-connect/auth
+     ?client_id=mcp-browser
+     &response_type=code
+     &scope=openid%20rma%3Aread
+     &redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fcallback
+     &code_challenge=$CHALLENGE
+     &code_challenge_method=S256
+   ```
+
+   Sign in as `browser-demo` / `browser-demo`. The account exists only in the development realm
+   import; it holds no roles, so what it can do is exactly what the client's scopes grant.
+
+3. Keycloak redirects to `http://localhost:5173/callback?code=...&session_state=...`. The page trades
+   the code, with no secret and with the verifier:
+
+   ```bash
+   curl -s -X POST \
+     http://localhost:8080/realms/aienabledrma/protocol/openid-connect/token \
+     -d 'grant_type=authorization_code' \
+     -d 'client_id=mcp-browser' \
+     -d "code=$CODE" \
+     -d 'redirect_uri=http://localhost:5173/callback' \
+     -d "code_verifier=$VERIFIER"
+   ```
+
+   A replayed code, a missing verifier, or a verifier that does not hash to the challenge is a
+   `400 invalid_grant`. That is the whole protection, so the page must not keep the verifier in
+   `localStorage` where a script can read it later.
+
+4. The access token carries the same four claims as the machine client's, with `azp: mcp-browser`.
+   Send it as `Authorization: Bearer`, from the page whose origin is listed, and the transport
+   answers like it does for an agent:
+
+   ```bash
+   curl -sS -o /dev/null -w '%{http_code}\n' \
+     -X POST http://localhost:5080/mcp \
+     -H "Authorization: Bearer $TOKEN" \
+     -H 'Origin: http://localhost:5173' \
+     -H 'Content-Type: application/json' \
+     -H 'Accept: application/json, text/event-stream' \
+     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"runbook-browser","version":"1"}}}'
+   ```
+
+   `200`, with `Access-Control-Allow-Origin: http://localhost:5173` on the response. The token lasts
+   five minutes and Keycloak issues a refresh token for the flow; a page that keeps a refresh token
+   for hours has undone the short lifetime, so refresh on demand and drop it.
+
+   The browser flow's `scope` claim reads `openid rma:read`, not `rma:read`: `openid` is part of the
+   authorization-code request, and the transport checks for its required scope among the
+   space-separated values rather than comparing the whole claim, so the extra scope is expected.
+   The claim set measured from a real run: `iss=http://keycloak:8080/realms/aienabledrma`,
+   `aud=aienabledrma-mcp`, `scope="openid rma:read"`, `azp=mcp-browser`.
+
+   A browser page is not needed to prove any of this: the authorize request and the sign-in form can
+   be driven with curl and a cookie jar, which is how the check in the `200` above was made. What
+   the browser adds is `Origin` on the request and the preflight that precedes it.
 
 ## Configuration
 
@@ -186,9 +265,9 @@ client, because issuers differ in which they mint.
 - **A browser client holds its token where page scripts can reach it.** The transport now admits
   allow-listed origins (see below), but a token in a browser is a token any script on that page can
   read; keep its lifetime short and list only origins you would trust with it.
-- **The realm's client is a service account, not a browser flow.** `mcp-agent` is confidential and
-  uses `client_credentials`. A real browser client needs a public client with PKCE, which this realm
-  does not define.
+- **The browser client is a runbook client, not a shipped page.** `mcp-browser` and the
+  `browser-demo` user exist so the flow can be exercised; there is no page in this repository that
+  performs the sign-in, and the committed password is a development value.
 - **The realm is a development realm.** `sslRequired: none`, a committed client secret, admin
   `admin`/`admin`, and a five-minute token lifetime. A deployment needs its own realm, a secret from
   a secret store, https, and an issuer that is not a loopback name.

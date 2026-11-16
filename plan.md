@@ -212,6 +212,17 @@ bullets stay as requirements.
   edit cannot be pinned by an old copy — and the `mcp-http` compose profile runs the transport beside it with
   `Mcp__Http__Issuer=http://keycloak:8080/realms/aienabledrma`. The image is the ASP.NET runtime now, because
   this mode listens.
+- The realm also defines the public client `mcp-browser` (PKCE with `S256` enforced, no secret, one accepted
+  loopback redirect) and a `browser-demo` user, because an allow-listed origin with no way to obtain a token is
+  not a browser client. The compose service lists both clients and the page origin, so the browser flow works
+  as checked out.
+- Verified end to end through the browser flow, not just the machine one: authorize `200`, sign-in `302` to
+  `http://localhost:5173/callback?code=...`, code exchanged with the verifier and no secret, and the resulting
+  token carries `iss=http://keycloak:8080/realms/aienabledrma`, `aud=aienabledrma-mcp`,
+  `scope="openid rma:read"` and `azp=mcp-browser`. The preflight from `http://localhost:5173` answers `204` with
+  that origin echoed, `POST /mcp` with the token and that `Origin` answers `200`, and the same token from an
+  unlisted origin answers `403`. Code replay and a missing verifier were not separately exercised, so
+  `400 invalid_grant` is Keycloak's documented behaviour rather than something measured here.
 - Verified against that realm rather than against a test-held key: the imported client's token carries
   `iss=http://localhost:8080/realms/aienabledrma`, `aud=aienabledrma-mcp`, `scope=rma:read` and `azp=mcp-agent`;
   `POST /mcp` with it answers `200` with the `initialize` result as one server-sent event, `tools/list` answers

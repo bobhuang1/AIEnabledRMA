@@ -52,6 +52,49 @@
       "attributes": {
         "access.token.lifespan": "300"
       }
+    },
+    {
+      "clientId": "mcp-browser",
+      "name": "MCP browser client (public, PKCE)",
+      "description": "A public client for the runbook's browser flow. It has no secret to leak, requires PKCE with S256, and accepts only a loopback redirect; the authorization-code flow is the only grant it can run.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:5173/*"
+      ],
+      "webOrigins": [
+        "http://localhost:5173"
+      ],
+      "defaultClientScopes": [
+        "rma:read"
+      ],
+      "optionalClientScopes": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "access.token.lifespan": "300"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "browser-demo",
+      "enabled": true,
+      "email": "browser-demo@example.com",
+      "emailVerified": true,
+      "firstName": "Browser",
+      "lastName": "Demo",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "browser-demo",
+          "temporary": false
+        }
+      ]
     }
   ]
 }
