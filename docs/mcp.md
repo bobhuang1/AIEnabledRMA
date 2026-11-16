@@ -108,6 +108,43 @@ Keycloak by**, and the token's `iss` has to equal it exactly: a server validatin
 both are the same realm. Either use one hostname on both sides, or configure
 `KC_HOSTNAME` to pin the issuer for a real deployment.
 
+## Discovery (RFC 9728)
+
+A client given only the endpoint URL can find the issuer without being configured with it. The
+transport publishes a protected-resource metadata document at both addresses an MCP client tries:
+
+- `http://localhost:5080/.well-known/oauth-protected-resource/mcp` — the path-specific form. RFC
+  9728 puts the well-known segment *between* the host and the endpoint's path, and this is the one
+  the `401` names;
+- `http://localhost:5080/.well-known/oauth-protected-resource` — the root form, for a client that
+  ignores the header and falls back to trying both.
+
+Neither requires a token, because the document describes how to obtain one:
+
+```json
+{
+  "resource": "http://localhost:5080/mcp",
+  "authorization_servers": ["http://localhost:8080/realms/aienabledrma"],
+  "scopes_supported": ["rma:read"],
+  "bearer_methods_supported": ["header"],
+  "resource_name": "AIEnabledRma MCP tools"
+}
+```
+
+And a request with no token answers with the pointer rather than a bare challenge:
+
+```text
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer resource_metadata="http://localhost:5080/.well-known/oauth-protected-resource/mcp", scope="rma:read"
+```
+
+Two values are worth reading carefully. `resource` is the URL a client connects to, not the
+well-known URL: RFC 9728 §3.3 has the client compare it with its own notion of the resource and
+refuse a document that describes something else. `authorization_servers` is `Mcp:Http:Issuer`
+verbatim, so the same hostname rule as the token's `iss` applies — in compose it names the service
+name, which is right for a client on that network and wrong for a browser on the host. `scope` in
+the challenge is the scope the policy requires, so a client asks for exactly that.
+
 ## Prove it answers
 
 With a token in `$TOKEN`:
@@ -142,7 +179,7 @@ docker compose --profile mcp-http exec mcp-http \
 
 | Response | Cause |
 |---|---|
-| `401` with `WWW-Authenticate: Bearer` | no token, expired token, `iss` that is not `Mcp:Http:Issuer`, `aud` that is not `aienabledrma-mcp`, or a signature the realm's keys do not verify. A wrong issuer is named in the header: `The issuer 'http://localhost:8080/realms/aienabledrma' is invalid` — that is what a host-minted token gets when the server validates the compose service name |
+| `401` with `WWW-Authenticate: Bearer resource_metadata="…", scope="rma:read"` | no token, expired token, `iss` that is not `Mcp:Http:Issuer`, `aud` that is not `aienabledrma-mcp`, or a signature the realm's keys do not verify. The pointer names the RFC 9728 document below, so a client can find the realm instead of being configured with it |
 | `403` | a valid token without the `rma:read` scope, or from a `client_id`/`azp` not in `AllowedClientIds` |
 | `403` before any token is read | an `Origin` header that is not in `AllowedOrigins`. A server-side agent sends no `Origin` and is unaffected |
 | `500` at startup | `EnsureUsable` refused the configuration: an `http` issuer outside Development, an empty client allow-list, a wildcard or empty origin, an empty scope, a path that does not start with `/` |
@@ -259,9 +296,10 @@ client, because issuers differ in which they mint.
 
 ## What this does not cover
 
-- **Protected-resource metadata (RFC 9728) is not implemented.** A `401` carries
-  `WWW-Authenticate: Bearer` without the `resource_metadata` parameter, so a client cannot discover
-  the authorization server from the response and has to be configured with the realm.
+- **The metadata names the issuer as the host reached it.** `authorization_servers` is
+  `Mcp:Http:Issuer` verbatim, so the compose setup advertises `http://keycloak:8080/...`: correct for a
+  client inside that network, unreachable from a browser on the host. The same hostname rule as the
+  token's `iss` applies, and a real deployment sets both to one public name.
 - **A browser client holds its token where page scripts can reach it.** The transport now admits
   allow-listed origins (see below), but a token in a browser is a token any script on that page can
   read; keep its lifetime short and list only origins you would trust with it.

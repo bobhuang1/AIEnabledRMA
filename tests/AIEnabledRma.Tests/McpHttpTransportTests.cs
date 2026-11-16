@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
+using System.Text.Json;
 using AIEnabledRma.Mcp;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
@@ -145,6 +146,70 @@ public sealed class McpHttpTransportTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_401_names_the_metadata_document_and_the_document_answers()
+    {
+        using var app = await BuildHostAsync();
+        using var client = app.GetTestClient();
+
+        using var response = await client.SendAsync(
+            Initialize(token: null),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+
+        var challenge = response.Headers.WwwAuthenticate.ToString();
+
+        // Without the pointer a client holds a URL and no way to find the issuer that serves it,
+        // which is the gap this closes; the scope is named so it asks for the right one.
+        Assert.Contains(
+            "resource_metadata=\"http://localhost/.well-known/oauth-protected-resource/mcp\"",
+            challenge,
+            StringComparison.Ordinal);
+        Assert.Contains($"scope=\"{ReadScope}\"", challenge, StringComparison.Ordinal);
+
+        // Follow it the way a client would, with no token: the document describes how to get one.
+        using var metadata = await client.GetAsync(
+            "/.well-known/oauth-protected-resource/mcp",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, metadata.StatusCode);
+        Assert.Equal("application/json", metadata.Content.Headers.ContentType?.MediaType);
+
+        using var document = JsonDocument.Parse(
+            await metadata.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+
+        var root = document.RootElement;
+
+        // The resource identifier is the endpoint a client connects to, and the issuer is the value
+        // the host validates, so a client that follows both converges on the realm it needs.
+        Assert.Equal("http://localhost/mcp", root.GetProperty("resource").GetString());
+        Assert.Equal(Issuer, root.GetProperty("authorization_servers")[0].GetString());
+        Assert.Equal(ReadScope, root.GetProperty("scopes_supported")[0].GetString());
+        Assert.Equal("header", root.GetProperty("bearer_methods_supported")[0].GetString());
+    }
+
+    [Fact]
+    public async Task The_metadata_is_also_at_the_root_well_known_path()
+    {
+        using var app = await BuildHostAsync();
+        using var client = app.GetTestClient();
+
+        // MCP clients try the endpoint-specific URI first and fall back to the root when the 401
+        // carries no pointer, so both have to answer with the same document.
+        using var metadata = await client.GetAsync(
+            "/.well-known/oauth-protected-resource",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, metadata.StatusCode);
+
+        using var document = JsonDocument.Parse(
+            await metadata.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal("http://localhost/mcp", document.RootElement.GetProperty("resource").GetString());
+        Assert.Equal(Issuer, document.RootElement.GetProperty("authorization_servers")[0].GetString());
     }
 
     [Fact]

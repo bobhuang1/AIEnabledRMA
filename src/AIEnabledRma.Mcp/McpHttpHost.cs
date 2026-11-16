@@ -93,6 +93,24 @@ public static class McpHttpHost
         // allowed page's preflight would fall through to the origin check and be refused.
         app.MapMcp(http.Path).RequireAuthorization(McpHttpAuthentication.PolicyName);
 
+        // RFC 9728 discovery, served without a token because it describes how to get one. Both
+        // addresses exist: the path-specific one the 401 names and the root one an MCP client falls
+        // back to when it ignores the header.
+        app.MapGet(
+            ProtectedResourceMetadata.WellKnownPath,
+            (HttpContext context) =>
+                Results.Json(ProtectedResourceMetadata.DocumentFor(context.Request, http)));
+
+        var endpointMetadataPath = ProtectedResourceMetadata.PathFor(http.Path);
+
+        if (!string.Equals(endpointMetadataPath, ProtectedResourceMetadata.WellKnownPath, StringComparison.Ordinal))
+        {
+            app.MapGet(
+                endpointMetadataPath,
+                (HttpContext context) =>
+                    Results.Json(ProtectedResourceMetadata.DocumentFor(context.Request, http)));
+        }
+
         return app;
     }
 

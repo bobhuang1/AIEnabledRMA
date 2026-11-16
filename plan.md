@@ -180,7 +180,7 @@ bullets stay as requirements.
   reaches the tools.
 - Add a `docs/mcp.md` runbook.
 
-**Status: transport, its checks, the committed realm and the runbook shipped; RFC 9728 metadata and a browser client are not.**
+**Status: transport, its checks, RFC 9728 discovery, the committed realm (both clients) and the runbook shipped.**
 - `McpTransportMode` picks the transport from `Mcp:Transport` (default `stdio`) and refuses any other value,
   so a deployment that mistypes `http` fails to start instead of coming up as a process that never listens.
 - `McpHttpHost` serves `MapMcp` at `Mcp:Http:Path` from the same `McpServices` registrations stdio uses, so a
@@ -240,9 +240,19 @@ bullets stay as requirements.
   `A_preflight_from_a_disallowed_origin_grants_nothing` asserts an unlisted origin gets no CORS headers — the
   framework answers every preflight 204, so it is the missing header that makes the browser refuse, and the
   real request from that origin is the existing 403. Removing `UseCors` fails the first two.
+- RFC 9728 discovery is served, so a client that was handed a URL no longer has to be configured with the
+  realm. `McpHttpHost` maps `/.well-known/oauth-protected-resource/mcp` (the path-specific form, RFC 9728 §3.1)
+  and the root `/.well-known/oauth-protected-resource`, both unauthenticated — the document describes how to get
+  a token — and both built from the request's own scheme and host, so the value is the address the caller used.
+  The document carries `resource` (the endpoint URL, which a client compares with its own),
+  `authorization_servers` (the issuer the host validates), `scopes_supported` (`rma:read`),
+  `bearer_methods_supported` (`["header"]`) and a name. The 401 is written by a JWT `OnChallenge` handler rather
+  than the framework default, and carries
+  `WWW-Authenticate: Bearer resource_metadata="…/oauth-protected-resource/mcp", scope="rma:read"` — the scope
+  included so a client asks its authorization server for the right one. `A_401_names_the_metadata_document_and_the_document_answers`
+  follows the header to the document and asserts every field; `The_metadata_is_also_at_the_root_well_known_path`
+  pins the fallback. Replacing the challenge with the framework default fails the first on the missing pointer.
 - **Outstanding:**
-  - Protected-resource metadata (RFC 9728): a `401` carries `WWW-Authenticate: Bearer` without
-    `resource_metadata`, so a client cannot discover the authorization server from the response.
 
   - The audit row's caller is unit-tested, not asserted end-to-end against a tool call.
 

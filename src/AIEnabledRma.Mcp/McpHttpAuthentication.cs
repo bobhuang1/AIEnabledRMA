@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
@@ -50,6 +51,22 @@ public static class McpHttpAuthentication
                     ValidateIssuerSigningKey = true,
                     ClockSkew = TimeSpan.FromMinutes(1),
                     NameClaimType = "sub",
+                };
+
+                // The default challenge writes "Bearer" and stops there, which leaves a client to be
+                // configured with the realm by hand. Answer it here instead so the 401 names the
+                // RFC 9728 document and the scope this resource needs (RFC 9728 §5.1).
+                options.Events = new JwtBearerEvents
+                {
+                    OnChallenge = context =>
+                    {
+                        context.HandleResponse();
+                        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                        context.Response.Headers.WWWAuthenticate =
+                            ProtectedResourceMetadata.Challenge(context.Request, http);
+
+                        return Task.CompletedTask;
+                    },
                 };
             });
 
