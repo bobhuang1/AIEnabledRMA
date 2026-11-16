@@ -408,8 +408,14 @@ bullets stay as requirements.
   more: `rq-002` (`switch on` vs the article's `turn on`), `rq-008`/`rq-013`/`rq-017`/`rq-033`/`rq-038` (a synonym
   or a whole phrase the lexicon does not share, such as `photos` vs `documentation`). Those need synonyms or
   embeddings, not stemming, and the file's `baseline` block lists each miss with the articles that beat it.
-- The floor follows the measurement rather than the aspiration: 0.85 with forty cases still fails on a single lost
-  question, and raising it is a reviewable diff in the data with the before and after written beside it.
+- Both numbers are floored, not just printed. `mrrFloor: 0.75` sits beside `recallAt3Floor: 0.85`, because recall@3
+  cannot see a hit slipping from rank 1 to rank 3: the same questions still appear in the top three, so the recall
+  number does not move while the citation handed to the model gets worse. The acceptance test asserts both and names
+  every case not at rank 1, so a fall reads as a diagnosis rather than a number. Measured: reversing the order the
+  index returns keeps recall@3 at 0.850 and fails the test with `MRR is 0.438, below the recorded floor 0.750`.
+- The floors follow the measurement rather than the aspiration: 0.85 and 0.75 with forty cases still fail on a
+  single lost question or a single demotion, and changing either is a reviewable diff in the data with the before
+  and after written beside it.
 
 ### P6. CRM support-case ingestion with PII removed (L) — D1, after P3 and P5
 

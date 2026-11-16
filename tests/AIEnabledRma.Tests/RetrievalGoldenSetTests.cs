@@ -43,6 +43,11 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
         Assert.NotEmpty(golden.Cases);
         Assert.InRange(golden.RecallAt3Floor, 0d, 1d);
 
+        // Required, not optional: the data file this suite scores has to state both bars, or a
+        // change could remove the MRR floor by editing one line and nothing would notice.
+        Assert.NotNull(golden.MrrFloor);
+        Assert.InRange(golden.MrrFloor!.Value, 0d, 1d);
+
         Assert.Equal(
             golden.Cases.Count,
             golden.Cases.Select(c => c.Id).Distinct(StringComparer.Ordinal).Count());
@@ -96,7 +101,7 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
 
         output.WriteLine(
             $"recall@3 = {score.RecallAt3:0.000} ({score.Hits}/{score.Cases.Count}); "
-            + $"MRR = {score.Mrr:0.000}; floor = {score.Floor:0.000}");
+            + $"MRR = {score.Mrr:0.000}; floors = {score.Floor:0.000} recall, {score.MrrFloor:0.000} MRR");
 
         var misses = score.Misses
             .Select(c =>
@@ -110,6 +115,22 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
             + "deliberately lowered; say which in eval/retrieval-golden.json."
             + Environment.NewLine
             + string.Join(Environment.NewLine, misses));
+
+        // Recall holding still while MRR falls is exactly the regression recall@3 cannot see: the
+        // same questions still appear in the top three, just further down, which is a worse citation
+        // for the model. The dropped cases are named, because "MRR is low" is not a diagnosis.
+        var lowered = score.Cases
+            .Where(c => c.Rank > 1)
+            .Select(c => $"{c.Case.Id} rank={c.Rank} [{string.Join(",", c.Top)}]")
+            .ToList();
+
+        Assert.True(
+            score.MeetsMrrFloor,
+            $"MRR is {score.Mrr:0.000}, below the recorded floor {score.MrrFloor:0.000}. recall@3 can "
+            + "hold while hits slip down the list, so this is the number that notices. Cases not at "
+            + "rank 1:"
+            + Environment.NewLine
+            + string.Join(Environment.NewLine, lowered));
     }
 
     /// <summary>

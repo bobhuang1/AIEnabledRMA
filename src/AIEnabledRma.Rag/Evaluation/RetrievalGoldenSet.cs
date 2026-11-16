@@ -21,6 +21,16 @@ public sealed record GoldenSet
     /// <summary>recall@3 a retriever must reach to pass. Raising it is allowed; lowering needs a note.</summary>
     public required double RecallAt3Floor { get; init; }
 
+    /// <summary>
+    /// Mean reciprocal rank a retriever must reach to pass, when recorded.
+    /// </summary>
+    /// <remarks>
+    /// recall@3 cannot see a hit slipping from rank 1 to rank 3: the same cases still hit inside the
+    /// top three, so the number does not move while the citation handed to the model gets worse.
+    /// MRR is the measurement that does move, which is why it is floored rather than only printed.
+    /// </remarks>
+    public double? MrrFloor { get; init; }
+
     /// <summary>What the last recorded measurement was, published so a later run can be compared to it.</summary>
     public GoldenSetBaseline? Baseline { get; init; }
 
@@ -84,11 +94,20 @@ public sealed record GoldenSetScore
 
     public required double Floor { get; init; }
 
+    /// <summary>The recorded MRR bar, or null when the set does not floor it.</summary>
+    public required double? MrrFloor { get; init; }
+
     public int Hits => Cases.Count(c => c.Rank > 0);
 
     public IEnumerable<GoldenSetCaseScore> Misses => Cases.Where(c => c.Rank == 0);
 
     public bool MeetsFloor => RecallAt3 >= Floor;
+
+    /// <summary>
+    /// The tolerance is for averaging doubles, not for regressions: with forty cases one hit moving
+    /// from rank 1 to rank 3 costs about 0.017, which is far more than this admits.
+    /// </summary>
+    public bool MeetsMrrFloor => MrrFloor is null || Mrr >= MrrFloor.Value - 1e-9;
 }
 
 /// <summary>
@@ -184,6 +203,7 @@ public static class RetrievalGoldenSet
             RecallAt3 = hits / (double)scored.Count,
             Mrr = scored.Average(c => c.Rank == 0 ? 0d : 1d / c.Rank),
             Floor = set.RecallAt3Floor,
+            MrrFloor = set.MrrFloor,
         };
     }
 
