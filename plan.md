@@ -372,15 +372,25 @@ bullets stay as requirements.
   test, the data or the floor. `The_scorer_measures_the_retriever_it_is_given` pins that with two stubs, and
   registering an empty retriever in `AddRag` fails the acceptance test with recall 0.000 without any change to
   the cases, which is the proof that the number now follows the implementation rather than the class.
-- Baseline, measured 2026-11-16: **recall@3 = 0.775 (31/40), MRR = 0.646**. The floor in the file is 0.77, so
-  losing one case fails the build and gaining cases is a reviewable diff in the data. The first measurement on
-  21 cases was 0.714 (15/21) with MRR 0.627; the set was extended to forty without weakening any question, and
-  the baseline was re-recorded because the measurement moved, not because the acceptance bar moved down.
-- The eval immediately found two causes worth fixing before or alongside the vector work: the tokeniser has no
-  stopword list, so `the`, `and` and `now` are scored terms that let a scanning article outrank "will not switch
-  on"; and there is no stemming, so `spilled` does not match `spill`. Neither is fixed here — they are the
-  lexical end of P5, and this file is how the improvement is measured. All nine misses are listed in the file's
-  `baseline` block, each with the articles that beat it.
+- Baseline now, measured 2026-11-16 after the tokeniser change: **recall@3 = 0.850 (34/40), MRR = 0.750**, floor
+  0.85. Before: recall@3 = 0.775 (31/40), MRR = 0.646, floor 0.77. The set was extended to forty without weakening
+  any question first, and the earliest measurement was 0.714 (15/21) with MRR 0.627 — so the numbers read
+  0.714 → 0.775 → 0.850, each step a different cause (more questions, then a better tokeniser).
+- The tokeniser (`TextTokens`) now does what the first baseline said was missing: a stopword list, so `the`,
+  `and` and `now` are no longer scored terms; a shallow suffix stemmer (`-s`, `-es`, `-ies`, `-ed`, `-ing`, the
+  doubled consonant an inflection leaves, and the final `e`), so `spilled` reaches `spill`, `scratched` reaches
+  `scratch` and `updated` still reaches `update`; and the surface form indexed beside its stem, because stemming
+  alone *lost* "it restarts by itself every few minutes" — the article's own keyword is `restarts`, and collapsing
+  it to `restart` let a shorter article win on its other words. `TextTokensTests` pins each rule, including the
+  ones that must not fire (`spill` must not become `spil`).
+- Net effect on the forty cases: seven recovered (`rq-010`, `rq-012`, `rq-014`, `rq-015`, `rq-022`, `rq-025`,
+  `rq-028`), one lost (`rq-038`, where the question now matches the cradle article's vocabulary more strongly than
+  the evidence article's), so recall +0.075 and MRR +0.104. Six still miss and they are not tokeniser problems any
+  more: `rq-002` (`switch on` vs the article's `turn on`), `rq-008`/`rq-013`/`rq-017`/`rq-033`/`rq-038` (a synonym
+  or a whole phrase the lexicon does not share, such as `photos` vs `documentation`). Those need synonyms or
+  embeddings, not stemming, and the file's `baseline` block lists each miss with the articles that beat it.
+- The floor follows the measurement rather than the aspiration: 0.85 with forty cases still fails on a single lost
+  question, and raising it is a reviewable diff in the data with the before and after written beside it.
 
 ### P6. CRM support-case ingestion with PII removed (L) — D1, after P3 and P5
 

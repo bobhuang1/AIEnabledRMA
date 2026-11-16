@@ -1,15 +1,15 @@
 {
   "description": "Golden retrieval questions for the shipped knowledge base. A question is written the way a customer or a bench technician would ask it, and lists every article that would be a correct citation for it. Forty cases covering all nineteen articles, deliberately including near-miss pairs (trigger vs firmware, decode vs window damage, freeze vs blank screen, cradle vs accessory, who decides vs what evidence) and scoped cases for both product-specific articles. recall@3 is the share of cases whose top three hits include one of the expected articles. P5's acceptance test is 'not worse than the lexical index measured here', so this file owns the floor and the cases, not a test constant.",
   "acceptance": "recall@3 for KnowledgeIndex.Search must be at least recallAt3Floor. Raising the floor is allowed; lowering it needs a note here saying which question the change broke and why that is acceptable.",
-  "recallAt3Floor": 0.77,
+  "recallAt3Floor": 0.85,
   "baseline": {
     "measuredOn": "2026-11-16",
     "index": "KnowledgeIndex, BM25-style over article token sets, TopK 3, no product families enabled except those the scoped cases name",
-    "recallAt3": 0.775,
-    "mrr": 0.646,
+    "recallAt3": 0.85,
+    "mrr": 0.75,
     "cases": 40,
-    "misses": ["rq-002", "rq-008", "rq-010", "rq-012", "rq-013", "rq-017", "rq-022", "rq-028", "rq-033"],
-    "notes": "The floor is the measurement, not a target: nine of forty miss today, and they are lexical rather than conceptual, because in each one the questions' distinguishing word never appears in the article — 'switch on' against 'turn on', 'scratch' against 'scratched', 'spilled' against 'spill', 'photos' against 'documentation'. The winners share only the question's generic words ('it', 'not', 'unit', 'now'), which score because there is no stopword list, no stemming and no synonyms. Every miss names the three articles that beat it in the scorer's output. The floor is the measurement rounded down; with forty cases one lost question is 0.025 and fails it, so this is at least as strict as the twenty-one-case file was. Do not raise the floor to 1.0 by rewriting the questions into the articles' own wording; the questions are the customer's."
+    "misses": ["rq-002", "rq-008", "rq-013", "rq-017", "rq-033", "rq-038"],
+    "notes": "Measured after the tokeniser gained a stopword list and a shallow stemmer (TextTokens). Before it: recall@3 0.775 (31/40), MRR 0.646, nine misses; before the set was widened: 0.714 (15/21), MRR 0.627. Seven cases recovered (rq-010, rq-012, rq-014, rq-015, rq-022, rq-025, rq-028) and one was lost (rq-038, where the question now matches the cradle vocabulary more strongly than the evidence article's) — the loss is recorded rather than hidden, and the surface forms are indexed beside their stems precisely because stemming alone lost rq-014. Six still miss, and they are no longer tokeniser problems: 'switch on' against the article's 'turn on' (rq-002), and a synonym or phrase the lexicon does not share — 'nothing happens when I pull the trigger' (rq-008), 'stopped halfway' (rq-013), 'evidence'/'faulty' (rq-017), 'photos' against 'documentation' (rq-033), 'write down' (rq-038). Those need synonyms or embeddings, not more suffix rules. The floor is the measurement rounded down; with forty cases one lost question is 0.025 and fails it. Do not raise the floor to 1.0 by rewriting the questions into the articles' own wording; the questions are the customer's."
   },
   "cases": [
     {

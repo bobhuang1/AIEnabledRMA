@@ -287,7 +287,10 @@ public sealed class KnowledgeIndex
             .Select(p => new
             {
                 Paragraph = p,
-                Hits = querySet.Count(t => p.Contains(t, StringComparison.OrdinalIgnoreCase)),
+
+                // Tokenised rather than substring-matched: the query is stemmed, so "charging" would
+                // never contain the stem "charg" and every paragraph would look like a non-match.
+                Hits = TextTokens.Tokenize(p).Count(querySet.Contains),
             })
             .OrderByDescending(x => x.Hits)
             .ThenBy(x => x.Paragraph.Length)
@@ -318,14 +321,7 @@ public sealed class KnowledgeIndex
             : snippet;
     }
 
-    private static IReadOnlyList<string> Tokenize(string value) =>
-        string.IsNullOrWhiteSpace(value)
-            ? []
-            : System.Text.RegularExpressions.Regex
-                .Matches(value.ToLowerInvariant(), "[a-z0-9]+")
-                .Select(m => m.Value)
-                .Where(t => t.Length > 2)
-                .ToArray();
+    private static IReadOnlyList<string> Tokenize(string value) => TextTokens.Tokenize(value);
 }
 
 public sealed class RagRetrievalOptions

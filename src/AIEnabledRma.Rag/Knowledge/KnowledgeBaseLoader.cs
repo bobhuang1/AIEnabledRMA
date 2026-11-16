@@ -654,8 +654,7 @@ public sealed partial class KnowledgeBaseLoader
             .ToList();
     }
 
-    private static IEnumerable<string> Tokenize(string value) =>
-        Regex.Matches(value.ToLowerInvariant(), "[a-z0-9]+")
-            .Select(m => m.Value)
-            .Where(t => t.Length > 2);
+    // One rule for both sides of a match. See TextTokens: the stopwords and the stemmer are part of
+    // the retrieval contract, not a detail of loading.
+    private static IEnumerable<string> Tokenize(string value) => TextTokens.Tokenize(value);
 }
