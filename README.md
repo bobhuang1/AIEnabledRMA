@@ -293,6 +293,14 @@ Rag:
     RequireReview: false     # always on in Production, whatever this says
 ```
 
+`Rag:Admin:ApiKey` is the operator credential, presented as `X-Rag-Admin-Key`: it guards the RAG
+host's `/rag/reload` and the detailed `/health`, and the Web host's own `/health` counts. The Web
+host refuses to start outside Development when it is empty, because without a key those endpoints
+admit any loopback caller — and behind a reverse proxy on the same machine every caller is loopback,
+so a keyless Production would publish the corpus size, the load errors and the model name to whoever
+can reach the proxy. In Development an empty key admits loopback only, which is why the value is
+blank here and why a deployment sets it from its secret store rather than this file.
+
 ## Why the AI is advisory
 
 A return touches a customer's money, a company's stock, and a warranty obligation. A model
