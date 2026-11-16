@@ -406,14 +406,19 @@ bullets stay as requirements.
 - `FakePaymentGateway` refuses to register outside Development without the explicit opt-in flag
   (`AiProviderRegistrationTests`, a registration test rather than a host boot).
 - The security headers are asserted on a real response in `WebWizardTests`.
-- Every response addressed by a request id sends `Cache-Control: no-store, no-cache, max-age=0` and
-  `Pragma: no-cache`, set by a middleware that runs after routing and keys on the `id` route value under
-  `/RmaWizard`. Expiry bounds drafts, not caches: a page kept by a shared browser or an intermediary would
+- Every response that answers a capability sends `Cache-Control: no-store, no-cache, max-age=0` and
+  `Pragma: no-cache`, set by a middleware that runs after routing. A capability is either a return id in
+  the route or the chooser's `offer`/`identifiers`, plus the POST steps whose 302 carries one into `Location`
+  (`Start` and `ChooseCustomer`): the chooser's offer key resolves server-side to the accounts the visitor was
+  shown and the page hands back the account id to pick, so a cached chooser lets the next person on that
+  machine start a return as the previous customer without knowing their address. Expiry bounds drafts, not caches: a page kept by a shared browser or an intermediary would
   hand the next person on that machine a working capability link for a return that has already been confirmed.
   Antiforgery already marks the pages that render a token, so the `max-age` and the 302 a step POSTs are what
   this adds — with the middleware disabled, `A_capability_step_cannot_be_stored_by_a_browser_or_a_cache` fails
-  on the redirect carrying no `Cache-Control` at all. The test also asserts an ordinary page gets no directive,
-  so the header is scoped rather than sprayed.
+  on the redirect carrying no `Cache-Control` at all. `The_chooser_cannot_be_stored_because_the_offer_key_is_a_capability`
+  covers the chooser side: the 302 out of `Start`, the chooser page itself, and the 302 out of `ChooseCustomer`,
+  each of which used to carry no `Cache-Control`. The tests also assert an ordinary page gets no directive, so
+  the header is scoped rather than sprayed. `Start` as a GET is deliberately unmarked: nothing is pending yet.
 - `/health` is public liveness only: an anonymous caller gets `{"status":"ok"}` and nothing else, the shape the
   RAG host's `/health` uses. The counts and the provider name are behind the operator key that host already
   uses (`Rag:Admin:ApiKey`, `X-Rag-Admin-Key`, fixed-time compare), and loopback when no key is configured.

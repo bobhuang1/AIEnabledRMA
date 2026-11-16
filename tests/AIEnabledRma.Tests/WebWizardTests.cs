@@ -1045,6 +1045,70 @@ public sealed class WebWizardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_chooser_cannot_be_stored_because_the_offer_key_is_a_capability()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        var start = await client.GetAsync("/RmaWizard/Start", ct);
+        Assert.Equal(HttpStatusCode.OK, start.StatusCode);
+
+        using var posted = await client.PostAsync(
+            "/RmaWizard/Start",
+            new FormUrlEncodedContent(
+            [
+                new KeyValuePair<string, string>(
+                    "__RequestVerificationToken",
+                    TokenOf(await start.Content.ReadAsStringAsync(ct))),
+                new KeyValuePair<string, string>("Customer", CustomerEmail),
+                new KeyValuePair<string, string>("Identifiers", EligibleSerial),
+                new KeyValuePair<string, string>("CurrencyCode", CurrencyCode),
+            ]),
+            ct);
+
+        Assert.Equal(HttpStatusCode.Found, posted.StatusCode);
+
+        // The 302 names the chooser with its offer key in the query, so a stored copy would send
+        // the next visitor on that machine to this customer's account list.
+        Assert.True(posted.Headers.CacheControl?.NoStore);
+
+        var chooserAddress = posted.Headers.Location!.OriginalString;
+        Assert.StartsWith("/RmaWizard/ChooseCustomer", chooserAddress, StringComparison.Ordinal);
+
+        var chooser = await client.GetAsync(chooserAddress, ct);
+        Assert.Equal(HttpStatusCode.OK, chooser.StatusCode);
+
+        // The chooser is the same kind of secret as a step id. The offer key resolves server-side
+        // to the accounts this visitor was shown, and the page hands back the account id to pick,
+        // so a cached copy lets the next person start a return as this customer without ever
+        // knowing their address.
+        Assert.True(chooser.Headers.CacheControl?.NoStore);
+
+        var html = await chooser.Content.ReadAsStringAsync(ct);
+        var offer = OfferOf(html);
+        var carried = Regex.Match(html, "name=\"identifiers\"[^>]*value=\"(?<ids>[^\"]*)\"");
+        var account = Regex.Match(html, "name=\"customerId\" value=\"(?<id>[0-9a-fA-F-]{36})\"");
+
+        Assert.False(string.IsNullOrEmpty(offer), "the chooser page carried no offer key");
+
+        // Choosing an account answers with the new request id, so that 302 is addressed the same
+        // way and must not be storable either.
+        using var chosen = await client.PostAsync(
+            "/RmaWizard/ChooseCustomer",
+            new FormUrlEncodedContent(
+            [
+                new KeyValuePair<string, string>("__RequestVerificationToken", TokenOf(html)),
+                new KeyValuePair<string, string>("customerId", account.Groups["id"].Value),
+                new KeyValuePair<string, string>("identifiers", carried.Groups["ids"].Value),
+                new KeyValuePair<string, string>("offer", offer),
+            ]),
+            ct);
+
+        Assert.Equal(HttpStatusCode.Found, chosen.StatusCode);
+        Assert.True(chosen.Headers.CacheControl?.NoStore);
+    }
+
+    [Fact]
     public async Task An_unconfirmed_draft_stops_working_when_the_capability_window_passes()
     {
         var ct = TestContext.Current.CancellationToken;

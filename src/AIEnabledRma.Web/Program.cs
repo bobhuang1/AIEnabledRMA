@@ -164,10 +164,7 @@ app.UseRouting();
 // step POSTs unmarked and sends no max-age, so this is not a duplicate of it.
 app.Use(async (context, next) =>
 {
-    var isCapabilityStep = context.Request.RouteValues.ContainsKey("id")
-        && context.Request.Path.StartsWithSegments("/RmaWizard", StringComparison.OrdinalIgnoreCase);
-
-    if (isCapabilityStep)
+    if (AnswersWithACapability(context))
     {
         context.Response.OnStarting(() =>
         {
@@ -231,6 +228,41 @@ app.MapGet("/health", (
         ai = new { provider = chatModel.ProviderName },
     });
 });
+
+// Whether the response answers an address that carries a capability. The wizard has no accounts, so
+// what identifies one customer's progress is a value they hold: a return id in the route, or the
+// chooser's offer key. The offer key is the same kind of secret — it resolves server-side to the
+// accounts the visitor was shown, and the chooser hands back the account id to pick — so a cached
+// chooser lets the next person on that machine start a return as the previous customer without ever
+// knowing their address.
+static bool AnswersWithACapability(HttpContext context)
+{
+    if (!context.Request.Path.StartsWithSegments("/RmaWizard", StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    // The address carries one: a return id, or the chooser's identifiers and offer key.
+    if (context.Request.RouteValues.ContainsKey("id")
+        || context.Request.Query.ContainsKey("offer")
+        || context.Request.Query.ContainsKey("identifiers"))
+    {
+        return true;
+    }
+
+    // These answer with a 302 whose Location carries one of the above, so a stored response would
+    // send a later visitor to a step belonging to whoever came before. Start is a GET when the form
+    // is rendered — nothing is pending yet — and a POST when it is submitted, which is the one with
+    // somewhere to point.
+    if (HttpMethods.IsGet(context.Request.Method)
+        || context.Request.RouteValues["action"] is not string action)
+    {
+        return false;
+    }
+
+    return string.Equals(action, "Start", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(action, "ChooseCustomer", StringComparison.OrdinalIgnoreCase);
+}
 
 app.Run();
 
