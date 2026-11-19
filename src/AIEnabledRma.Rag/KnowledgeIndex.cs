@@ -356,11 +356,12 @@ public sealed class RagRetrievalOptions
     /// Ask <see cref="SynonymExpandingRetriever"/> instead of the lexical index directly.
     /// </summary>
     /// <remarks>
-    /// Off by default: it is the second implementation that proves the retriever seam is a real
-    /// swap, and the golden set measures it with the shipped cases rather than a stub. A deployment
-    /// that turns it on should re-run that measurement rather than assume the default's numbers.
+    /// On by default: the golden set measured it at 0.925 recall@3 against the plain index's 0.850,
+    /// and the six questions it fixes are vocabulary gaps rather than ranking preferences. Turning
+    /// it off is the ablation — the measurement entry for the map records both numbers — so a
+    /// deployment that disables it is choosing a number the suite already knows.
     /// </remarks>
-    public bool SynonymExpansion { get; set; }
+    public bool SynonymExpansion { get; set; } = true;
 
     /// <summary>
     /// Floor applied to the reported score of a related-article expansion, so an article with

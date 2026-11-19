@@ -311,27 +311,27 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// The swap path itself, measured the way a deployment would take it: the configuration key
-    /// selects the second implementation, and the same forty cases and the same floors score it.
+    /// The ablation behind the synonym map: the registered retriever is the expanding one and clears
+    /// the floor, and turning the map off measures exactly what the lexical index scored before it
+    /// existed. The difference between the two is the map's contribution, measured.
     /// </summary>
     /// <remarks>
-    /// The seam test below proves the scorer follows whatever retriever it is handed, but it hands it
-    /// a stub. This one resolves <see cref="IKnowledgeRetriever"/> from the host's registration — the
-    /// path the triage pipeline takes — so "a vector store becomes the measured implementation by
-    /// being registered" is exercised end to end rather than asserted about an interface.
+    /// The acceptance test above compares the default to the latest recorded measurement; this one
+    /// answers the question that comparison cannot: is the improvement the map, or the default having
+    /// changed? The lexical numbers are pinned here — 0.850 recall, 0.750 MRR — so a change that makes
+    /// the map irrelevant, or makes the fallback worse, fails with the pair in the message.
     ///
-    /// The baseline is not compared here on purpose: it records the default lexical measurement, and
-    /// a second implementation that clears the floors is not claiming to reproduce that number.
+    /// The fallback is expected to be below the 0.9 floor: that is the point of raising it on the
+    /// measurement that includes the map, not a regression in the ablation.
     /// </remarks>
     [Fact]
-    public async Task The_synonym_retriever_is_measured_by_the_same_cases_and_floors()
+    public async Task Disabling_the_synonym_map_measures_the_lexical_index()
     {
         var ct = TestContext.Current.CancellationToken;
         var root = RepositoryRoot();
         var golden = RetrievalGoldenSet.Load(Path.Combine(root, "eval", "retrieval-golden.json"));
 
         var settings = ConfigurationFor(root, golden);
-        settings["Rag:Retrieval:SynonymExpansion"] = "true";
 
         var services = new ServiceCollection();
         services.AddLogging();
@@ -341,28 +341,52 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
 
         var retriever = provider.GetRequiredService<IKnowledgeRetriever>();
 
-        // What is measured has to be the implementation the setting chose, not whichever one the
-        // default happens to construct: otherwise this passes while testing the lexical index twice.
+        // The default is the expanding retriever; a configuration that silently resolved the plain
+        // index would make the numbers below look right for the wrong reason.
         Assert.IsType<SynonymExpandingRetriever>(retriever);
 
         var score = await RetrievalGoldenSet.ScoreAsync(golden, retriever, ct);
 
         output.WriteLine(
-            $"synonym retriever: recall@3 = {score.RecallAt3:0.000} ({score.Hits}/{score.Cases.Count}); "
+            $"with the map: recall@3 = {score.RecallAt3:0.000} ({score.Hits}/{score.Answerable}); "
             + $"MRR = {score.Mrr:0.000}");
 
         Assert.True(
             score.MeetsFloor,
-            $"the synonym retriever scores recall@3 {score.RecallAt3:0.000} "
-            + $"({score.Hits}/{score.Cases.Count}), below the floor {score.Floor:0.000}. A second "
-            + "implementation behind the seam is held to the same bar, or the seam is decoration."
+            $"the default retriever scores recall@3 {score.RecallAt3:0.000} "
+            + $"({score.Hits}/{score.Answerable}), below the floor {score.Floor:0.000}."
             + Environment.NewLine
             + string.Join(
                 Environment.NewLine,
                 score.Misses.Select(c => $"{c.Case.Id} '{c.Case.Question}'")));
 
-        Assert.True(score.MeetsMrrFloor, $"the synonym retriever scores MRR {score.Mrr:0.000}, below "
-            + $"the floor {score.MrrFloor:0.000}.");
+        var lexicalSettings = ConfigurationFor(root, golden);
+        lexicalSettings["Rag:Retrieval:SynonymExpansion"] = "false";
+
+        var lexicalServices = new ServiceCollection();
+        lexicalServices.AddLogging();
+        lexicalServices.AddRag(new ConfigurationBuilder().AddInMemoryCollection(lexicalSettings).Build());
+
+        await using var lexicalProvider = lexicalServices.BuildServiceProvider();
+
+        var lexicalRetriever = lexicalProvider.GetRequiredService<IKnowledgeRetriever>();
+
+        Assert.IsType<KnowledgeIndexRetriever>(lexicalRetriever);
+
+        var lexical = await RetrievalGoldenSet.ScoreAsync(golden, lexicalRetriever, ct);
+
+        output.WriteLine(
+            $"without the map: recall@3 = {lexical.RecallAt3:0.000} ({lexical.Hits}/{lexical.Answerable}); "
+            + $"MRR = {lexical.Mrr:0.000}");
+
+        Assert.True(
+            Math.Abs(lexical.RecallAt3 - 0.850) < 1e-9,
+            $"the lexical index measures recall@3 {lexical.RecallAt3:0.000} where the recorded ablation "
+            + "is 0.850. Either the fallback changed or the map is no longer what separates the two.");
+
+        Assert.True(
+            Math.Abs(lexical.Mrr - 0.750) < 1e-9,
+            $"the lexical index measures MRR {lexical.Mrr:0.000} where the recorded ablation is 0.750.");
     }
 
     /// <summary>

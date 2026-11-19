@@ -4,16 +4,16 @@ using AIEnabledRma.Rag.Knowledge;
 namespace AIEnabledRma.Rag;
 
 /// <summary>
-/// The second retriever behind <see cref="IKnowledgeRetriever"/>: it adds the words the corpus uses
+/// The default retriever behind <see cref="IKnowledgeRetriever"/>: it adds the words the corpus uses
 /// to the words the customer used, then asks the lexical index the expanded question.
 /// </summary>
 /// <remarks>
 /// This exists because the seam was only ever measured with one implementation. The acceptance test
 /// resolves <c>IKnowledgeRetriever</c> from the host's own registration and scores whatever it finds,
 /// so a vector store or this decorator is measured by the same forty cases and the same floors — and
-/// enabling <c>Rag:Retrieval:SynonymExpansion</c> is the whole swap. Without a second implementation
-/// living here, "the retriever can be replaced" was a claim about an interface rather than about the
-/// pipeline that would have to carry the replacement.
+/// enabling <c>Rag:Retrieval:SynonymExpansion</c> was the whole swap. It is the default now, because
+/// the map fixes three questions the tokeniser could not; setting it to "false" is the ablation that
+/// reproduces the plain index's 0.850, which the golden set records as its own measurement.
 ///
 /// The map is deliberately tiny: the vocabulary gaps the golden set names, and nothing else. A
 /// synonym list that grows without being measured is a ranking change nobody can attribute to a
