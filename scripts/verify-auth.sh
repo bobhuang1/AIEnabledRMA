@@ -99,6 +99,19 @@ check_contains() {
     esac
 }
 
+# A claim that must be present with any value: the subject is an id nobody can hard-code, and an
+# empty one is the failure worth catching (an imported realm has none of Keycloak's built-in scopes
+# unless the import carries them, so sub can be absent while the token is otherwise valid).
+check_nonempty() {
+    local name=$1 value=$2
+
+    if [ -n "$value" ]; then
+        pass "$name ($value)"
+    else
+        fail "$name" "expected a value, got empty"
+    fi
+}
+
 # A claim from an access token, printed as one line; empty when the field is absent.
 claim() {
     local token=$1 field=$2
@@ -170,7 +183,13 @@ done
 if [ "${#started[@]}" -gt 0 ]; then
     docker compose --profile "$PROFILE" up -d --build
 else
-    echo "note  reusing the running stack and leaving it running afterwards"
+    # The transport caches the realm's signing keys along with its discovery document. An edited
+    # realm is re-imported by the next boot, which mints new keys, and a cached key set makes every
+    # machine token answer 401 while the browser flow (which happens later, after a refresh has
+    # landed) still passes — a failure that reads as a broken realm and is not one. Restarting the
+    # transport costs seconds and makes a reused stack behave like a fresh one.
+    echo "note  reusing the running stack; restarting $PROFILE so it reads the realm's current keys"
+    docker compose --profile "$PROFILE" restart mcp-http >/dev/null
 fi
 
 wait_for "keycloak discovery" "$KEYCLOAK_URL/realms/$REALM/.well-known/openid-configuration" 120
@@ -230,6 +249,7 @@ else
     check_contains "aud names the resource" "aienabledrma-mcp" "$(claim "$TOKEN" aud)"
     check_contains "scope carries rma:read" "rma:read" "$(claim "$TOKEN" scope)"
     check "azp is mcp-agent" "mcp-agent" "$(claim "$TOKEN" azp)"
+    check_nonempty "sub names the service account" "$(claim "$TOKEN" sub)"
 fi
 
 INITIALIZE='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"verify-auth","version":"1"}}}'
@@ -437,6 +457,7 @@ check "code with the verifier is exchanged" 200 "$(status_of "$RESPONSE")"
 BROWSER_TOKEN=$(body_of "$RESPONSE" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("access_token",""))')
 
 check "azp is mcp-browser" "mcp-browser" "$(claim "$BROWSER_TOKEN" azp)"
+check_nonempty "browser sub names the user" "$(claim "$BROWSER_TOKEN" sub)"
 check_contains "browser scope carries rma:read" "rma:read" "$(claim "$BROWSER_TOKEN" scope)"
 
 STATUS=$(curl -sS -o /dev/null -D "$HEADERS" -w '%{http_code}' \

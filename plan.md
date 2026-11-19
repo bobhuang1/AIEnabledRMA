@@ -264,6 +264,21 @@ bullets stay as requirements.
   same script as its one-command check, and `The_runbook_and_ci_name_the_same_script` asserts the three references
   still match, so renaming it fails a test instead of leaving a runbook that describes a file nobody has. Verified
   end to end on this workstation: all checks passed, exit 0.
+- The `mcp-browser` authorization-code flow was then **driven by hand, once, outside the script**, to read what it
+  actually mints: authorize `200`, sign-in `302` with a code, exchange `200` with `expires_in: 300`, a refresh token
+  and an id token, and the transport answering `200 text/event-stream` with the `initialize` result and
+  `Access-Control-Allow-Origin: http://localhost:5173`. The claims were `iss`, `aud=aienabledrma-mcp`,
+  `azp=mcp-browser`, `scope="openid rma:read"`, `typ=Bearer`, `sid`, `jti`, `exp`, `iat` — and **no `sub`**. That
+  last absence was the defect the runbook could not see: Keycloak creates its built-in `basic`/`profile` scopes for
+  a new realm but not for an imported one that omits them, so the token was valid and anonymous, and
+  `HttpContextCallerIdentity` recorded `mcp-browser:unknown-subject` for every browser caller. The realm now carries
+  a `basic` scope with one `oidc-sub-mapper` as a default scope of both clients; the re-run shows
+  `sub=<user id>` for the browser flow and a service-account id for the machine flow, and the gate asserts both are
+  non-empty.
+- Re-importing the realm also exposed a trap worth knowing: Keycloak mints new signing keys, the transport caches
+  the old ones, and the next machine token answers `401` — which reads as a broken realm and is not one. The causes
+  are separate (a restart of the transport fixes it), so `verify-auth.sh` restarts `mcp-http` whenever it reuses a
+  running stack, and `docs/mcp.md` says to recreate Keycloak **and** restart the tool server after editing the realm.
 - The origin allow-list is also the CORS policy, so a listed page can drive the endpoint instead of only being
   refused by it. The policy is applied to the whole host rather than as endpoint metadata because a preflight
   `OPTIONS` matches no route. `An_allowed_origin_can_preflight_the_endpoint` asserts the 204 with

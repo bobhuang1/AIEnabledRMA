@@ -9,6 +9,27 @@
   "accessTokenLifespan": 300,
   "clientScopes": [
     {
+      "name": "basic",
+      "description": "Supplies the subject. Keycloak's built-in client scopes are not created for an imported realm, so without this an access token has no sub at all and the tool server's audit row reads unknown-subject for every caller.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
       "name": "rma:read",
       "description": "Read-only access to the RMA MCP tools. Carries the audience the tool server requires, so a client granted this scope mints tokens it can present.",
       "protocol": "openid-connect",
@@ -46,7 +67,8 @@
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "defaultClientScopes": [
-        "rma:read"
+        "rma:read",
+        "basic"
       ]
     },
     {
@@ -66,7 +88,8 @@
         "http://localhost:5173"
       ],
       "defaultClientScopes": [
-        "rma:read"
+        "rma:read",
+        "basic"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256"

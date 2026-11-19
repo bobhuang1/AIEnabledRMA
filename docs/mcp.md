@@ -38,7 +38,7 @@ removes a volume.
 
 ## What the realm has to provide
 
-Four things, all committed in `infra/keycloak/realm-aienabledrma.json`:
+Five things, all committed in `infra/keycloak/realm-aienabledrma.json`:
 
 1. **Realm** `aienabledrma` — the issuer is `{keycloak}/realms/aienabledrma`.
 2. **Client scope** `rma:read` — grants the scope the tool server requires, and is a default
@@ -51,6 +51,11 @@ Four things, all committed in `infra/keycloak/realm-aienabledrma.json`:
    secret, and one accepted redirect (`http://localhost:5173/*`). It exists so a page can get a
    token; without it an allow-listed origin had permission to call the transport and no way to
    obtain the credential.
+5. **Client scope** `basic` — an `oidc-sub-mapper` and nothing else, a default scope of both
+   clients. An imported realm does not get Keycloak's built-in scopes, so without this an access
+   token carries no `sub` at all: the flow still succeeds, but every browser caller reaches the
+   audit trail as `mcp-browser:unknown-subject`. It is not a token scope — `scope` stays
+   `openid rma:read`.
 
 The realm also carries one machine client, `mcp-agent`, with `serviceAccountsEnabled: true` and
 the committed secret `mcp-agent-secret`, plus a development user `browser-demo` whose password is
@@ -73,6 +78,11 @@ docker compose logs keycloak | grep "Realm 'aienabledrma' imported"
 
 Discovery is then available at
 `http://localhost:8080/realms/aienabledrma/.well-known/openid-configuration`.
+
+If the realm file changed and the stack is already running, recreate Keycloak (`docker compose up -d
+--force-recreate keycloak`) **and restart the tool server**. Keycloak mints new signing keys on every
+import, and the transport caches the old ones, so a machine token answered before the restart gets a
+`401` that reads as a broken realm. `scripts/verify-auth.sh` does both when it reuses a running stack.
 
 ## Get a token
 
@@ -296,7 +306,18 @@ for it, and the realm rejects an authorize request without a `code_challenge`.
    authorization-code request, and the transport checks for its required scope among the
    space-separated values rather than comparing the whole claim, so the extra scope is expected.
    The claim set measured from a real run: `iss=http://keycloak:8080/realms/aienabledrma`,
-   `aud=aienabledrma-mcp`, `scope="openid rma:read"`, `azp=mcp-browser`.
+   `aud=aienabledrma-mcp`, `scope="openid rma:read"`, `azp=mcp-browser`, `typ=Bearer`, and
+   `sub=<the browser-demo user id>` (a UUID, so not reproduced here). The response body carried
+   `expires_in: 300`, a refresh token and an id token; the transport answered `200`
+   `text/event-stream` with the `initialize` result for `AIEnabledRma.Mcp`.
+
+   `sub` is the claim the audit row needs: `HttpContextCallerIdentity` records `client:subject`, so a
+   browser call is `mcp-browser:<user id>` and an agent call is `mcp-agent:<service account id>`. It
+   is not in a token minted by the stock realm, because Keycloak's built-in `basic`/`profile` scopes
+   are not created for an imported realm that does not list them — without `basic` the token is
+   otherwise valid and carries no `sub` at all, and every caller looked the same to the audit trail.
+   `basic` is therefore committed in the realm and is a default scope of both clients; its only job
+   is the subject mapper, and it adds nothing to the `scope` claim.
 
    A browser page is not needed to prove any of this: the authorize request and the sign-in form can
    be driven with curl and a cookie jar, which is how the check in the `200` above was made. What
