@@ -331,6 +331,13 @@ public sealed class McpHttpTransportTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+
+        // The header parameter has to survive the refusal path, not only the anonymous one: a
+        // client whose token is wrong is exactly the client that needs to find the right issuer.
+        Assert.Contains(
+            "resource_metadata=\"http://localhost/.well-known/oauth-protected-resource/mcp\"",
+            response.Headers.WwwAuthenticate.ToString(),
+            StringComparison.Ordinal);
     }
 
     [Fact]
