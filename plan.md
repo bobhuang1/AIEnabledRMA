@@ -429,9 +429,13 @@ bullets stay as requirements.
   alone *lost* "it restarts by itself every few minutes" — the article's own keyword is `restarts`, and collapsing
   it to `restart` let a shorter article win on its other words. `TextTokensTests` pins each rule, including the
   ones that must not fire (`spill` must not become `spil`).
-- Net effect on the forty cases: seven recovered (`rq-010`, `rq-012`, `rq-014`, `rq-015`, `rq-022`, `rq-025`,
-  `rq-028`), one lost (`rq-038`, where the question now matches the cradle article's vocabulary more strongly than
-  the evidence article's), so recall +0.075 and MRR +0.104. Six still miss and they are not tokeniser problems any
+- Net effect on the forty cases, per case rather than netted: four recovered (`rq-010` 0→1, `rq-012` 0→1,
+  `rq-022` 0→2, `rq-028` 0→1), four moved up without changing whether they hit (`rq-009` 2→1, `rq-026` 3→1,
+  `rq-027` 3→1, `rq-006` 3→2), **two previously passing questions slipped a rank** (`rq-004` 1→2, `rq-005`
+  1→2) and one was lost (`rq-038` 3→miss, where the question now matches the cradle article's vocabulary more
+  strongly than the evidence article's), so recall +0.075 and MRR +0.104. The demotions are the price of the
+  stopword list and are named rather than averaged away; both still sit inside the top three, so neither costs a
+  citation yet. Six still miss and they are not tokeniser problems any
   more: `rq-002` (`switch on` vs the article's `turn on`), `rq-008`/`rq-013`/`rq-017`/`rq-033`/`rq-038` (a synonym
   or a whole phrase the lexicon does not share, such as `photos` vs `documentation`). Those need synonyms or
   embeddings, not stemming, and the file's `baseline` block lists each miss with the articles that beat it.
@@ -446,7 +450,11 @@ bullets stay as requirements.
   Promoting the decorator to the default needs its own baseline block (or a second one), which is why it is left
   as a measured alternative rather than a quiet improvement.
 - The file's `baseline` block is now asserted, not just published: the acceptance test compares the measured
-  recall@3, MRR and case count to it and fails with "re-record deliberately" when they differ. Floors catch a
+  recall@3, MRR, case count **and all forty per-case ranks** to it and fails with "re-record deliberately" when they
+  differ. The ranks are the part that can move quietly: one question up a rank and another down leaves both
+  aggregates identical, so `baseline.ranks` plus a printed `rank N -> M` for every case makes that swap a failure
+  naming two question ids instead of a silent pass. Re-recording is per case too — edit the rank that actually
+  moved, and the commit message says which case and why. Floors catch a
   regression; the baseline catches a stale record — a case edited, an article added, a change that clears the floor
   while still moving the number — which would otherwise leave the file claiming a measurement nobody can reproduce.
 - Both numbers are floored, not just printed. `mrrFloor: 0.75` sits beside `recallAt3Floor: 0.85`, because recall@3

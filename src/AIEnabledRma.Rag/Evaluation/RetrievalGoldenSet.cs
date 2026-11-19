@@ -67,6 +67,15 @@ public sealed record GoldenSetBaseline
 
     public IReadOnlyList<string>? Misses { get; init; }
 
+    /// <summary>
+    /// The rank each case landed at, so a later run can be compared question by question.
+    /// </summary>
+    /// <remarks>
+    /// The aggregates cannot see a swap — one case up a rank and another down one leaves recall and
+    /// MRR unchanged — and a single changed case is worth naming, not just counting.
+    /// </remarks>
+    public IReadOnlyDictionary<string, int>? Ranks { get; init; }
+
     public string? Notes { get; init; }
 }
 

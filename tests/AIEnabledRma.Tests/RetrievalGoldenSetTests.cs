@@ -166,6 +166,44 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
             $"the set now has {score.Cases.Count} cases but the baseline was measured on "
             + $"{baseline.Cases}. A changed case count moves both numbers by arithmetic alone, so "
             + "re-record baseline.cases, recallAt3 and mrr together deliberately.");
+
+        // Per case, not only in aggregate: a rank swap leaves recall and MRR untouched, and "which
+        // question moved" is the only useful form of the answer. The delta is published for every
+        // case, equal or not, so a run says what it did rather than only that it was allowed.
+        var recordedRanks = baseline.Ranks;
+
+        Assert.True(
+            recordedRanks is not null,
+            "eval/retrieval-golden.json has no baseline.ranks block, so a run cannot be compared "
+            + "question by question. Re-record it in the same commit as the change that moved a rank.");
+
+        var drifted = new List<string>();
+
+        foreach (var caseScore in score.Cases)
+        {
+            if (!recordedRanks!.TryGetValue(caseScore.Case.Id, out var recorded))
+            {
+                drifted.Add($"{caseScore.Case.Id} (not in the baseline) -> rank {caseScore.Rank}");
+                continue;
+            }
+
+            output.WriteLine(
+                $"{caseScore.Case.Id} rank {recorded} -> {caseScore.Rank}"
+                + (recorded == caseScore.Rank ? string.Empty : "  CHANGED"));
+
+            if (recorded != caseScore.Rank)
+            {
+                drifted.Add($"{caseScore.Case.Id} {recorded} -> {caseScore.Rank}");
+            }
+        }
+
+        Assert.True(
+            drifted.Count == 0,
+            $"{drifted.Count} case(s) moved against baseline.ranks: "
+            + string.Join(", ", drifted)
+            + ". If the change is intended, re-record baseline.ranks (and recallAt3, mrr and the "
+            + "floor if they moved) deliberately; if not, this is the per-case regression the "
+            + "aggregate could hide.");
     }
 
     /// <summary>
