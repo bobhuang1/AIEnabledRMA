@@ -418,7 +418,8 @@ bullets stay as requirements.
   test, the data or the floor. `The_scorer_measures_the_retriever_it_is_given` pins that with two stubs, and
   registering an empty retriever in `AddRag` fails the acceptance test with recall 0.000 without any change to
   the cases, which is the proof that the number now follows the implementation rather than the class.
-- Baseline now, measured 2026-11-16 after the tokeniser change: **recall@3 = 0.850 (34/40), MRR = 0.750**, floor
+- History now, three appended entries rather than one block: **0.714 (15/21) MRR 0.627** on the set before it was
+  widened, **0.775 (31/40) MRR 0.646** on the unstemmed tokeniser, **0.850 (34/40) MRR 0.750** after it, floor
   0.85. Before: recall@3 = 0.775 (31/40), MRR = 0.646, floor 0.77. The set was extended to forty without weakening
   any question first, and the earliest measurement was 0.714 (15/21) with MRR 0.627 — so the numbers read
   0.714 → 0.775 → 0.850, each step a different cause (more questions, then a better tokeniser).
@@ -438,23 +439,38 @@ bullets stay as requirements.
   citation yet. Six still miss and they are not tokeniser problems any
   more: `rq-002` (`switch on` vs the article's `turn on`), `rq-008`/`rq-013`/`rq-017`/`rq-033`/`rq-038` (a synonym
   or a whole phrase the lexicon does not share, such as `photos` vs `documentation`). Those need synonyms or
-  embeddings, not stemming, and the file's `baseline` block lists each miss with the articles that beat it.
+  embeddings, not stemming, and the latest entry's `misses` lists each one.
 - **The retriever seam now has a second implementation, measured by the same cases.** `SynonymExpandingRetriever`
   wraps the index, expands the customer's words with the corpus's (`switch`→`turn`, `photos`→`documentation`,
   `halfway`→`truncated`, `faulty`→`fault`, `write`→`record`, `pull`→`press`, `nothing`→`dead`), and is selected by
   `Rag:Retrieval:SynonymExpansion`. `The_synonym_retriever_is_measured_by_the_same_cases_and_floors` resolves
   `IKnowledgeRetriever` from `AddRag` with that setting on, asserts the resolved type is the decorator, and scores
   the same forty cases against the same floors: **recall@3 0.925 (37/40), MRR 0.825** against the lexical 0.850 and
-  0.750. The default stays lexical and the baseline stays the lexical measurement — a second implementation is not
+  0.750. The default stays lexical and the latest measurement stays the lexical one — a second implementation is not
   claiming to reproduce it — so the swap is demonstrated without silently changing what the product cites.
-  Promoting the decorator to the default needs its own baseline block (or a second one), which is why it is left
+  Promoting the decorator to the default needs its own appended measurement, which is why it is left
   as a measured alternative rather than a quiet improvement.
-- The file's `baseline` block is now asserted, not just published: the acceptance test compares the measured
-  recall@3, MRR, case count **and all forty per-case ranks** to it and fails with "re-record deliberately" when they
-  differ. The ranks are the part that can move quietly: one question up a rank and another down leaves both
-  aggregates identical, so `baseline.ranks` plus a printed `rank N -> M` for every case makes that swap a failure
-  naming two question ids instead of a silent pass. Re-recording is per case too — edit the rank that actually
-  moved, and the commit message says which case and why. Floors catch a
+- The recorded measurement is **append-only history**, not one block that gets overwritten: `measurements` holds
+  every run, oldest first, and the acceptance test reproduces the latest entry — recall@3, MRR, case count and all
+  forty per-case ranks — while asserting the dates never go backwards. Overwriting the last entry was the failure
+  mode worth removing: it keeps a number that cannot be reproduced and destroys the one that could. A corrected
+  measurement is a new entry whose notes name the one it supersedes.
+- Each entry records the **corpus fingerprint** it was measured on (`RetrievalGoldenSet.CorpusFingerprint`:
+  sha256 over each article's relative path and bytes, sorted so enumeration order cannot change it). The test
+  computes it and fails when it differs from the latest entry, with a message that says the corpus moved under the
+  measurement: a number that changed with the corpus is the articles' doing, not the retriever's. The two older
+  entries carry `null` rather than a backfilled value nobody measured, which is stated in their notes.
+- **The floor-moving rules are in the data**, in `floorRules`, so a change to them is a reviewable diff beside the
+  numbers: never lower a floor in the same commit that changes scoring code (land and measure the change, append
+  its entry, move the floor in a later commit citing it); never lower one to turn a red run green; raise one only
+  in the commit that appends a measurement meeting it; keep `measurements` append-only; record a fingerprint every
+  time; add cases but never weaken one. The acceptance test asserts the rules are present and that the
+  same-commit prohibition and the append-only rule are both stated, so deleting the sentence fails the suite
+  rather than degrading the file to convention.
+- The ranks are the part that can move quietly: one question up a rank and another down leaves both aggregates
+  identical, so the latest entry's ranks plus a printed `rank N -> M` for every case makes that swap a failure
+  naming two question ids instead of a silent pass. Re-recording is per case too — the appended entry records the
+  rank that actually moved. Floors catch a
   regression; the baseline catches a stale record — a case edited, an article added, a change that clears the floor
   while still moving the number — which would otherwise leave the file claiming a measurement nobody can reproduce.
 - Both numbers are floored, not just printed. `mrrFloor: 0.75` sits beside `recallAt3Floor: 0.85`, because recall@3

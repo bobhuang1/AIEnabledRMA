@@ -1,3 +1,4 @@
+using System.Globalization;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Triage;
 using AIEnabledRma.Rag;
@@ -137,35 +138,84 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
         // article, change the tokeniser, and as long as the floor still passes the file keeps
         // claiming a measurement nobody can reproduce. The tolerance is for averaging doubles,
         // not for drift: one case changed is at least 0.025 on recall with forty questions.
-        var baseline = golden.Baseline;
+        Assert.True(
+            golden.Measurements.Count > 0,
+            "eval/retrieval-golden.json has no measurements, so the recorded run cannot be checked "
+            + "against one. A run appends its entry; it does not start the history over.");
+
+        // Append-only is an order, not a promise: a new run adds its entry to the end, so the dates
+        // have to increase (two runs on one day may share a date). History that was edited or
+        // reordered reads as plausible and matches no run.
+        var days = golden.Measurements
+            .Select(m => DateOnly.ParseExact(m.MeasuredOn, "yyyy-MM-dd", CultureInfo.InvariantCulture))
+            .ToList();
 
         Assert.True(
-            baseline is not null,
-            "eval/retrieval-golden.json has no baseline block, so the recorded measurement cannot be "
-            + "checked against a run. Re-record it in the same commit as the change that moved it.");
+            days.Zip(days.Skip(1)).All(pair => pair.First <= pair.Second),
+            "measurements are not in ascending measuredOn order. The list is append-only: a new run "
+            + "adds an entry at the end, and an existing entry is never edited or reordered.");
+
+        var baseline = golden.Latest!;
+
+        // The rules for moving the bar live in the data, so changing one is a reviewable diff beside
+        // the number it governs. The one rule that matters most is asserted rather than trusted to
+        // survive: a floor lowered in the same commit as a scoring change hides the regression the
+        // floor exists to catch.
+        Assert.True(
+            golden.FloorRules is { Count: > 0 },
+            "eval/retrieval-golden.json states no floorRules, so how a floor may move is convention "
+            + "rather than policy. Restore the rules; they are what a reviewer checks the commit against.");
+
+        Assert.Contains(
+            golden.FloorRules!,
+            rule => rule.Contains("never lowered in the same commit", StringComparison.Ordinal));
+
+        Assert.Contains(
+            golden.FloorRules!,
+            rule => rule.Contains("append-only", StringComparison.OrdinalIgnoreCase));
+
+        // The corpus the number belongs to. Two runs that disagree with the same fingerprint are the "
+        // retriever's doing; a changed fingerprint means the corpus moved under the measurement, and that "
+        // is a different investigation. This cannot run before the corpus loads, so it reads the
+        // directory the configuration above pointed AddRag at.
+        var corpusFingerprint = RetrievalGoldenSet.CorpusFingerprint(Path.Combine(root, "knowledge-base"));
+
+        Assert.True(
+            baseline.CorpusFingerprint is not null,
+            $"the latest measurement ({baseline.MeasuredOn}) records no corpusFingerprint, so a number "
+            + "that moved cannot be attributed to the corpus or to the retriever. Append an entry that "
+            + $"records it: {corpusFingerprint}.");
+
+        Assert.True(
+            string.Equals(baseline.CorpusFingerprint, corpusFingerprint, StringComparison.Ordinal),
+            $"the corpus is {corpusFingerprint} but the latest measurement was taken on "
+            + $"{baseline.CorpusFingerprint} ({baseline.MeasuredOn}). The corpus changed since that run, "
+            + "so a difference here is the articles' doing rather than the retriever's: append a new "
+            + "measurement taken on this corpus instead of editing the old one.");
 
         Assert.True(
             Math.Abs(score.RecallAt3 - baseline!.RecallAt3) < 1e-9,
             $"recall@3 measures {score.RecallAt3:0.000} ({score.Hits}/{score.Cases.Count}) but the "
-            + $"baseline records {baseline.RecallAt3:0.000}. If the change is intended, re-record "
-            + "baseline.recallAt3 — and the floor, if it moved — in eval/retrieval-golden.json as a "
-            + "deliberate edit; if not, this is the regression the baseline exists to catch."
+            + $"the latest measurement records {baseline.RecallAt3:0.000}. If the change is intended, "
+            + "append a new measurement entry (recallAt3, mrr, ranks, corpusFingerprint — and the floor, "
+            + "in its own commit) in eval/retrieval-golden.json; if not, this is the regression the "
+            + "history exists to catch."
             + Environment.NewLine
             + string.Join(Environment.NewLine, misses));
 
         Assert.True(
             Math.Abs(score.Mrr - baseline.Mrr) < 1e-9,
-            $"MRR measures {score.Mrr:0.000} but the baseline records {baseline.Mrr:0.000}. Re-record "
-            + "baseline.mrr deliberately if the change is intended; a hit that moved rank without "
+            $"MRR measures {score.Mrr:0.000} but the latest measurement records {baseline.Mrr:0.000}. "
+            + "Append a new entry deliberately if the change is intended; a hit that moved rank without "
             + "changing recall@3 is exactly what this number is for."
             + Environment.NewLine
             + string.Join(Environment.NewLine, lowered));
 
         Assert.True(
             score.Cases.Count == baseline.Cases,
-            $"the set now has {score.Cases.Count} cases but the baseline was measured on "
+            $"the set now has {score.Cases.Count} cases but the latest measurement was taken on "
             + $"{baseline.Cases}. A changed case count moves both numbers by arithmetic alone, so "
-            + "re-record baseline.cases, recallAt3 and mrr together deliberately.");
+            + "append an entry that records the count, recallAt3 and mrr together.");
 
         // Per case, not only in aggregate: a rank swap leaves recall and MRR untouched, and "which
         // question moved" is the only useful form of the answer. The delta is published for every
@@ -174,8 +224,8 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
 
         Assert.True(
             recordedRanks is not null,
-            "eval/retrieval-golden.json has no baseline.ranks block, so a run cannot be compared "
-            + "question by question. Re-record it in the same commit as the change that moved a rank.");
+            "the latest measurement has no ranks, so a run cannot be compared question by question. "
+            + "Append an entry with a rank for every case.");
 
         var drifted = new List<string>();
 
@@ -183,7 +233,7 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
         {
             if (!recordedRanks!.TryGetValue(caseScore.Case.Id, out var recorded))
             {
-                drifted.Add($"{caseScore.Case.Id} (not in the baseline) -> rank {caseScore.Rank}");
+                drifted.Add($"{caseScore.Case.Id} (not in the latest entry) -> rank {caseScore.Rank}");
                 continue;
             }
 
@@ -199,11 +249,11 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
 
         Assert.True(
             drifted.Count == 0,
-            $"{drifted.Count} case(s) moved against baseline.ranks: "
+            $"{drifted.Count} case(s) moved against the latest entry's ranks: "
             + string.Join(", ", drifted)
-            + ". If the change is intended, re-record baseline.ranks (and recallAt3, mrr and the "
-            + "floor if they moved) deliberately; if not, this is the per-case regression the "
-            + "aggregate could hide.");
+            + ". If the change is intended, append a new measurement (ranks, recallAt3, mrr and the "
+            + "corpusFingerprint; the floor separately) deliberately; if not, this is the per-case "
+            + "regression the aggregate could hide.");
     }
 
     /// <summary>
@@ -275,6 +325,7 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
         {
             Description = "in memory, for the seam only",
             RecallAt3Floor = 1d,
+            Measurements = [],
             Cases =
             [
                 new GoldenSetCase { Id = "s-1", Question = "first", Expected = ["kb-0001"] },

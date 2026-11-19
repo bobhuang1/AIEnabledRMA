@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Triage;
@@ -31,8 +33,17 @@ public sealed record GoldenSet
     /// </remarks>
     public double? MrrFloor { get; init; }
 
-    /// <summary>What the last recorded measurement was, published so a later run can be compared to it.</summary>
-    public GoldenSetBaseline? Baseline { get; init; }
+    /// <summary>Rules for moving a floor, kept in the data so they are reviewed with the number.</summary>
+    public IReadOnlyList<string>? FloorRules { get; init; }
+
+    /// <summary>
+    /// Every measurement taken, oldest first. Append-only: a run adds an entry rather than editing
+    /// the last one, so the history says how the number got here and not only where it is.
+    /// </summary>
+    public required IReadOnlyList<GoldenSetMeasurement> Measurements { get; init; }
+
+    /// <summary>The entry a run has to reproduce: the most recent measurement.</summary>
+    public GoldenSetMeasurement? Latest => Measurements.Count == 0 ? null : Measurements[^1];
 
     public required IReadOnlyList<GoldenSetCase> Cases { get; init; }
 }
@@ -52,18 +63,31 @@ public sealed record GoldenSetCase
     public string? Note { get; init; }
 }
 
-/// <summary>The recorded measurement. Documentation for the next person, not an input to scoring.</summary>
-public sealed record GoldenSetBaseline
+/// <summary>One recorded measurement. Documentation for the next person, not an input to scoring.</summary>
+public sealed record GoldenSetMeasurement
 {
-    public string? MeasuredOn { get; init; }
+    /// <summary>The day the run happened, as <c>yyyy-MM-dd</c>; entries are ordered by it.</summary>
+    public required string MeasuredOn { get; init; }
 
+    /// <summary>What did the retrieving, described well enough to reproduce the run.</summary>
     public string? Index { get; init; }
 
-    public double RecallAt3 { get; init; }
+    /// <summary>
+    /// The corpus the number was measured on: <c>sha256:</c> over every article's path and bytes.
+    /// </summary>
+    /// <remarks>
+    /// Without it a moved number is ambiguous. With it, two runs that disagree while the fingerprint
+    /// matches are the retriever's doing, and a changed fingerprint says the corpus moved under the
+    /// measurement — which is a different investigation. Entries recorded before the field existed
+    /// leave it null rather than inventing a value.
+    /// </remarks>
+    public string? CorpusFingerprint { get; init; }
 
-    public double Mrr { get; init; }
+    public required double RecallAt3 { get; init; }
 
-    public int Cases { get; init; }
+    public required double Mrr { get; init; }
+
+    public required int Cases { get; init; }
 
     public IReadOnlyList<string>? Misses { get; init; }
 
@@ -218,6 +242,37 @@ public static class RetrievalGoldenSet
 
     /// <summary>The product asks for this many articles, so the eval measures the same window.</summary>
     public const int TopK = 3;
+
+    /// <summary>
+    /// A stable fingerprint of the corpus a measurement was taken on.
+    /// </summary>
+    /// <remarks>
+    /// Sorted relative paths plus file bytes, hashed: a renamed, added, removed or edited article
+    /// changes it, and file enumeration order cannot. It deliberately covers the files rather than the
+    /// parsed articles, so review state and parser changes are visibly not part of the corpus.
+    /// </remarks>
+    public static string CorpusFingerprint(string knowledgeBaseDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(knowledgeBaseDirectory);
+
+        var articles = Directory
+            .EnumerateFiles(knowledgeBaseDirectory, "*.md", SearchOption.AllDirectories)
+            .Select(path => (Path: path, Relative: Path.GetRelativePath(knowledgeBaseDirectory, path).Replace('\\', '/')))
+            .OrderBy(file => file.Relative, StringComparer.Ordinal)
+            .ToList();
+
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+        foreach (var article in articles)
+        {
+            hash.AppendData(Encoding.UTF8.GetBytes(article.Relative));
+            hash.AppendData([0]);
+            hash.AppendData(File.ReadAllBytes(article.Path));
+            hash.AppendData([0]);
+        }
+
+        return "sha256:" + Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
 
     /// <summary>
     /// Articles the set names that the corpus does not have, or articles no case names. Both make the
