@@ -20,8 +20,9 @@
 # Environment:
 #   KEYCLOAK_URL  host address for the browser-facing steps, default http://localhost:8080
 #   MCP_URL       default http://localhost:5080
-#   KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD  master-realm admin for the shape checks below,
-#                 default admin/admin (the compose defaults)
+#   KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD  master-realm admin for the shape checks below.
+#                 The username defaults to `admin`; the password is generated per run when unset, so
+#                 the gate never logs in with a credential written down in this repository.
 #   KEEP=1        do not stop the containers this script started
 #
 # Requirements: docker compose (v2), curl, python3 (or python). No jq, no openssl.
@@ -51,6 +52,14 @@ if [ -z "$PY" ]; then
     echo "verify-auth: python3 is required to read the token responses." >&2
     exit 2
 fi
+
+# A per-run password for the master-realm admin. The realm commits demo clients and a demo user on
+# purpose; the admin account is different, because it can rewrite all of them, and `admin`/`admin` is
+# a credential published in this repository. The value is generated here, handed to compose through
+# the variable the container bootstraps from, and never printed. An operator who already has a stack
+# running can pass their own, which is why the variable is honoured first.
+KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-$("$PY" -c 'import secrets; print(secrets.token_urlsafe(24))' | tr -d '')}
+export KEYCLOAK_ADMIN_PASSWORD
 
 WORK=$(mktemp -d)
 started=()
@@ -243,7 +252,7 @@ echo "== realm shape (admin API, after the import)"
 # features, and the failure looks like a token problem rather than a realm problem. The admin API is
 # the only place that says which of those it is, so the facts the flows depend on are asserted here,
 # right after the import the boot above guarantees.
-ADMIN_TOKEN=$(curl -sS -X POST "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token"     -d 'grant_type=password'     -d 'client_id=admin-cli'     -d "username=${KEYCLOAK_ADMIN:-admin}"     -d "password=${KEYCLOAK_ADMIN_PASSWORD:-admin}"     | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("access_token",""))')
+ADMIN_TOKEN=$(curl -sS -X POST "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token"     -d 'grant_type=password'     -d 'client_id=admin-cli'     -d "username=${KEYCLOAK_ADMIN:-admin}"     -d "password=$KEYCLOAK_ADMIN_PASSWORD"     | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("access_token",""))')
 
 # Not check_nonempty: that prints the value, and this value is an admin token.
 check "admin token from the master realm" "yes" "$([ -n "$ADMIN_TOKEN" ] && echo yes || echo no)"

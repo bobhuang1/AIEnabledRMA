@@ -37,6 +37,9 @@ services:
     command: ["start-dev", "--import-realm"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      # The default is for hands-on use of this checkout. scripts/verify-auth.sh exports a generated
+      # password before it starts anything, because the master admin can rewrite every client and user
+      # the realm commits, and a shared default is a credential published in the repository.
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       # Development mode serves http and derives the issuer from the request host. That is what
       # lets both recipes in docs/mcp.md work: a host-run server validates http://localhost:8080/...
