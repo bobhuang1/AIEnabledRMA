@@ -438,6 +438,12 @@ bullets stay as requirements.
   number does not move while the citation handed to the model gets worse. The acceptance test asserts both and names
   every case not at rank 1, so a fall reads as a diagnosis rather than a number. Measured: reversing the order the
   index returns keeps recall@3 at 0.850 and fails the test with `MRR is 0.438, below the recorded floor 0.750`.
+- The stopword list was checked by ablation rather than assumed: with the same stemmer and the same forty cases,
+  removing only the stopword filter measures recall@3 0.825 (33/40) and MRR 0.721 against 0.850 and 0.750 with it.
+  One question (`rq-010`, "a deep scratch across the scanner window") and a rank demotion are what the generic
+  words cost, which is what the comment beside the list claims and now has a number behind it. Re-running the
+  ablation is a one-line edit to `TextTokens.Tokenize`; the assertion in the test means a change that keeps the
+  list but loses the lift still fails.
 - The floors follow the measurement rather than the aspiration: 0.85 and 0.75 with forty cases still fail on a
   single lost question or a single demotion, and changing either is a reviewable diff in the data with the before
   and after written beside it.
