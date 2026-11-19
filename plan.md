@@ -233,6 +233,12 @@ bullets stay as requirements.
   loopback redirect) and a `browser-demo` user, because an allow-listed origin with no way to obtain a token is
   not a browser client. The compose service lists both clients and the page origin, so the browser flow works
   as checked out.
+- The realm file is now pinned by tests rather than by that verification alone: `KeycloakBrowserClientTests` asserts
+  `mcp-browser` exists, is public, carries no secret, requires `S256`, enables only the authorization-code flow,
+  accepts exactly one loopback redirect and lists only loopback origins, and that the `mcp-http` compose service
+  allow-lists that client id and that origin. The live check proved it once; the JSON and YAML are what a future
+  edit can silently break, so they are what the test reads. Mutations checked: adding a `secret` to the client and
+  replacing the compose client id each fail it.
 - Verified end to end through the browser flow, not just the machine one: authorize `200`, sign-in `302` to
   `http://localhost:5173/callback?code=...`, code exchanged with the verifier and no secret, and the resulting
   token carries `iss=http://keycloak:8080/realms/aienabledrma`, `aud=aienabledrma-mcp`,
