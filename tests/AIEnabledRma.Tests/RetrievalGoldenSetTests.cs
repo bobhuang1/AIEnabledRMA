@@ -247,6 +247,27 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
             + "so a difference here is the articles' doing rather than the retriever's: append a new "
             + "measurement taken on this corpus instead of editing the old one.");
 
+        // The fingerprint says what the bytes on disk are; this says which of them a reviewer signed
+        // off, which is the corpus the eval actually searched (RequireReview is on above). Recording
+        // both is what separates an edit that was re-reviewed from one that was not: with only the
+        // fingerprint, an article edited without a new review looks like a pure corpus change when in
+        // truth the loader dropped it, and with only the reviewed hash, that edit would be invisible.
+        var reviewedCorpusHash = RetrievalGoldenSet.ReviewedCorpusHash(Path.Combine(root, "knowledge-base"));
+
+        Assert.True(
+            baseline.ReviewedCorpusHash is not null,
+            $"the latest measurement ({baseline.MeasuredOn}) records no reviewedCorpusHash, so a score "
+            + "change cannot be told apart from a re-review. Append an entry that records it: "
+            + $"{reviewedCorpusHash}.");
+
+        Assert.True(
+            string.Equals(baseline.ReviewedCorpusHash, reviewedCorpusHash, StringComparison.Ordinal),
+            $"the reviewed corpus is {reviewedCorpusHash} (REVIEWED.sha256) but the latest measurement "
+            + $"was taken on {baseline.ReviewedCorpusHash} ({baseline.MeasuredOn}). An article was "
+            + "reviewed, re-reviewed or added since that run, so a difference in the score is the "
+            + "corpus's doing rather than the retriever's: append a new measurement instead of editing "
+            + "the old one.");
+
         Assert.True(
             Math.Abs(score.RecallAt3 - baseline!.RecallAt3) < 1e-9,
             $"recall@3 measures {score.RecallAt3:0.000} ({score.Hits}/{score.Cases.Count}) but the "
@@ -566,6 +587,52 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
         Assert.True(clean.MeetsFloor);
         Assert.True(clean.MeetsMrrFloor);
         Assert.True(clean.MeetsPrecisionAt3Floor);
+    }
+
+    /// <summary>
+    /// The reviewed-corpus hash identifies the signed-off state, not the checkout that produced it.
+    /// </summary>
+    /// <remarks>
+    /// The manifest is `sha256sum` output, and nothing about its meaning depends on line order or on
+    /// CRLF, both of which a Windows checkout can change without a reviewer touching an article. If
+    /// the hash moved for either, every entry taken on a Linux host would appear to be a different
+    /// corpus, and the field would be ignored rather than trusted.
+    /// </remarks>
+    [Fact]
+    public void The_reviewed_corpus_hash_ignores_order_and_line_endings()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"rma-reviewed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            var first = "a".PadRight(64, '0');
+            var second = "b".PadRight(64, '1');
+
+            File.WriteAllText(
+                Path.Combine(root, RetrievalGoldenSet.ReviewedHashesFileName),
+                $"{first}  power/kb-0001.md\n{second}  display\\kb-0004.md\n");
+
+            var ordered = RetrievalGoldenSet.ReviewedCorpusHash(root);
+
+            // Same entries, reversed, CRLF, upper-case hash: the reviewer's state did not change.
+            File.WriteAllText(
+                Path.Combine(root, RetrievalGoldenSet.ReviewedHashesFileName),
+                $"{second.ToUpperInvariant()}  display/kb-0004.md\r\n{first}  power/kb-0001.md\r\n");
+
+            Assert.Equal(ordered, RetrievalGoldenSet.ReviewedCorpusHash(root));
+
+            // One reviewed byte changing is a different corpus, and has to read as one.
+            File.WriteAllText(
+                Path.Combine(root, RetrievalGoldenSet.ReviewedHashesFileName),
+                $"{second}  display/kb-0004.md\n{first[..63]}2  power/kb-0001.md\n");
+
+            Assert.NotEqual(ordered, RetrievalGoldenSet.ReviewedCorpusHash(root));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     /// <summary>The corpus path, review, and families the eval states it measures with.</summary>

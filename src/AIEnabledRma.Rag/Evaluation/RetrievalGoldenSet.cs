@@ -104,6 +104,20 @@ public sealed record GoldenSetMeasurement
     /// </remarks>
     public string? CorpusFingerprint { get; init; }
 
+    /// <summary>
+    /// The corpus as a reviewer signed it off: <c>sha256:</c> over the sorted entries of
+    /// <c>knowledge-base/REVIEWED.sha256</c>.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="CorpusFingerprint"/> says what the bytes on disk are; this says which of them a
+    /// reviewer vouched for, and the loader serves only those when provenance is required — which the
+    /// eval is configured to require. The pair is what tells a moved number apart: a fingerprint that
+    /// moved while this hash held still is an article edited without re-review (so the loader drops
+    /// it, and the corpus the retriever saw really did change), while both moving is an edit that was
+    /// re-reviewed. One hash alone cannot separate those, which is why both are recorded.
+    /// </remarks>
+    public string? ReviewedCorpusHash { get; init; }
+
     public required double RecallAt3 { get; init; }
 
     public required double Mrr { get; init; }
@@ -377,6 +391,66 @@ public static class RetrievalGoldenSet
 
     /// <summary>The product asks for this many articles, so the eval measures the same window.</summary>
     public const int TopK = 3;
+
+    /// <summary>The checked-in file that records, per article, the hash of the bytes a reviewer read.</summary>
+    public const string ReviewedHashesFileName = "REVIEWED.sha256";
+
+    /// <summary>
+    /// The reviewed corpus a measurement was taken on: <c>sha256:</c> over the entries of
+    /// <c>REVIEWED.sha256</c>, in canonical form (lower-case hash, forward slashes, sorted), so
+    /// reordering the manifest or a CRLF checkout cannot change it.
+    /// </summary>
+    /// <remarks>
+    /// This is deliberately not the bytes on disk. The eval loads with <c>RequireReview</c> on, so an
+    /// article the manifest does not vouch for is not in the corpus the retriever searched. Hashing
+    /// the manifest records the signed-off state, and it stays stable across reordering or a CRLF
+    /// checkout because the lines are normalised before hashing.
+    /// </remarks>
+    public static string ReviewedCorpusHash(string knowledgeBaseDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(knowledgeBaseDirectory);
+
+        var manifest = Path.Combine(knowledgeBaseDirectory, ReviewedHashesFileName);
+
+        if (!File.Exists(manifest))
+        {
+            throw new FileNotFoundException(
+                $"The reviewed corpus hash cannot be taken: {manifest} does not exist.",
+                manifest);
+        }
+
+        var entries = new List<string>();
+        var lineNumber = 0;
+
+        foreach (var raw in File.ReadLines(manifest))
+        {
+            lineNumber++;
+            var line = raw.Trim();
+
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            // sha256sum output: the hash, two spaces, the path. A line without both is a corpus the
+            // reviewer never finished, and measuring it would record a hash nobody can reproduce.
+            var fields = line.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            if (fields.Length != 2 || fields[0].Length != 64)
+            {
+                throw new InvalidOperationException(
+                    $"{manifest}:{lineNumber} is not a sha256sum line (expected '<64 hex>  <path>'): {line}");
+            }
+
+            entries.Add($"{fields[0].ToLowerInvariant()} {fields[1].Replace('\\', '/')}");
+        }
+
+        entries.Sort(StringComparer.Ordinal);
+
+        var bytes = Encoding.UTF8.GetBytes(string.Join('\n', entries));
+
+        return "sha256:" + Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    }
 
     /// <summary>
     /// A stable fingerprint of the corpus a measurement was taken on.

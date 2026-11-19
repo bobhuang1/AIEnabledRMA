@@ -471,6 +471,16 @@ bullets stay as requirements.
   computes it and fails when it differs from the latest entry, with a message that says the corpus moved under the
   measurement: a number that changed with the corpus is the articles' doing, not the retriever's. The two older
   entries carry `null` rather than a backfilled value nobody measured, which is stated in their notes.
+- Each entry also records the **reviewed corpus hash** (`RetrievalGoldenSet.ReviewedCorpusHash`): sha256 over the
+  sorted entries of `knowledge-base/REVIEWED.sha256`, normalised so line order, CRLF and hash case cannot move it.
+  The fingerprint above answers "what are the bytes on disk"; this one answers "which bytes did a reviewer sign
+  off", and the eval loads with `RequireReview` on, so the second is the corpus the retriever actually searched.
+  Recording both is what attributes a moved number instead of merely noticing one: fingerprint moved with the
+  reviewed hash held still is an article edited without a re-review, which the loader then refuses, so the served
+  corpus changed even though no reviewer acted; both moving is an edit that was re-reviewed. With one hash alone
+  neither case can be told from the retriever behaving differently, which was the gap this closes. The check is in
+  the acceptance test beside the fingerprint check, and `The_reviewed_corpus_hash_ignores_order_and_line_endings`
+  pins the normalisation with a manifest rewritten in reverse order and CRLF.
 - **The floor-moving rules are in the data**, in `floorRules`, so a change to them is a reviewable diff beside the
   numbers: never lower a floor in the same commit that changes scoring code (land and measure the change, append
   its entry, move the floor in a later commit citing it); never lower one to turn a red run green; raise one only
