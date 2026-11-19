@@ -557,6 +557,13 @@ bullets stay as requirements.
   `/app/knowledge-base` carries the same twenty files, and `The_dockerfile_copies_every_project_it_builds` walks each
   host's references transitively and fails when one is not in the COPY list above the restore — removing the Privacy
   line reproduces the exact message in CI rather than at the next hand-built image.
+- The images themselves are a check, not just a claim: `scripts/verify-images.sh` builds both from their Dockerfiles
+  and asserts each carries every article and `REVIEWED.sha256` under `/app/knowledge-base`, and the `runtime-images`
+  CI job runs it. It is a different claim from the publish test — the Docker build sees only what the context and
+  `.dockerignore` admit, and restores from a hand-written COPY list — and it fails as a named check rather than an
+  aborted build: appending `knowledge-base/` to `.dockerignore` leaves both images without a corpus and the script
+  reports `FAIL MCP image builds` and `FAIL Web image builds`, exit 1. Measured on this workstation: both images
+  build, both carry all twenty files and the manifest, all checks passed.
 - All three numbers are floored, not just printed. `mrrFloor: 0.8` sits beside `recallAt3Floor: 0.9` because
   recall@3 cannot see a hit slipping from rank 1 to rank 3: the same questions still appear in the top three, so the
   recall number does not move while the citation handed to the model gets worse. The acceptance test asserts the

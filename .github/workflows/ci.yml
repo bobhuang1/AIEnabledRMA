@@ -132,3 +132,18 @@ jobs:
 
       - name: Verify the realm import and both auth flows
         run: ./scripts/verify-auth.sh
+
+  runtime-images:
+    # The publish-side tests prove that `dotnet publish` carries the corpus; this proves that the
+    # images do. The Docker build sees only what .dockerignore admits and restores from a hand-written
+    # COPY list, so it can differ from publish in both directions, and it has: the tool server's
+    # publish carried no corpus items at all, and the Web image could not be built because a
+    # referenced manifest was missing from its COPY list. Neither is visible from a checkout.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Check both runtime images carry the corpus
+        run: ./scripts/verify-images.sh
