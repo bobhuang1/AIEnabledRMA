@@ -10,8 +10,9 @@ name: ci
 #   * documentation-only changes do not start a run at all: root-level markdown (README, plan,
 #     licence) and docs/ are ignored. knowledge-base/ is deliberately not ignored — its markdown
 #     is data the retrieval tests read, so a change there can change what the suite sees.
-#   * a newer push to the same ref cancels the older run, so a fixup commit does not pay for its
-#     predecessor as well.
+#   * a newer pull-request push cancels the older run, so a fixup commit does not pay for its
+#     predecessor as well. Main is never cancelled: cancelling the run for one commit is how this
+#     repository ended up with a single recorded run on main, a red one, and no green run after it.
 #   * a hard timeout, because a hung test otherwise bills until the runner gives up.
 #   * the NuGet cache is keyed on the lock files, which are checked in.
 #
@@ -37,7 +38,11 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A pull request is superseded by its next push, and the superseded run is a run nobody wants to
+  # read. A commit on main is different: its run is the only evidence that commit has, so cancelling
+  # it leaves a red or absent run where a second push would have produced a green one. Both main
+  # runs report.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-and-test:
@@ -80,8 +85,25 @@ jobs:
       - name: Restore
         run: dotnet restore AIEnabledRma.slnx --locked-mode
 
+      # A failing build has to say why without an authenticated log request. The first two runs on
+      # main both failed at this step and all the API answered was "Process completed with exit code
+      # 1": the compiler's message lives in the step log, which needs a token, so an SDK mismatch and
+      # a real compile error looked identical from outside. So the output is captured, the compiler's
+      # own lines are replayed as annotations — which the API serves to anyone — and a binlog stays
+      # next to them for whoever opens the run with a token.
       - name: Build
-        run: dotnet build AIEnabledRma.slnx --no-restore -warnaserror
+        run: |
+          set +e
+          dotnet build AIEnabledRma.slnx --no-restore -warnaserror -bl:build.binlog 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "::error::dotnet build failed with exit code $status; the diagnostics follow."
+            grep -E '(: error |: warning |^Build FAILED)' build.log | sort -u | head -40 |
+              while IFS= read -r line; do
+                echo "::error::$(printf '%s' "$line" | cut -c1-400)"
+              done
+          fi
+          exit "$status"
 
       # A property renamed or a column widened without its migration still compiles and still
       # passes every test that does not open a database. The live suites do notice it, but only as
@@ -111,7 +133,7 @@ jobs:
             grep -E "Skipped:[[:space:]]+[1-9]" test.log
             exit 1
           fi
-          if ! grep -Eq "Total:[[:space:]]+[1-9]" test.log; then
+          if ! grep -Eq "Total tests:[[:space:]]+[1-9]" test.log; then
             echo "::error::No tests ran."
             exit 1
           fi
@@ -152,5 +174,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Check both runtime images carry the corpus
+      - name: Check both runtime images carry what their host reads
+        # The tool server's image is built by auth-flows as well, on another machine, so the layers
+        # cannot be handed over — but the buildx cache keyed on the image name means a rerun of either
+        # job reuses what the other already compiled, and a Dockerfile change invalidates only its
+        # own scope. Unset locally, where there is no Actions cache to talk to.
+        env:
+          RMA_IMAGE_CACHE: "1"
         run: ./scripts/verify-images.sh

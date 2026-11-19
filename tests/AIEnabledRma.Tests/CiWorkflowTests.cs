@@ -49,6 +49,57 @@ public sealed class CiWorkflowTests
     }
 
     /// <summary>
+    /// A failed build has to report itself. The first two runs on main both failed at that step and
+    /// the API answered only "Process completed with exit code 1", because the compiler's message
+    /// lives in a step log that needs a token to read. The step now tees its output, leaves a binlog,
+    /// and re-emits the diagnostics as annotations, which are readable without one.
+    /// </summary>
+    [Fact]
+    public void A_failed_build_reports_its_diagnostics_as_annotations()
+    {
+        var workflow = File.ReadAllText(WorkflowFile(RepositoryRoot()));
+
+        Assert.Contains("-bl:build.binlog", workflow, StringComparison.Ordinal);
+        Assert.Contains("| tee build.log", workflow, StringComparison.Ordinal);
+        Assert.Contains("::error::$(printf '%s' \"$line\"", workflow, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Main's runs are not cancelled by the next push. A cancelled run reports nothing, so cancelling
+    /// the only run of a commit on main recreates the state this file exists to prevent: a branch
+    /// that ships with no green run to show for it. Pull requests still cancel their predecessor.
+    /// </summary>
+    [Fact]
+    public void Main_runs_are_not_cancelled_by_a_later_push()
+    {
+        var workflow = File.ReadAllText(WorkflowFile(RepositoryRoot()));
+
+        Assert.DoesNotContain("cancel-in-progress: true", workflow, StringComparison.Ordinal);
+        Assert.Contains(
+            "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+            workflow,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The image job shares the buildx cache, and the auth job builds the same tool server image on
+    /// another machine. Without a cache each run compiles the SDK stage twice, which is the cost this
+    /// workflow's own comment block says to keep down.
+    /// </summary>
+    [Fact]
+    public void The_image_job_shares_the_layer_cache()
+    {
+        var workflow = File.ReadAllText(WorkflowFile(RepositoryRoot()));
+
+        Assert.Contains("RMA_IMAGE_CACHE: \"1\"", workflow, StringComparison.Ordinal);
+
+        var script = File.ReadAllText(
+            Path.Combine(RepositoryRoot(), "scripts", "verify-images.sh"));
+
+        Assert.Contains("--cache-from \"type=gha,scope=$name\"", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The text between the top-level <c>on:</c> key and the next top-level key, so a <c>branches:</c>
     /// under some future step cannot satisfy the assertion.
     /// </summary>
