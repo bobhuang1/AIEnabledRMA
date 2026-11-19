@@ -290,6 +290,45 @@ STATUS=$(curl -sS -o "$BODY" -w '%{http_code}' \
 check "an unlisted origin is refused" 403 "$STATUS"
 
 echo
+echo "== tokens the transport must refuse"
+
+# The realm carries a client whose tokens live one second, so the expiry case costs a minute rather
+# than five, and whose optional scopes let the gate mint a token with the wrong audience or with the
+# right audience and no read scope. A gate that only showed the accepted token would pass with token
+# validation switched off; these three are what make "fails closed" measurable.
+negative_token() {
+    local scope=$1 response
+
+    response=$(kc_token         -d 'grant_type=client_credentials'         -d 'client_id=mcp-negative'         -d 'client_secret=mcp-negative-secret'         -d "scope=$scope")
+
+    body_of "$response" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("access_token",""))'
+}
+
+# The same request the accepted token made; only the token differs.
+initialize_with() {
+    curl -sS -o "$BODY" -w '%{http_code}'         -X POST "$MCP_URL/mcp"         -H "Authorization: Bearer $1"         -H 'Content-Type: application/json'         -H 'Accept: application/json, text/event-stream'         -d "$INITIALIZE"
+}
+
+WRONG_AUDIENCE=$(negative_token 'audience-wrong')
+check_contains "wrong-audience token names another resource" "aienabledrma-not-mcp" "$(claim "$WRONG_AUDIENCE" aud)"
+check "a token for another audience is refused" 401 "$(initialize_with "$WRONG_AUDIENCE")"
+
+NO_SCOPE=$(negative_token 'audience-aienabledrma-mcp')
+check_contains "scope-less token names the resource" "aienabledrma-mcp" "$(claim "$NO_SCOPE" aud)"
+if printf '%s' "$(claim "$NO_SCOPE" scope)" | grep -qw 'rma:read'; then
+    fail "scope-less token has no rma:read" "it carries rma:read, so the refusal below would prove nothing"
+else
+    pass "scope-less token has no rma:read"
+fi
+check "a token without rma:read is refused" 403 "$(initialize_with "$NO_SCOPE")"
+
+EXPIRING=$(negative_token 'rma:read')
+check "a fresh short-lived token is accepted" 200 "$(initialize_with "$EXPIRING")"
+echo "note  waiting 65s so the one-second token outlives the transport's one-minute clock skew"
+sleep 65
+check "the same token is refused once expired" 401 "$(initialize_with "$EXPIRING")"
+
+echo
 echo "== preflight"
 
 STATUS=$(curl -sS -o /dev/null -D "$HEADERS" -w '%{http_code}' \

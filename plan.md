@@ -284,6 +284,17 @@ bullets stay as requirements.
   returning the cached set instead of refetching fails four of the six resolver tests, and restoring
   `RequestRefresh` fails the loopback key-set test with `Expected: "key-b" / Actual: "key-a"`. Suite: 386 passed,
   0 skipped.
+- The gate showed the accepted paths and three refusals that needed no token (none, unlisted origin, no verifier), but
+  it could not show a **token** being refused: every token it could mint had the accepted shape. The realm now carries
+  `mcp-negative` — allow-listed, one-second lifespan, two audience scopes — and `verify-auth.sh` asserts a token minted
+  for `aienabledrma-not-mcp` is `401`, a token with the right audience and no `rma:read` is `403`, and the same
+  short-lived token is `200` when fresh and `401` after 65 s (the transport's one-minute skew plus the one-second
+  lifespan). Each case asserts the token's claims before the status, so a realm mistake fails as "the token is not the
+  shape this check assumes" instead of a status that happens to match. Measured on the running stack: `401`, `403`,
+  `200` then `401`; the whole script passes 41 checks. The first import was rejected — Keycloak stores a client
+  description in `VARCHAR(255)` and this one was 365 characters — which is the same class of failure the import check
+  exists for. `RealmGateClientTests` pins the client, its scopes, its lifespan, the allow-list entry and the script's
+  three assertions. Mutation: deleting the client fails the realm test. Suite: 390 passed, 0 skipped.
 - The `mcp-browser` authorization-code flow was then **driven by hand, once, outside the script**, to read what it
   actually mints: authorize `200`, sign-in `302` with a code, exchange `200` with `expires_in: 300`, a refresh token
   and an id token, and the transport answering `200 text/event-stream` with the `initialize` result and

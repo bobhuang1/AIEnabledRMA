@@ -62,6 +62,13 @@ the committed secret `mcp-agent-secret`, plus a development user `browser-demo` 
 in the file. Every one of those is a demo value for a loopback-only container; nothing here
 belongs in a deployment.
 
+One more client, `mcp-negative`, exists only for the gate. It is allow-listed on purpose and carries
+two audience scopes and a one-second token lifespan, so `scripts/verify-auth.sh` can mint the three
+tokens the transport has to refuse — an audience it does not serve (`401`), its own audience without
+`rma:read` (`403`), and the same short-lived token once it expires (`401`) — and show the gate
+failing closed rather than only showing the accepted path. It is not part of the runbook; a
+deployment should not have it.
+
 ## Start the identity provider
 
 ```bash

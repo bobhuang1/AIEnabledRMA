@@ -51,6 +51,52 @@
           }
         }
       ]
+    },
+    {
+      "name": "audience-aienabledrma-mcp",
+      "description": "Adds the tool server's audience and nothing else. scripts/verify-auth.sh mints a token with this alone to prove that the right audience is not sufficient without the read scope.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "aienabledrma-mcp audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "aienabledrma-mcp",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "audience-wrong",
+      "description": "Adds an audience the tool server does not serve, so the gate can present a correctly signed token that was minted for something else.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "aienabledrma-not-mcp audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "aienabledrma-not-mcp",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
     }
   ],
   "clients": [
@@ -93,6 +139,30 @@
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256"
+      }
+    },
+    {
+      "clientId": "mcp-negative",
+      "name": "MCP negative-path client (gate only)",
+      "description": "Gate-only client: lets scripts/verify-auth.sh mint tokens the transport must refuse (wrong audience, no rma:read, expired). One-second lifespan keeps the expiry check quick; the secret is committed because this realm is loopback-only.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "mcp-negative-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": [
+        "basic"
+      ],
+      "optionalClientScopes": [
+        "rma:read",
+        "audience-aienabledrma-mcp",
+        "audience-wrong"
+      ],
+      "attributes": {
+        "access.token.lifespan": "1"
       }
     }
   ],
