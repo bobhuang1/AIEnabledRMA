@@ -255,6 +255,15 @@ bullets stay as requirements.
 - `docs/mcp.md` is the runbook: what the realm must provide, start-up, the token request, both ways to run the
   server, the 200 and 401 checks, a failure table carrying the exact issuer error, the configuration keys, and
   what the path does not cover yet.
+- The flows are a **gate, not a recipe**: `scripts/verify-auth.sh` boots the committed realm and the `mcp-http`
+  profile with compose, then asserts the answers — the machine token's `iss`, `aud`, `scope` and `azp`, `200` for
+  `initialize`, `401` with no token including the `resource_metadata` pointer, `403` from an unlisted origin, `204`
+  preflights with and without CORS, and the PKCE flow with the code refused without its verifier and a replay
+  refused. The `auth-flows` job in `.github/workflows/ci.yml` runs that script on every pull request, so a realm
+  import that Keycloak rejects — which has already happened once, silently — fails the build. The runbook names the
+  same script as its one-command check, and `The_runbook_and_ci_name_the_same_script` asserts the three references
+  still match, so renaming it fails a test instead of leaving a runbook that describes a file nobody has. Verified
+  end to end on this workstation: all checks passed, exit 0.
 - The origin allow-list is also the CORS policy, so a listed page can drive the endpoint instead of only being
   refused by it. The policy is applied to the whole host rather than as endpoint metadata because a preflight
   `OPTIONS` matches no route. `An_allowed_origin_can_preflight_the_endpoint` asserts the 204 with
