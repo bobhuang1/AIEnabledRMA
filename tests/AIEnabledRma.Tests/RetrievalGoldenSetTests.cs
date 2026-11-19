@@ -169,6 +169,61 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// The swap path itself, measured the way a deployment would take it: the configuration key
+    /// selects the second implementation, and the same forty cases and the same floors score it.
+    /// </summary>
+    /// <remarks>
+    /// The seam test below proves the scorer follows whatever retriever it is handed, but it hands it
+    /// a stub. This one resolves <see cref="IKnowledgeRetriever"/> from the host's registration — the
+    /// path the triage pipeline takes — so "a vector store becomes the measured implementation by
+    /// being registered" is exercised end to end rather than asserted about an interface.
+    ///
+    /// The baseline is not compared here on purpose: it records the default lexical measurement, and
+    /// a second implementation that clears the floors is not claiming to reproduce that number.
+    /// </remarks>
+    [Fact]
+    public async Task The_synonym_retriever_is_measured_by_the_same_cases_and_floors()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var root = RepositoryRoot();
+        var golden = RetrievalGoldenSet.Load(Path.Combine(root, "eval", "retrieval-golden.json"));
+
+        var settings = ConfigurationFor(root, golden);
+        settings["Rag:Retrieval:SynonymExpansion"] = "true";
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddRag(new ConfigurationBuilder().AddInMemoryCollection(settings).Build());
+
+        await using var provider = services.BuildServiceProvider();
+
+        var retriever = provider.GetRequiredService<IKnowledgeRetriever>();
+
+        // What is measured has to be the implementation the setting chose, not whichever one the
+        // default happens to construct: otherwise this passes while testing the lexical index twice.
+        Assert.IsType<SynonymExpandingRetriever>(retriever);
+
+        var score = await RetrievalGoldenSet.ScoreAsync(golden, retriever, ct);
+
+        output.WriteLine(
+            $"synonym retriever: recall@3 = {score.RecallAt3:0.000} ({score.Hits}/{score.Cases.Count}); "
+            + $"MRR = {score.Mrr:0.000}");
+
+        Assert.True(
+            score.MeetsFloor,
+            $"the synonym retriever scores recall@3 {score.RecallAt3:0.000} "
+            + $"({score.Hits}/{score.Cases.Count}), below the floor {score.Floor:0.000}. A second "
+            + "implementation behind the seam is held to the same bar, or the seam is decoration."
+            + Environment.NewLine
+            + string.Join(
+                Environment.NewLine,
+                score.Misses.Select(c => $"{c.Case.Id} '{c.Case.Question}'")));
+
+        Assert.True(score.MeetsMrrFloor, $"the synonym retriever scores MRR {score.Mrr:0.000}, below "
+            + $"the floor {score.MrrFloor:0.000}.");
+    }
+
+    /// <summary>
     /// Pins the seam rather than the index: the same cases and floor, two different retrievers, and the
     /// score follows the retriever. Without this the eval could pass while measuring nothing but the
     /// class it happens to construct.

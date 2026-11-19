@@ -429,6 +429,16 @@ bullets stay as requirements.
   more: `rq-002` (`switch on` vs the article's `turn on`), `rq-008`/`rq-013`/`rq-017`/`rq-033`/`rq-038` (a synonym
   or a whole phrase the lexicon does not share, such as `photos` vs `documentation`). Those need synonyms or
   embeddings, not stemming, and the file's `baseline` block lists each miss with the articles that beat it.
+- **The retriever seam now has a second implementation, measured by the same cases.** `SynonymExpandingRetriever`
+  wraps the index, expands the customer's words with the corpus's (`switch`→`turn`, `photos`→`documentation`,
+  `halfway`→`truncated`, `faulty`→`fault`, `write`→`record`, `pull`→`press`, `nothing`→`dead`), and is selected by
+  `Rag:Retrieval:SynonymExpansion`. `The_synonym_retriever_is_measured_by_the_same_cases_and_floors` resolves
+  `IKnowledgeRetriever` from `AddRag` with that setting on, asserts the resolved type is the decorator, and scores
+  the same forty cases against the same floors: **recall@3 0.925 (37/40), MRR 0.825** against the lexical 0.850 and
+  0.750. The default stays lexical and the baseline stays the lexical measurement — a second implementation is not
+  claiming to reproduce it — so the swap is demonstrated without silently changing what the product cites.
+  Promoting the decorator to the default needs its own baseline block (or a second one), which is why it is left
+  as a measured alternative rather than a quiet improvement.
 - The file's `baseline` block is now asserted, not just published: the acceptance test compares the measured
   recall@3, MRR and case count to it and fails with "re-record deliberately" when they differ. Floors catch a
   regression; the baseline catches a stale record — a case edited, an article added, a change that clears the floor

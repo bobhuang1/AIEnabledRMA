@@ -91,8 +91,17 @@ public static class RagServiceCollectionExtensions
 
         // Bridges the retriever seam TriagePipeline depends on. Registered over the holder for
         // the same reason as the index above: a reload must not be shadowed by a captured
-        // instance.
-        services.AddSingleton<Domain.Abstractions.IKnowledgeRetriever, KnowledgeIndexRetriever>();
+        // instance. Which implementation answers is a configuration decision, so the seam is a
+        // swap in one registration rather than a rewrite of the pipeline that consumes it.
+        services.AddSingleton<Domain.Abstractions.IKnowledgeRetriever>(sp =>
+        {
+            var holder = sp.GetRequiredService<KnowledgeIndexHolder>();
+
+            return sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<RagRetrievalOptions>>()
+                .Value.SynonymExpansion
+                ? new SynonymExpandingRetriever(holder)
+                : new KnowledgeIndexRetriever(holder);
+        });
 
         return services;
     }

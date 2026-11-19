@@ -353,6 +353,16 @@ public sealed class RagRetrievalOptions
     public int MaxRelatedExpansions { get; set; } = 2;
 
     /// <summary>
+    /// Ask <see cref="SynonymExpandingRetriever"/> instead of the lexical index directly.
+    /// </summary>
+    /// <remarks>
+    /// Off by default: it is the second implementation that proves the retriever seam is a real
+    /// swap, and the golden set measures it with the shipped cases rather than a stub. A deployment
+    /// that turns it on should re-run that measurement rather than assume the default's numbers.
+    /// </remarks>
+    public bool SynonymExpansion { get; set; }
+
+    /// <summary>
     /// Floor applied to the reported score of a related-article expansion, so an article with
     /// no lexical overlap of its own still scores above the scope guard's rejection bar.
     /// </summary>
