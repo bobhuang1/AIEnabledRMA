@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
 namespace AIEnabledRma.Tests;
@@ -43,7 +44,8 @@ public sealed class McpHttpTransportTests
     /// </summary>
     private static async Task<WebApplication> BuildHostAsync(
         Action<IServiceCollection>? configureServices = null,
-        string? connectionString = null)
+        string? connectionString = null,
+        bool overrideValidation = true)
     {
         List<string> settings =
         [
@@ -66,28 +68,10 @@ public sealed class McpHttpTransportTests
             host => host.UseTestServer(),
             services =>
             {
-                services.PostConfigure<JwtBearerOptions>(
-                    JwtBearerDefaults.AuthenticationScheme,
-                    options =>
-                    {
-                        // No realm is running here. The issuer and audience the host validated are
-                        // kept; the discovery document is replaced by a key this test controls, so
-                        // a token signed with anything else is refused exactly as a forged one
-                        // would be.
-                        options.Authority = null;
-                        options.RequireHttpsMetadata = false;
-                        options.TokenValidationParameters = new TokenValidationParameters
-                        {
-                            ValidateIssuer = true,
-                            ValidIssuer = Issuer,
-                            ValidateAudience = true,
-                            ValidAudience = Audience,
-                            ValidateLifetime = true,
-                            RequireExpirationTime = true,
-                            ValidateIssuerSigningKey = true,
-                            IssuerSigningKey = new SymmetricSecurityKey(SigningKey),
-                        };
-                    });
+                if (overrideValidation)
+                {
+                    ConfigureValidation(services);
+                }
 
                 // A caller can swap the sink and the repositories: a test that needs a tool to run
                 // without a database replaces them here, and the swap does not touch the pipeline
@@ -100,11 +84,47 @@ public sealed class McpHttpTransportTests
         return app;
     }
 
+    /// <summary>
+    /// Replaces the discovery document with a key this test holds. The host's own validation
+    /// parameters are read by the lifetime test below, which is why this is separate from the
+    /// factory: overriding them there would hide what the host configures.
+    /// </summary>
+    private static void ConfigureValidation(IServiceCollection services)
+    {
+        services.PostConfigure<JwtBearerOptions>(
+                JwtBearerDefaults.AuthenticationScheme,
+                options =>
+                {
+                    // No realm is running here. The issuer and audience the host validated are kept;
+                    // the discovery document is replaced by a key this test controls, so a token
+                    // signed with anything else is refused exactly as a forged one would be.
+                    options.Authority = null;
+                    options.RequireHttpsMetadata = false;
+                    options.TokenValidationParameters = new TokenValidationParameters
+                    {
+                        ValidateIssuer = true,
+                        ValidIssuer = Issuer,
+                        ValidateAudience = true,
+                        ValidAudience = Audience,
+                        ValidateLifetime = true,
+                        RequireExpirationTime = true,
+                        ValidateIssuerSigningKey = true,
+                        IssuerSigningKey = new SymmetricSecurityKey(SigningKey),
+
+                        // The host allows one minute of skew, and the expired-token case is minted
+                        // against that, not against the framework's five-minute default — which
+                        // would accept a token that the deployment refuses.
+                        ClockSkew = TimeSpan.FromMinutes(1),
+                    };
+                });
+    }
+
     private static string Token(
         string issuer = Issuer,
         string audience = Audience,
         string? scope = ReadScope,
-        string? clientId = ClientId)
+        string? clientId = ClientId,
+        DateTime? expires = null)
     {
         var claims = new List<Claim> { new("sub", "agent-1") };
 
@@ -118,12 +138,17 @@ public sealed class McpHttpTransportTests
             claims.Add(new Claim("client_id", clientId));
         }
 
+        // An expiry handed in is how the expired case is minted: the transport allows one minute of
+        // clock skew, so anything that expired more than a minute ago is expired to it, without
+        // waiting for a real token to age.
+        var expiresAt = expires ?? DateTime.UtcNow.AddMinutes(5);
+
         var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityToken(
             issuer: issuer,
             audience: audience,
             claims: claims,
-            notBefore: DateTime.UtcNow.AddMinutes(-1),
-            expires: DateTime.UtcNow.AddMinutes(5),
+            notBefore: expiresAt.AddMinutes(-5),
+            expires: expiresAt,
             signingCredentials: new SigningCredentials(
                 new SymmetricSecurityKey(SigningKey),
                 SecurityAlgorithms.HmacSha256));
@@ -351,6 +376,53 @@ public sealed class McpHttpTransportTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    /// <summary>
+    /// Expiry is the refusal a wrong audience or a missing scope cannot stand in for.
+    /// </summary>
+    /// <remarks>
+    /// The only place it was proven was the live gate, which waits 65 seconds for a one-second token
+    /// to age past the transport's one-minute clock skew. That end-to-end case is worth keeping — it
+    /// is the realm's own token, not one this test signed — but as the only proof it made the check
+    /// too slow to run on its own, so a change that drops lifetime validation would survive every
+    /// fast test. This mints the token already expired and asserts the same 401.
+    /// </remarks>
+    [Fact]
+    public async Task A_token_whose_expiry_has_passed_is_refused_with_401()
+    {
+        using var app = await BuildHostAsync();
+        using var client = app.GetTestClient();
+
+        using var response = await client.SendAsync(
+            Initialize(Token(expires: DateTime.UtcNow.AddMinutes(-2))),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    /// <summary>
+    /// The host's own parameters validate expiry, within one minute of skew.
+    /// </summary>
+    /// <remarks>
+    /// The transport tests replace the validation parameters with ones they control — there is no
+    /// realm here — so a test that sends an expired token proves the JwtBearer handler refuses it,
+    /// not that this host asked it to. This reads the parameters the host configured, before the
+    /// replacement, which is the half a change to <c>McpHttpAuthentication</c> can break.
+    /// </remarks>
+    [Fact]
+    public async Task The_host_validates_expiry_with_one_minute_of_skew()
+    {
+        using var app = await BuildHostAsync(overrideValidation: false);
+
+        var parameters = app.Services
+            .GetRequiredService<IOptionsMonitor<JwtBearerOptions>>()
+            .Get(JwtBearerDefaults.AuthenticationScheme)
+            .TokenValidationParameters;
+
+        Assert.True(parameters.ValidateLifetime);
+        Assert.True(parameters.RequireExpirationTime);
+        Assert.Equal(TimeSpan.FromMinutes(1), parameters.ClockSkew);
     }
 
     [Fact]
