@@ -4,22 +4,23 @@ using System.Text.RegularExpressions;
 namespace AIEnabledRma.Tests;
 
 /// <summary>
-/// The corpus has to survive <c>dotnet publish</c> and <c>docker build</c>, because those are the
-/// only copies a container gets.
+/// What each host publishes is a decision about who reads the corpus, and both halves are asserted:
+/// the Web host carries it, the tool server does not.
 /// </summary>
 /// <remarks>
-/// Both images end with <c>COPY --from=build /app ./</c>: whatever publish omitted is missing at
+/// The Web image ends with <c>COPY --from=build /app ./</c>: whatever publish omitted is missing at
 /// runtime, and a host with no articles starts cleanly and answers every question as though the
-/// corpus said nothing. The tool server is the case that needed the check — it referenced Domain and
-/// Data only, so its publish output had no <c>knowledge-base/</c> at all — but the Web image had its
-/// own failure, and neither was visible without building the image.
+/// corpus said nothing. The tool server is the opposite case. Its tools evaluate stored data through
+/// the repositories, nothing in that process opens <c>knowledge-base/</c>, and the startup check that
+/// inspects a corpus is registered by <see cref="RagServiceCollectionExtensions.AddRag"/>, which the
+/// tool server does not call — but its publish output carried nineteen articles and the reviewed
+/// manifest anyway. That made "the MCP image carries the corpus" true about bytes and false about
+/// behaviour, which is the kind of check that passes while telling nobody anything.
 /// </remarks>
 public sealed class PublishLayoutTests
 {
-    [Theory]
-    [InlineData("AIEnabledRma.Mcp")]
-    [InlineData("AIEnabledRma.Web")]
-    public async Task The_published_host_carries_the_corpus(string project)
+    [Fact]
+    public async Task The_published_web_host_carries_the_corpus()
     {
         var ct = TestContext.Current.CancellationToken;
         var root = RepositoryRoot();
@@ -27,50 +28,14 @@ public sealed class PublishLayoutTests
 
         try
         {
-            var publish = new ProcessStartInfo("dotnet")
-            {
-                WorkingDirectory = root,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
-
-            foreach (var argument in new[]
-            {
-                "publish",
-                Path.Combine("src", project, project + ".csproj"),
-
-                // Release, which is what the images publish, and also the only configuration that
-                // cannot overwrite the Debug binaries this test is running out of — on Windows that
-                // lock would fail the publish for a reason that has nothing to do with the corpus.
-                "-c", "Release",
-                "-o", output,
-                "--no-restore",
-            })
-            {
-                publish.ArgumentList.Add(argument);
-            }
-
-            using var process = Process.Start(publish)
-                ?? throw new InvalidOperationException("could not start dotnet publish");
-
-            // Both streams read concurrently: a build that fills one pipe buffer while the test waits
-            // on the other deadlocks instead of failing.
-            var stdout = process.StandardOutput.ReadToEndAsync(ct);
-            var stderr = process.StandardError.ReadToEndAsync(ct);
-
-            await process.WaitForExitAsync(ct);
-
-            var log = await stdout + await stderr;
-
-            Assert.True(process.ExitCode == 0, $"dotnet publish {project} failed:{Environment.NewLine}{log}");
+            await PublishAsync("AIEnabledRma.Web", root, output, ct);
 
             var published = Path.Combine(output, "knowledge-base");
             var manifest = Path.Combine(published, "REVIEWED.sha256");
 
             // The manifest is separate from the articles: without it a host that requires provenance
             // refuses to start, which is a different failure than an empty corpus but just as silent.
-            Assert.True(File.Exists(manifest), $"the published {project} has no knowledge-base/REVIEWED.sha256");
+            Assert.True(File.Exists(manifest), "the published Web host has no knowledge-base/REVIEWED.sha256");
 
             var shipped = Directory.GetFiles(published, "*.md", SearchOption.AllDirectories);
             var checkedIn = Directory.GetFiles(Path.Combine(root, "knowledge-base"), "*.md", SearchOption.AllDirectories);
@@ -82,10 +47,39 @@ public sealed class PublishLayoutTests
         }
         finally
         {
-            if (Directory.Exists(output))
-            {
-                Directory.Delete(output, recursive: true);
-            }
+            Delete(output);
+        }
+    }
+
+    /// <summary>
+    /// The tool server publishes no corpus, and that is the assertion, not an oversight.
+    /// </summary>
+    /// <remarks>
+    /// A publish that starts carrying the articles again would restore the claim this test's sibling
+    /// removed: an image "with the corpus" whose host never reads it. If the tool server ever gains a
+    /// corpus-backed tool it has to call <c>AddRag</c> as well, so the startup check runs, and this
+    /// test is the place that decision is recorded.
+    /// </remarks>
+    [Fact]
+    public async Task The_published_tool_server_carries_no_corpus()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var root = RepositoryRoot();
+        var output = Path.Combine(Path.GetTempPath(), $"rma-publish-{Guid.NewGuid():N}");
+
+        try
+        {
+            await PublishAsync("AIEnabledRma.Mcp", root, output, ct);
+
+            Assert.False(
+                Directory.Exists(Path.Combine(output, "knowledge-base")),
+                "the tool server published a knowledge-base/ that nothing in that host reads; either it "
+                + "gains a corpus-backed tool (with AddRag, so the startup check runs) or the project "
+                + "stops declaring the content.");
+        }
+        finally
+        {
+            Delete(output);
         }
     }
 
@@ -123,6 +117,62 @@ public sealed class PublishLayoutTests
                 copied.Contains(manifest),
                 $"{project}'s Dockerfile restores without {manifest}, so `docker build` fails with an "
                 + "assets-file error before the publish step runs. Add it to the COPY list above the restore.");
+        }
+    }
+
+    /// <summary>
+    /// Publishes one project into <paramref name="output"/> and fails with the tool's own output.
+    /// </summary>
+    private static async Task PublishAsync(
+        string project,
+        string root,
+        string output,
+        CancellationToken cancellationToken)
+    {
+        var publish = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = root,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+
+        foreach (var argument in new[]
+        {
+            "publish",
+            Path.Combine("src", project, project + ".csproj"),
+
+            // Release, which is what the images publish, and also the only configuration that cannot
+            // overwrite the Debug binaries this test is running out of — on Windows that lock would
+            // fail the publish for a reason that has nothing to do with the corpus.
+            "-c", "Release",
+            "-o", output,
+            "--no-restore",
+        })
+        {
+            publish.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(publish)
+            ?? throw new InvalidOperationException("could not start dotnet publish");
+
+        // Both streams read concurrently: a build that fills one pipe buffer while the test waits on
+        // the other deadlocks instead of failing.
+        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+
+        await process.WaitForExitAsync(cancellationToken);
+
+        var log = await stdout + await stderr;
+
+        Assert.True(process.ExitCode == 0, $"dotnet publish {project} failed:{Environment.NewLine}{log}");
+    }
+
+    private static void Delete(string output)
+    {
+        if (Directory.Exists(output))
+        {
+            Directory.Delete(output, recursive: true);
         }
     }
 

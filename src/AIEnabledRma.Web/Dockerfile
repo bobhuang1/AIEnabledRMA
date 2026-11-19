@@ -30,6 +30,12 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app ./
 
+# The commit this image was built from. scripts/verify-images.sh passes it and compares the label
+# with the checkout, so "is this image from before or after the fix" is a question the image answers
+# instead of a question about which build produced it.
+ARG GIT_REVISION=unknown
+LABEL org.opencontainers.image.revision=$GIT_REVISION
+
 # The app is not root. The image carries no writable state the process needs, so the whole
 # filesystem can stay read-only apart from /tmp.
 USER $APP_UID

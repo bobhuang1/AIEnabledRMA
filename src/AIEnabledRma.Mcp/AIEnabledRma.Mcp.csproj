@@ -53,21 +53,10 @@
     <ProjectReference Include="..\AIEnabledRma.Data\AIEnabledRma.Data.csproj" />
   </ItemGroup>
 
-  <!-- The corpus ships with the image, as the Dockerfile says it does. Declared here rather than
-       inherited from the RAG project: a ProjectReference publishes its own assembly, not the
-       content another project copies, so without this line `dotnet publish` produced an image with
-       no knowledge-base/ at all and the host started with an empty corpus. -->
-  <ItemGroup>
-    <None Include="..\..\knowledge-base\**\*.md"
-          Link="knowledge-base\%(RecursiveDir)%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest"
-          CopyToPublishDirectory="PreserveNewest" />
-    <!-- The reviewed hashes travel with the articles they pin: a Production host refuses a corpus
-         with no manifest, and that refusal is silent until something reads the file. -->
-    <None Include="..\..\knowledge-base\REVIEWED.sha256"
-          Link="knowledge-base\REVIEWED.sha256"
-          CopyToOutputDirectory="PreserveNewest"
-          CopyToPublishDirectory="PreserveNewest" />
-  </ItemGroup>
-
+  <!-- No corpus, deliberately. Every tool here is a function of stored data read through the
+       repositories; nothing in this host opens knowledge-base/, and the startup check that inspects a
+       corpus is registered by AddRag, which this host does not call. The image used to carry nineteen
+       articles and the reviewed manifest anyway, which made "the tool server's image carries the
+       corpus" true and meaningless. The projects that read the corpus declare it; PublishLayoutTests
+       asserts that this one publishes none, so a later change is a decision rather than an accident. -->
 </Project>
