@@ -3,8 +3,10 @@ name: ci
 # Every hour of hosted-runner time is billed, and this job builds nine projects and starts a
 # PostgreSQL for the live suites. The rules that keep it cheap:
 #
-#   * pull requests and manual runs only. A merge to main is a commit that a PR already tested,
-#     so running the same job again on push duplicates the cost for no new signal.
+#   * every push to main, every pull request, and manual runs. Exempting main looked cheaper, but a
+#     merge is only pre-tested if the PR actually ran: this repository went from one failed run to no
+#     runs at all on main, and twenty commits reached origin without CI ever seeing them. The gate
+#     that matters is the one on the branch that ships, so main is checked on push too.
 #   * documentation-only changes do not start a run at all: root-level markdown (README, plan,
 #     licence) and docs/ are ignored. knowledge-base/ is deliberately not ignored — its markdown
 #     is data the retrieval tests read, so a change there can change what the suite sees.
@@ -18,6 +20,11 @@ name: ci
 # exit early instead. Do not add a matrix or a second operating system without saying, in the PR,
 # what the extra minutes buy.
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
   pull_request:
     paths-ignore:
       - "*.md"

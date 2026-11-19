@@ -264,6 +264,13 @@ bullets stay as requirements.
   same script as its one-command check, and `The_runbook_and_ci_name_the_same_script` asserts the three references
   still match, so renaming it fails a test instead of leaving a runbook that describes a file nobody has. Verified
   end to end on this workstation: all checks passed, exit 0.
+- `main` itself was unchecked: `ci.yml` triggered on pull requests and manual dispatch only, and the one run recorded
+  on the repository was a failure from days earlier, so twenty commits reached `origin/main` without the gate ever
+  seeing them. Pushes to `main` now start the same workflow (a documentation-only merge is still skipped by the path
+  filter), and `CiWorkflowTests` asserts that the trigger block names `main` and that `auth-flows` and
+  `runtime-images` are still jobs — deleting the trigger or a job fails a test instead of quietly removing the check.
+  Mutation: deleting the `push:` block leaves only `pull_request`, `Main_is_checked_on_push` fails, the other two
+  pass. Suite: 379 passed, 0 skipped.
 - The `mcp-browser` authorization-code flow was then **driven by hand, once, outside the script**, to read what it
   actually mints: authorize `200`, sign-in `302` with a code, exchange `200` with `expires_in: 300`, a refresh token
   and an id token, and the transport answering `200 text/event-stream` with the `initialize` result and
