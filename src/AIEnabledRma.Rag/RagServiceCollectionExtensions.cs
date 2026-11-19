@@ -35,6 +35,12 @@ public static class RagServiceCollectionExtensions
         // endpoint, and a deployment can replace the sink without touching the endpoint.
         services.AddSingleton<IRagReloadAudit, LoggingRagReloadAudit>();
 
+        // Every host that serves answers loads this corpus, so every one of them states at startup
+        // how many articles it loaded and whether they are the reviewed ones. Registered here rather
+        // than in each Program because a host that forgot the call is the failure being guarded
+        // against.
+        services.AddHostedService<KnowledgeBaseStartupCheck>();
+
         services.AddOptions<RagRetrievalOptions>()
             .Bind(configuration.GetSection(RagRetrievalOptions.SectionName))
             .Validate(o => o.MaxRelatedExpansions >= 0, "MaxRelatedExpansions cannot be negative.")

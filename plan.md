@@ -295,6 +295,16 @@ bullets stay as requirements.
   description in `VARCHAR(255)` and this one was 365 characters — which is the same class of failure the import check
   exists for. `RealmGateClientTests` pins the client, its scopes, its lifespan, the allow-list entry and the script's
   three assertions. Mutation: deleting the client fails the realm test. Suite: 390 passed, 0 skipped.
+- The hosts never checked the corpus they loaded: `REVIEWED.sha256` mattered only to the Dockerfile, the csproj and
+  the loader's Production-only review path, so a drifted or empty corpus answered silently everywhere else. `AddRag`
+  now registers `KnowledgeBaseStartupCheck`, which every RAG-loading host (Web and RAG) runs at startup: it compares
+  what is on disk with the manifest — missing manifest, article without a line, line without an article, hash
+  mismatch, and a loader that indexed fewer files than exist — logs
+  `Knowledge base at {root}: {articles} article(s), {lines} line(s) in REVIEWED.sha256, {problems} problem(s)` in both
+  environments, and throws outside Development when anything disagrees. In Development it logs the same facts and
+  starts anyway, so a developer can inspect the corpus rather than crash-loop. Registered in `AddRag` rather than per
+  host because a host that forgets the call is the failure being guarded against. Mutation: returning before verifying
+  fails the three startup tests (the drift refusal, the Development log, the count log). Suite: 400 passed, 0 skipped.
 - The `mcp-browser` authorization-code flow was then **driven by hand, once, outside the script**, to read what it
   actually mints: authorize `200`, sign-in `302` with a code, exchange `200` with `expires_in: 300`, a refresh token
   and an id token, and the transport answering `200 text/event-stream` with the `initialize` result and
