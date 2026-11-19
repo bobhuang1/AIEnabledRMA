@@ -1,7 +1,9 @@
 # Build and run the MCP tool server.
 #
 # The tool server is headless, so the same SDK-build/publish/runtime split as the web host
-# applies. The knowledge base ships in because the retriever reads it from disk.
+# applies. The knowledge base ships in because any host that reads it expects it under the
+# content root; the publish list lives in the .csproj, and PublishLayoutTests fails if the
+# articles stop reaching the output.
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 

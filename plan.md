@@ -526,6 +526,15 @@ bullets stay as requirements.
   rank that actually moved. Floors catch a
   regression; the baseline catches a stale record — a case edited, an article added, a change that clears the floor
   while still moving the number — which would otherwise leave the file claiming a measurement nobody can reproduce.
+- The corpus **reaches the runtime image**, which it did not before: `AIEnabledRma.Mcp` declared no knowledge-base
+  content of its own, and a ProjectReference publishes its assembly, not the content another project copies, so
+  `dotnet publish` produced an image with no `knowledge-base/` at all — the Dockerfile promised articles the
+  container never had, and a host that reads them would have started on an empty corpus and called every question
+  unanswered. The items are now declared in the tool server's own project, the same way the Web project declares
+  them, and the image was rebuilt and inspected: `/app/knowledge-base` holds all nineteen articles, the README and
+  the manifest. `PublishLayoutTests` runs `dotnet publish` for both hosts and asserts the manifest plus every
+  article is present, so the check is on the artefact rather than on the declaration; removing the item group fails
+  it with `the published AIEnabledRma.Mcp has no knowledge-base/REVIEWED.sha256`.
 - All three numbers are floored, not just printed. `mrrFloor: 0.8` sits beside `recallAt3Floor: 0.9` because
   recall@3 cannot see a hit slipping from rank 1 to rank 3: the same questions still appear in the top three, so the
   recall number does not move while the citation handed to the model gets worse. The acceptance test asserts the
