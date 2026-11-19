@@ -10,6 +10,23 @@ Written 2026-11-14 from a code review of `main` (`e96156b`).
 lines below say what each item is proven by, and an item is only marked done where a test would fail if the
 behaviour regressed.
 
+## 0. Decision index
+
+Settled choices this plan depends on, and the file that carries the detail. The plan grew by
+appending, so this is the entry point; the sections below still hold the reasoning.
+
+| Decision | Why it is not obvious | Where |
+|---|---|---|
+| CI runs on push to `main`, and never cancels a `main` run | A cancelled run reports nothing, which is how one red run became the only evidence a branch had | `.github/workflows/ci.yml`, `CiWorkflowTests` |
+| A failed build re-emits its diagnostics as annotations | The step log needs a token; annotations do not, and the first two failures were unreadable because of it | `.github/workflows/ci.yml`, `CiWorkflowTests` |
+| The three gates run locally as well as in CI | CI's logs are unreadable without authentication, and the same commands answer the same question | `scripts/verify-all.sh`, `GateScriptTests` |
+| The Web host owns the corpus; the tool server does not | The tool server's tools read stored data, never `knowledge-base/`, and its startup check never ran | `PublishLayoutTests`, `scripts/verify-images.sh` |
+| A production host refuses a drifted corpus | An empty corpus answers every question as though the policy said nothing | `KnowledgeBaseStartupCheck`, `CorpusStartupBootTests` |
+| Images carry the commit they were built from | "Is this image from before or after the fix" had no answer from the image | both Dockerfiles, `verify-images.sh` |
+| The auth gate generates its admin password | `admin`/`admin` is a credential published in the repository | `scripts/verify-auth.sh`, `GateScriptTests` |
+| Signing keys are refetched on an unknown key id | A reused stack re-imports the realm and mints new keys; a cached key set refused every token | `src/AIEnabledRma.Mcp/SigningKeyRefresh.cs`, `docs/mcp.md` |
+| The realm's shape is read back through the admin API | A lost service account or audience mapper fails as a token problem, not a realm one | `scripts/verify-auth.sh`, `docs/mcp.md` |
+
 ## 1. Where the project stands
 
 **Built and working:**

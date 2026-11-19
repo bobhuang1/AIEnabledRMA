@@ -21,6 +21,20 @@ not a signing key held by a test.
 ./scripts/verify-auth.sh
 ```
 
+The three gates CI runs can be run here, in the order CI runs them, without a GitHub runner and
+without a token for its logs:
+
+```bash
+./scripts/verify-all.sh            # the suite, then the auth flows, then both images
+./scripts/verify-all.sh auth       # one of them, by name
+```
+
+The suite step needs docker and no host SDK: it copies the working tree into the pinned SDK image and
+starts a throwaway PostgreSQL for the live fixtures. The auth step generates a master-realm admin
+password for the run and hands it to compose, so the gate never logs in with the `admin`/`admin` the
+compose file still defaults to for hands-on use; set `KEYCLOAK_ADMIN_PASSWORD` to reuse a stack you
+started yourself.
+
 The script boots Keycloak with the committed realm and the `mcp-http` profile, waits for both
 discovery documents, then drives the two flows and asserts the answers rather than printing them:
 the machine token's `iss`, `aud`, `scope` and `azp`; `200` for `initialize` with it; `401` with no
