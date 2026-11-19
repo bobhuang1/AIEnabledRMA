@@ -220,6 +220,30 @@ docker compose --profile mcp-http exec mcp-http \
 | `500` at startup | `EnsureUsable` refused the configuration: an `http` issuer outside Development, an empty client allow-list, a wildcard or empty origin, an empty scope, a path that does not start with `/` |
 | connection refused | the transport is not listening: check `Mcp:Transport` is `http`, not the default `stdio` |
 
+### Every token is a 401 right after the realm was re-imported
+
+Keycloak mints a fresh signing key every time it imports the realm, and the compose service imports
+on every boot. The transport caches the realm's key set with its discovery document, so a token
+minted after the re-import names a `kid` the cache has never seen, and every machine request answers
+`401` while the realm itself is fine — `curl` against the token endpoint still succeeds, which is
+what makes this read as a broken token check rather than a stale cache.
+
+The transport refetches the key set when it is handed an unknown `kid`, so the first request after a
+rotation succeeds without a restart. Refetches are rate-limited to one every
+`RefreshingSigningKeys.MinimumRefetchInterval` (30 s): inside that window an unknown `kid` is refused
+without a discovery request, so a flood of invented key ids cannot be turned into a flood of calls
+to the identity provider. If the binding was built before this behaviour — or the identity provider
+changed its metadata endpoint rather than only its keys — the fallback is the manual restart:
+
+```bash
+docker compose --profile mcp-http restart mcp-http
+```
+
+That costs seconds and is safe to repeat; `scripts/verify-auth.sh` does it for you when it reuses a
+stack that is already running, because a gate that silently depended on a warm cache would pass on
+a fresh boot and fail on the second run. The browser flow is not a diagnostic here: it usually
+passes, because a refetch triggered by an earlier machine request has already landed.
+
 ## Browser clients
 
 The origin allow-list is also the CORS policy. A page served from an origin in

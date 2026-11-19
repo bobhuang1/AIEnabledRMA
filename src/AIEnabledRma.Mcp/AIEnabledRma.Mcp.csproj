@@ -29,6 +29,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The key-refresh resolver is internal because nothing outside this host configures it, and
+         the test that proves a re-imported realm recovers is in the test project. -->
+    <InternalsVisibleTo Include="AIEnabledRma.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Microsoft.Extensions.DependencyInjection" />
     <Using Include="Microsoft.Extensions.Hosting" />
     <Using Include="Microsoft.Extensions.Configuration" />

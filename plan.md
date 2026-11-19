@@ -271,6 +271,19 @@ bullets stay as requirements.
   `runtime-images` are still jobs — deleting the trigger or a job fails a test instead of quietly removing the check.
   Mutation: deleting the `push:` block leaves only `pull_request`, `Main_is_checked_on_push` fails, the other two
   pass. Suite: 379 passed, 0 skipped.
+- A re-imported realm used to strand the transport: Keycloak mints new signing keys on every import, the host cached
+  the old set, and every machine token was a 401 until someone ran `docker compose restart mcp-http`. The transport now
+  refetches when a token names an unknown key id (`RefreshingSigningKeys`, with a 30 s floor per refetch so an invented
+  key id cannot be turned into a discovery request against the identity provider), and `docs/mcp.md` keeps the
+  restart as the documented fallback for a build that predates this or a metadata endpoint that moved.
+  The first attempt refetched with `ConfigurationManager.RequestRefresh` on the cached manager, and that served the
+  **previous** document: measured against the stack, the resolver was reached and returned the key id of the realm that
+  had just been replaced, so the rotated token stayed a 401. Each refetch therefore builds a fresh manager with no
+  cache to serve. Measured end to end: warm token `200`, Keycloak recreated with the transport left running, a token
+  minted from the new keys `200`, and the next request `200` — the sequence that used to need the restart. Mutation:
+  returning the cached set instead of refetching fails four of the six resolver tests, and restoring
+  `RequestRefresh` fails the loopback key-set test with `Expected: "key-b" / Actual: "key-a"`. Suite: 386 passed,
+  0 skipped.
 - The `mcp-browser` authorization-code flow was then **driven by hand, once, outside the script**, to read what it
   actually mints: authorize `200`, sign-in `302` with a code, exchange `200` with `expires_in: 300`, a refresh token
   and an id token, and the transport answering `200 text/event-stream` with the `initialize` result and

@@ -183,11 +183,13 @@ done
 if [ "${#started[@]}" -gt 0 ]; then
     docker compose --profile "$PROFILE" up -d --build
 else
-    # The transport caches the realm's signing keys along with its discovery document. An edited
-    # realm is re-imported by the next boot, which mints new keys, and a cached key set makes every
-    # machine token answer 401 while the browser flow (which happens later, after a refresh has
-    # landed) still passes — a failure that reads as a broken realm and is not one. Restarting the
-    # transport costs seconds and makes a reused stack behave like a fresh one.
+    # The transport caches the realm's signing keys with its discovery document. An edited realm is
+    # re-imported by the next boot, which mints new keys, and a cached key set made every machine
+    # token answer 401 while the browser flow (which happens later) still passed — a failure that
+    # reads as a broken realm and is not one. The host now refetches the key set when it sees an
+    # unknown key id (docs/mcp.md, "Every token is a 401 right after the realm was re-imported").
+    # The restart stays because it makes a reused stack behave like a fresh one, and because this
+    # gate must not depend on the behaviour it exists to prove.
     echo "note  reusing the running stack; restarting $PROFILE so it reads the realm's current keys"
     docker compose --profile "$PROFILE" restart mcp-http >/dev/null
 fi

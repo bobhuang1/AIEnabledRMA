@@ -4,6 +4,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.IdentityModel.Protocols;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
 namespace AIEnabledRma.Mcp;
@@ -39,6 +41,19 @@ public static class McpHttpAuthentication
 
                 options.Audience = http.Audience;
 
+                // Built here rather than left to the handler, because the key resolver below fetches
+                // through the same shape of manager when it sees an unknown key id. A re-imported
+                // realm mints new signing keys, and a transport holding the old set answered 401 to
+                // every fresh token until somebody restarted it.
+                ConfigurationManager<OpenIdConnectConfiguration> Discovery() => new(
+                    http.Issuer.TrimEnd('/') + "/.well-known/openid-configuration",
+                    new OpenIdConnectConfigurationRetriever(),
+                    new HttpDocumentRetriever { RequireHttps = !isDevelopment });
+
+                options.ConfigurationManager = Discovery();
+
+                var signingKeys = new RefreshingSigningKeys(new ConfigurationSigningKeySet(Discovery));
+
                 // Keep the JWT's own claim names. The default inbound mapping renames `sub` to a
                 // schema URI, and this host reads `sub`, `client_id` and `scope` by name — with the
                 // mapping on, every audit row recorded `unknown-subject` for a valid token, which
@@ -57,6 +72,11 @@ public static class McpHttpAuthentication
                     ValidateIssuerSigningKey = true,
                     ClockSkew = TimeSpan.FromMinutes(1),
                     NameClaimType = "sub",
+
+                    // A key id the cache does not hold is a rotation until proven otherwise: fetch
+                    // the key set again instead of failing the token. Without this, restarting
+                    // Keycloak made every agent 401 until the transport was restarted too.
+                    IssuerSigningKeyResolver = (_, _, keyId, _) => signingKeys.Resolve(keyId),
                 };
 
                 // The default challenge writes "Bearer" and stops there, which leaves a client to be
