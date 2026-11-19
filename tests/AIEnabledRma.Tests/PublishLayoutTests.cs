@@ -1,17 +1,18 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 namespace AIEnabledRma.Tests;
 
 /// <summary>
-/// The corpus has to survive <c>dotnet publish</c>, because that is the only copy a container gets.
+/// The corpus has to survive <c>dotnet publish</c> and <c>docker build</c>, because those are the
+/// only copies a container gets.
 /// </summary>
 /// <remarks>
-/// The tool server's image is <c>COPY --from=build /app ./</c>: whatever publish omitted is missing at
-/// runtime, and a host with no articles starts cleanly and answers every question as though the corpus
-/// said nothing. Adding the files to the RAG project was not enough — a ProjectReference publishes its
-/// assembly, not another project's <c>CopyToPublishDirectory</c> content — so this test asks publish
-/// itself rather than reading the project files, which is the difference between checking the
-/// declaration and checking the artefact.
+/// Both images end with <c>COPY --from=build /app ./</c>: whatever publish omitted is missing at
+/// runtime, and a host with no articles starts cleanly and answers every question as though the
+/// corpus said nothing. The tool server is the case that needed the check — it referenced Domain and
+/// Data only, so its publish output had no <c>knowledge-base/</c> at all — but the Web image had its
+/// own failure, and neither was visible without building the image.
 /// </remarks>
 public sealed class PublishLayoutTests
 {
@@ -86,6 +87,80 @@ public sealed class PublishLayoutTests
                 Directory.Delete(output, recursive: true);
             }
         }
+    }
+
+    /// <summary>
+    /// The image build restores from the Dockerfile's COPY list before it copies the tree, so a
+    /// referenced project whose manifest is missing fails the restore with a message about an assets
+    /// file — which reads as a publish problem rather than a missing line.
+    /// </summary>
+    /// <remarks>
+    /// This is not hypothetical: the Web image could not be built at all because
+    /// <c>AIEnabledRma.Privacy.csproj</c> was absent from the list while the Web project referenced
+    /// it. Publishing from the source tree does not reproduce it, because there the whole checkout is
+    /// present, so this test walks the references instead of trusting the file to stay complete.
+    /// </remarks>
+    [Theory]
+    [InlineData("AIEnabledRma.Mcp")]
+    [InlineData("AIEnabledRma.Web")]
+    public void The_dockerfile_copies_every_project_it_builds(string project)
+    {
+        var root = RepositoryRoot();
+        var dockerfile = File.ReadAllText(Path.Combine(root, "src", project, "Dockerfile"));
+
+        var copied = dockerfile
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.StartsWith("COPY ", StringComparison.Ordinal))
+            .SelectMany(line => line.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var referenced in ReferencedProjects(Path.Combine(root, "src", project, project + ".csproj")))
+        {
+            var manifest = Path.Combine("src", referenced, referenced + ".csproj").Replace('\\', '/');
+
+            Assert.True(
+                copied.Contains(manifest),
+                $"{project}'s Dockerfile restores without {manifest}, so `docker build` fails with an "
+                + "assets-file error before the publish step runs. Add it to the COPY list above the restore.");
+        }
+    }
+
+    /// <summary>Every project a project references, transitively, by assembly name.</summary>
+    private static IReadOnlyList<string> ReferencedProjects(string projectFile)
+    {
+        var found = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pending = new Queue<string>();
+        pending.Enqueue(projectFile);
+
+        while (pending.Count > 0)
+        {
+            var current = pending.Dequeue();
+
+            var directory = Path.GetDirectoryName(current)!;
+
+            foreach (Match match in Regex.Matches(
+                File.ReadAllText(current),
+                "ProjectReference Include=\"([^\"]+)\""))
+            {
+                // The Include is relative to the referencing project, not to the solution.
+                var reference = Path.GetFullPath(
+                    Path.Combine(directory, match.Groups[1].Value.Replace('\\', Path.DirectorySeparatorChar)));
+
+                var name = Path.GetFileNameWithoutExtension(reference);
+
+                if (!seen.Add(name))
+                {
+                    continue;
+                }
+
+                found.Add(name);
+                pending.Enqueue(reference);
+            }
+        }
+
+        return found;
     }
 
     /// <summary>

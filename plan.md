@@ -550,6 +550,13 @@ bullets stay as requirements.
   the manifest. `PublishLayoutTests` runs `dotnet publish` for both hosts and asserts the manifest plus every
   article is present, so the check is on the artefact rather than on the declaration; removing the item group fails
   it with `the published AIEnabledRma.Mcp has no knowledge-base/REVIEWED.sha256`.
+- Building the **Web image** then failed for a different reason: its Dockerfile restored the project after copying
+  manifests for four of its five references, with `AIEnabledRma.Privacy.csproj` missing, so `docker build` stopped at
+  `NETSDK1004` before the publish step and the image did not exist at all. Publishing from the source tree could
+  never show that, because the whole checkout is present there. The line is added, the image builds and its
+  `/app/knowledge-base` carries the same twenty files, and `The_dockerfile_copies_every_project_it_builds` walks each
+  host's references transitively and fails when one is not in the COPY list above the restore — removing the Privacy
+  line reproduces the exact message in CI rather than at the next hand-built image.
 - All three numbers are floored, not just printed. `mrrFloor: 0.8` sits beside `recallAt3Floor: 0.9` because
   recall@3 cannot see a hit slipping from rank 1 to rank 3: the same questions still appear in the top three, so the
   recall number does not move while the citation handed to the model gets worse. The acceptance test asserts the
