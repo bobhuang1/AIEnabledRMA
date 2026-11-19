@@ -49,6 +49,40 @@ public sealed class CiWorkflowTests
     }
 
     /// <summary>
+    /// The solution is built by the SDK it declares, not by whichever one the runner happens to
+    /// have installed.
+    /// </summary>
+    /// <remarks>
+    /// Both failures on main before this were one cause: <c>setup-dotnet</c> installed 10.0.x, the
+    /// runner image also shipped SDK 11.0.100, and the CLI selected 11 — whose StaticWebAssets
+    /// targets fail the Web project with "scoped css bundles do not have matching endpoints".
+    /// Installing a version and using it are different things, so the version is pinned where every
+    /// dotnet command reads it: global.json. rollForward is latestFeature, which keeps the band at
+    /// 10.0 and allows a later patch, rather than accepting the next major.
+    /// </remarks>
+    [Fact]
+    public void The_sdk_is_pinned_to_the_version_the_solution_targets()
+    {
+        var root = RepositoryRoot();
+        var global = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(root, "global.json"))).RootElement.GetProperty("sdk");
+
+        var version = global.GetProperty("version").GetString();
+
+        Assert.NotNull(version);
+        Assert.StartsWith("10.0.", version, StringComparison.Ordinal);
+        Assert.Equal("latestFeature", global.GetProperty("rollForward").GetString());
+
+        // A prerelease would roll forward past the band the lock files were restored against.
+        Assert.False(global.GetProperty("allowPrerelease").GetBoolean());
+
+        // The workflow asks for the same major, so setup-dotnet installs an SDK the pin accepts.
+        var workflow = File.ReadAllText(WorkflowFile(root));
+
+        Assert.Contains("dotnet-version: \"10.0.x\"", workflow, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A failed build has to report itself. The first two runs on main both failed at that step and
     /// the API answered only "Process completed with exit code 1", because the compiler's message
     /// lives in a step log that needs a token to read. The step now tees its output, leaves a binlog,

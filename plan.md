@@ -23,6 +23,7 @@ appending, so this is the entry point; the sections below still hold the reasoni
 | The Web host owns the corpus; the tool server does not | The tool server's tools read stored data, never `knowledge-base/`, and its startup check never ran | `PublishLayoutTests`, `scripts/verify-images.sh` |
 | A production host refuses a drifted corpus | An empty corpus answers every question as though the policy said nothing | `KnowledgeBaseStartupCheck`, `CorpusStartupBootTests` |
 | Images carry the commit they were built from | "Is this image from before or after the fix" had no answer from the image | both Dockerfiles, `verify-images.sh` |
+| The SDK is pinned in `global.json` | The runner image ships a newer SDK, and the CLI prefers it: `setup-dotnet` installed 10.0.x and the build ran 11.0.100 | `global.json`, `CiWorkflowTests` |
 | The auth gate generates its admin password | `admin`/`admin` is a credential published in the repository | `scripts/verify-auth.sh`, `GateScriptTests` |
 | Signing keys are refetched on an unknown key id | A reused stack re-imports the realm and mints new keys; a cached key set refused every token | `src/AIEnabledRma.Mcp/SigningKeyRefresh.cs`, `docs/mcp.md` |
 | The realm's shape is read back through the admin API | A lost service account or audience mapper fails as a token problem, not a realm one | `scripts/verify-auth.sh`, `docs/mcp.md` |

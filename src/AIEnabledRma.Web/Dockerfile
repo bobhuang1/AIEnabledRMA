@@ -6,7 +6,7 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Restore against the manifests alone first, so a source-only change does not re-resolve.
-COPY Directory.Build.props Directory.Packages.props ./
+COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY AIEnabledRma.slnx ./
 COPY src/AIEnabledRma.Domain/AIEnabledRma.Domain.csproj src/AIEnabledRma.Domain/
 COPY src/AIEnabledRma.Data/AIEnabledRma.Data.csproj src/AIEnabledRma.Data/
