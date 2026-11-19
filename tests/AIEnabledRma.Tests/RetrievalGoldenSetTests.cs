@@ -44,10 +44,13 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
         Assert.NotEmpty(golden.Cases);
         Assert.InRange(golden.RecallAt3Floor, 0d, 1d);
 
-        // Required, not optional: the data file this suite scores has to state both bars, or a
-        // change could remove the MRR floor by editing one line and nothing would notice.
+        // Required, not optional: the data file this suite scores has to state all three bars, or a
+        // change could remove one by editing a line and nothing would notice.
         Assert.NotNull(golden.MrrFloor);
         Assert.InRange(golden.MrrFloor!.Value, 0d, 1d);
+
+        Assert.NotNull(golden.PrecisionAt3Floor);
+        Assert.InRange(golden.PrecisionAt3Floor!.Value, 0d, 1d);
 
         Assert.Equal(
             golden.Cases.Count,
@@ -109,7 +112,7 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
             + $"MRR = {score.Mrr:0.000}; precision@3 = {score.PrecisionAt3:0.000}; "
             + $"rank-1 = {score.Rank1Rate:0.000}; unanswerable = {score.Unanswerable} "
             + $"(false citations {score.FalseCitationRate:0.000}); floors = {score.Floor:0.000} recall, "
-            + $"{score.MrrFloor:0.000} MRR");
+            + $"{score.MrrFloor:0.000} MRR, {score.PrecisionAt3Floor:0.000} precision@3");
 
         var misses = score.Misses
             .Select(c =>
@@ -139,6 +142,25 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
             + "rank 1:"
             + Environment.NewLine
             + string.Join(Environment.NewLine, lowered));
+
+        // The floor recall cannot see: an unanswerable question, answered anyway, costs precision and
+        // moves nothing in recall, because there was no expected article to find. A retriever that
+        // cites a plausible-sounding article for "can I get a refund" is exactly this failure, and it
+        // is the one a vector store is most likely to introduce: nearest-neighbour search always
+        // returns neighbours, so it always cites something.
+        var noise = score.Cases
+            .Where(c => c.PrecisionAt3 < 1d)
+            .Select(c => $"{c.Case.Id} precision={c.PrecisionAt3:0.00} [{string.Join(",", c.Top)}]")
+            .ToList();
+
+        Assert.True(
+            score.MeetsPrecisionAt3Floor,
+            $"precision@3 is {score.PrecisionAt3:0.000}, below the recorded floor "
+            + $"{score.PrecisionAt3Floor:0.000}. recall@3 can hold while the citations are wrong - a hit "
+            + "at rank 3 plus two unrelated articles has full recall for that question - and precision@3 "
+            + "is the number that charges for the unrelated ones. Cases citing anything they should not:"
+            + Environment.NewLine
+            + string.Join(Environment.NewLine, noise));
 
         // A floor says "not worse than the bar"; the baseline says "this is exactly what was
         // measured". Without this, the recorded numbers go stale silently: edit a case, add an
@@ -496,6 +518,56 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
         Assert.Equal(0d, abstained.FalseCitationRate);
     }
 
+    /// <summary>
+    /// The bar recall@3 cannot enforce: a retriever can have perfect recall and still be wrong.
+    /// </summary>
+    /// <remarks>
+    /// Both stubs below put the expected article inside the top three, so both have recall 1. One
+    /// buries it at rank 3 behind two unrelated articles and cites them for the unanswerable
+    /// question as well; the other returns it first and abstains where there is no answer. The first
+    /// is a plausible vector store — nearest-neighbour search always has neighbours — and it passes
+    /// recall, which is why MRR and precision@3 are floored too.
+    /// </remarks>
+    [Fact]
+    public async Task A_retriever_that_buries_the_answer_fails_the_mrr_and_precision_floors()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var golden = new GoldenSet
+        {
+            Description = "in memory, recall-perfect but wrong first",
+            RecallAt3Floor = 0.9,
+            MrrFloor = 0.8,
+            PrecisionAt3Floor = 0.32,
+            Measurements = [],
+            Cases =
+            [
+                new GoldenSetCase { Id = "a-1", Question = "answerable", Expected = ["kb-0001"] },
+                new GoldenSetCase { Id = "u-1", Question = "unanswerable", Expected = [] },
+            ],
+        };
+
+        var buried = new StubRetriever(_ => Articles("kb-0007", "kb-0008", "kb-0001"));
+        var measured = await RetrievalGoldenSet.ScoreAsync(golden, buried, ct);
+
+        Assert.Equal(1d, measured.RecallAt3);
+        Assert.Equal(1d / 3, measured.Mrr, 3);
+        Assert.Equal(1d / 6, measured.PrecisionAt3, 3);
+        Assert.True(measured.MeetsFloor);
+        Assert.False(measured.MeetsMrrFloor);
+        Assert.False(measured.MeetsPrecisionAt3Floor);
+
+        var citedFirst = new StubRetriever(query =>
+            query.Query == "unanswerable" ? [] : Articles("kb-0001"));
+        var clean = await RetrievalGoldenSet.ScoreAsync(golden, citedFirst, ct);
+
+        Assert.Equal(1d, clean.RecallAt3);
+        Assert.Equal(1d, clean.Mrr);
+        Assert.True(clean.MeetsFloor);
+        Assert.True(clean.MeetsMrrFloor);
+        Assert.True(clean.MeetsPrecisionAt3Floor);
+    }
+
     /// <summary>The corpus path, review, and families the eval states it measures with.</summary>
     private static Dictionary<string, string?> ConfigurationFor(string root, GoldenSet golden)
     {
@@ -518,16 +590,14 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
         return settings;
     }
 
-    private static IReadOnlyList<RetrievedArticle> Articles(string id) =>
-    [
-        new RetrievedArticle
+    private static IReadOnlyList<RetrievedArticle> Articles(params string[] ids) =>
+        ids.Select(id => new RetrievedArticle
         {
             Id = id,
             Title = id,
             Category = "evaluation",
             Score = 1d,
-        },
-    ];
+        }).ToList();
 
     private sealed class StubRetriever(
         Func<KnowledgeRetrievalQuery, IReadOnlyList<RetrievedArticle>> respond) : IKnowledgeRetriever

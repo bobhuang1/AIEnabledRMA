@@ -478,45 +478,55 @@ bullets stay as requirements.
   time; add cases but never weaken one. The acceptance test asserts the rules are present and that the
   same-commit prohibition and the append-only rule are both stated, so deleting the sentence fails the suite
   rather than degrading the file to convention.
-- **The set now has five questions whose correct answer is no article at all** (`rq-041`…`rq-045`: currency and
-  invoicing, a mobile app, a courier, a tablet version, an account e-mail). They are not near-misses: the corpus
-  contains no `invoice`, `kroner`, `android`, `ios`, `courier`, `tablet` or `subscription`, so a citation for one
-  is an unrelated article chosen with confidence.
+- **The set has eight questions whose correct answer is no article at all** (`rq-041`…`rq-048`: currency and
+  invoicing, a mobile app, a courier, a tablet version, an account e-mail, and then refunds, shipping and billing).
+  They are not near-misses: the corpus contains no `invoice`, `kroner`, `android`, `ios`, `courier`, `tablet`,
+  `subscription`, `billing` or `ireland`, so a citation for one is an unrelated article chosen with confidence.
+  `refund` and `shipping` occur exactly once each, in `kb-0016`'s list of things the assistant must not quote, which
+  is the kind of surface match a lexical index finds and a reader would not call an answer.
 - **Recall keeps its floor and its meaning**: recall@3 is divided by the forty answerable questions only, so the
-  five new cases cannot move it (0.850, 34/40, floor unchanged). Two citation metrics are measured beside it.
-  precision@3 is the mean share of the three citations that were correct; rank-1 rate is the share of questions
-  whose first citation was correct. For an unanswerable question zero is the right number of citations, so
-  abstaining scores 1 and citing anything scores 0 on both — scoring those cases as 0/3 either way would make them
-  a constant in the average and leave a retriever that abstains indistinguishable from one that cites nonsense.
-  Measured now: **precision@3 0.319, rank-1 0.622**; four of the five unanswerable questions were still handed
-  three articles each (`rq-041`, `rq-043`, `rq-044`, `rq-045`), `rq-042` was correctly left alone.
-- The new metrics are **recorded, not floored**: the floors stay recall and MRR, the latest entry carries
-  `precisionAt3`, `rank1Rate`, `answerable` and a `falseCitations` map naming the questions that cited anything,
-  and the acceptance test fails if the fields are missing or disagree with the run. `An_unanswerable_question_is_
-  scored_on_abstaining` pins the semantics with two stubs that differ only in whether they abstain: same recall,
-  precision 1/6 vs 2/3, rank-1 0.5 vs 1.0, false-citation rate 1 vs 0.
+  eight unanswerable cases cannot move it (0.925, 37/40, unchanged when the three new ones were added). Two
+  citation metrics are measured beside it. precision@3 is the mean share of the three citations that were correct;
+  rank-1 rate is the share of questions whose first citation was correct. For an unanswerable question zero is the
+  right number of citations, so abstaining scores 1 and citing anything scores 0 on both — scoring those cases as
+  0/3 either way would make them a constant in the average and leave a retriever that abstains indistinguishable
+  from one that cites nonsense. Measured now: **precision@3 0.326, rank-1 0.646**; seven of the eight unanswerable
+  questions were still handed three articles each, and only `rq-042` (the mobile app) was correctly left alone.
+- **All three are floored, including the one that charges for confident nonsense.** `precisionAt3Floor: 0.32`
+  sits beside `mrrFloor: 0.8` and `recallAt3Floor: 0.9`; all three are required in the data, so deleting one is a
+  test failure rather than a quiet weakening. The latest entry carries `precisionAt3`, `rank1Rate`, `answerable`
+  and a `falseCitations` map naming the questions that cited anything, and the acceptance test fails if those
+  fields are missing or disagree with the run. `An_unanswerable_question_is_scored_on_abstaining` pins the
+  semantics with two stubs that differ only in whether they abstain: same recall, precision 1/6 vs 2/3, rank-1 0.5
+  vs 1.0, false-citation rate 1 vs 0. `A_retriever_that_buries_the_answer_fails_the_mrr_and_precision_floors`
+  pins the bar itself: a stub that returns `[wrong, wrong, expected]` for every question has recall 1.0 and still
+  fails both citation floors, which is the vector-store failure nearest-neighbour search makes easy.
 - The ranks are the part that can move quietly: one question up a rank and another down leaves both aggregates
   identical, so the latest entry's ranks plus a printed `rank N -> M` for every case makes that swap a failure
   naming two question ids instead of a silent pass. Re-recording is per case too — the appended entry records the
   rank that actually moved. Floors catch a
   regression; the baseline catches a stale record — a case edited, an article added, a change that clears the floor
   while still moving the number — which would otherwise leave the file claiming a measurement nobody can reproduce.
-- Both numbers are floored, not just printed. `mrrFloor: 0.75` sits beside `recallAt3Floor: 0.85`, because recall@3
-  cannot see a hit slipping from rank 1 to rank 3: the same questions still appear in the top three, so the recall
-  number does not move while the citation handed to the model gets worse. The acceptance test asserts both and names
-  every case not at rank 1, so a fall reads as a diagnosis rather than a number. Measured: reversing the order the
-  index returns keeps recall@3 at 0.850 and fails the test with `MRR is 0.438, below the recorded floor 0.750`.
+- All three numbers are floored, not just printed. `mrrFloor: 0.8` sits beside `recallAt3Floor: 0.9` because
+  recall@3 cannot see a hit slipping from rank 1 to rank 3: the same questions still appear in the top three, so the
+  recall number does not move while the citation handed to the model gets worse. The acceptance test asserts the
+  floors and names every case not at rank 1, so a fall reads as a diagnosis rather than a number. Measured:
+  reversing the order the index returns keeps recall@3 at 0.925 and fails the test with `MRR is 0.438, below the
+  recorded floor 0.800`; raising only `precisionAt3Floor` to 0.5 fails with `precision@3 is 0.326, below the recorded
+  floor 0.500` and lists the seven questions that cited something.
 - The stopword list was checked by ablation rather than assumed: with the same stemmer and the same forty cases,
   removing only the stopword filter measures recall@3 0.825 (33/40) and MRR 0.721 against 0.850 and 0.750 with it.
   One question (`rq-010`, "a deep scratch across the scanner window") and a rank demotion are what the generic
   words cost, which is what the comment beside the list claims and now has a number behind it. Re-running the
   ablation is a one-line edit to `TextTokens.Tokenize`; the assertion in the test means a change that keeps the
   list but loses the lift still fails.
-- The floors follow the measurement rather than the aspiration: 0.9 and 0.75 with forty answerable cases still fail
-  on a single lost question or a single demotion, and changing either is a reviewable diff in the data with the
-  before and after written beside it. The recall floor moved to 0.9 only because the measurement did (0.850 →
-  0.925); the MRR floor stayed at 0.75 although MRR rose to 0.825, since nothing asked for that bar to move and a
-  floor is a bar, not a record.
+- The floors follow the measurement rather than the aspiration: 0.9, 0.8 and 0.32 with forty answerable and eight
+  unanswerable cases still fail on a single lost question, a single demotion, or the loss of one abstention, and
+  changing any of them is a reviewable diff in the data with the before and after written beside it. The recall
+  floor moved to 0.9 only because the measurement did (0.850 → 0.925). MRR's floor moved 0.75 → 0.8 and precision
+  got its first floor in the commit that appended the measurement meeting both (0.825 and 0.326): raising a bar
+  beside the run that clears it is what the rules allow, and 0.32 is the measurement rounded down, so the bar is not
+  a record of the run by another name.
 
 ### P6. CRM support-case ingestion with PII removed (L) — D1, after P3 and P5
 

@@ -33,6 +33,17 @@ public sealed record GoldenSet
     /// </remarks>
     public double? MrrFloor { get; init; }
 
+    /// <summary>
+    /// Mean precision@3 a retriever must reach to pass, when recorded.
+    /// </summary>
+    /// <remarks>
+    /// MRR and precision answer different halves of the same question. MRR says whether the first
+    /// correct article came early; precision says how much of the three articles the model was handed
+    /// is actually right, and it is the only one of the three that falls when an unanswerable question
+    /// is answered anyway.
+    /// </remarks>
+    public double? PrecisionAt3Floor { get; init; }
+
     /// <summary>Rules for moving a floor, kept in the data so they are reviewed with the number.</summary>
     public IReadOnlyList<string>? FloorRules { get; init; }
 
@@ -233,6 +244,9 @@ public sealed record GoldenSetScore
     /// <summary>The recorded MRR bar, or null when the set does not floor it.</summary>
     public required double? MrrFloor { get; init; }
 
+    /// <summary>The recorded precision@3 bar, or null when the set does not floor it.</summary>
+    public required double? PrecisionAt3Floor { get; init; }
+
     public int Hits => Cases.Count(c => c.Rank > 0);
 
     public IEnumerable<GoldenSetCaseScore> Misses => Cases.Where(c => c.IsAnswerable && c.Rank == 0);
@@ -244,6 +258,13 @@ public sealed record GoldenSetScore
     /// from rank 1 to rank 3 costs about 0.017, which is far more than this admits.
     /// </summary>
     public bool MeetsMrrFloor => MrrFloor is null || Mrr >= MrrFloor.Value - 1e-9;
+
+    /// <summary>
+    /// The check a vector store has to clear as well: recall can hold while the citations it does
+    /// return are mostly wrong, and precision is the number that says so.
+    /// </summary>
+    public bool MeetsPrecisionAt3Floor =>
+        PrecisionAt3Floor is null || PrecisionAt3 >= PrecisionAt3Floor.Value - 1e-9;
 }
 
 /// <summary>
@@ -350,6 +371,7 @@ public static class RetrievalGoldenSet
             Rank1Rate = scored.Count(c => c.Rank1) / (double)scored.Count,
             Floor = set.RecallAt3Floor,
             MrrFloor = set.MrrFloor,
+            PrecisionAt3Floor = set.PrecisionAt3Floor,
         };
     }
 
