@@ -72,6 +72,32 @@ public sealed class RealmGateClientTests
         Assert.Contains("the same token is refused once expired", script, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The imported shape is read back through the admin API on every run, not just by the tests that
+    /// parse the file: what Keycloak produced is the fact the flows depend on, and the two can differ
+    /// — a description too long for the column, a mapper that did not attach, a client that lost its
+    /// service account.
+    /// </summary>
+    [Fact]
+    public void The_gate_reads_the_imported_shape_back()
+    {
+        var script = File.ReadAllText(Path.Combine(RepositoryRoot(), "scripts", "verify-auth.sh"));
+
+        Assert.Contains("admin/realms/", script, StringComparison.Ordinal);
+        Assert.Contains("admin token from the master realm", script, StringComparison.Ordinal);
+
+        // Both clients' settings, the two scope mappers and the demo user's credential.
+        Assert.Contains("mcp-agent has a service account", script, StringComparison.Ordinal);
+        Assert.Contains("mcp-browser requires S256", script, StringComparison.Ordinal);
+        Assert.Contains("rma:read adds the transport's audience", script, StringComparison.Ordinal);
+        Assert.Contains("basic adds the subject", script, StringComparison.Ordinal);
+        Assert.Contains("browser-demo has a password", script, StringComparison.Ordinal);
+
+        // A table that produced no rows used to be a run with no failures, so the count is checked
+        // before the rows are.
+        Assert.Contains("realm shape rows produced", script, StringComparison.Ordinal);
+    }
+
     private static string AudienceOf(JsonElement scope) =>
         scope.GetProperty("protocolMappers")
             .EnumerateArray()

@@ -20,6 +20,8 @@
 # Environment:
 #   KEYCLOAK_URL  host address for the browser-facing steps, default http://localhost:8080
 #   MCP_URL       default http://localhost:5080
+#   KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD  master-realm admin for the shape checks below,
+#                 default admin/admin (the compose defaults)
 #   KEEP=1        do not stop the containers this script started
 #
 # Requirements: docker compose (v2), curl, python3 (or python). No jq, no openssl.
@@ -190,7 +192,13 @@ else
     # unknown key id (docs/mcp.md, "Every token is a 401 right after the realm was re-imported").
     # The restart stays because it makes a reused stack behave like a fresh one, and because this
     # gate must not depend on the behaviour it exists to prove.
-    echo "note  reusing the running stack; restarting $PROFILE so it reads the realm's current keys"
+    # A reused stack holds whatever realm was imported when it started, and the shape checks below
+    # are about what the committed file produces. Keycloak's data directory is not a volume, so
+    # recreating the container re-imports the file from scratch; the transport is restarted after it
+    # because the re-import mints new signing keys.
+    echo "note  reusing the running stack; re-importing the realm and restarting $PROFILE"
+    docker compose --profile "$PROFILE" rm -sf keycloak >/dev/null 2>&1
+    docker compose --profile "$PROFILE" up -d --wait keycloak >/dev/null
     docker compose --profile "$PROFILE" restart mcp-http >/dev/null
 fi
 
@@ -226,6 +234,115 @@ TOKEN_RESPONSE="$WORK/token.json"
 HEADERS="$WORK/headers.txt"
 BODY="$WORK/body.json"
 COOKIES="$WORK/cookies.txt"
+
+echo
+echo "== realm shape (admin API, after the import)"
+
+# Until now the imported shape was only ever read by hand: a client that lost its service account,
+# a scope that lost its audience mapper or a demo user that lost its password all fail as broken
+# features, and the failure looks like a token problem rather than a realm problem. The admin API is
+# the only place that says which of those it is, so the facts the flows depend on are asserted here,
+# right after the import the boot above guarantees.
+ADMIN_TOKEN=$(curl -sS -X POST "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token"     -d 'grant_type=password'     -d 'client_id=admin-cli'     -d "username=${KEYCLOAK_ADMIN:-admin}"     -d "password=${KEYCLOAK_ADMIN_PASSWORD:-admin}"     | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("access_token",""))')
+
+# Not check_nonempty: that prints the value, and this value is an admin token.
+check "admin token from the master realm" "yes" "$([ -n "$ADMIN_TOKEN" ] && echo yes || echo no)"
+
+admin_get() {
+    curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" "$KEYCLOAK_URL/admin/realms/$REALM/$1"
+}
+
+admin_get clients > "$WORK/clients.json"
+admin_get client-scopes > "$WORK/scopes.json"
+admin_get 'users?username=browser-demo&exact=true' > "$WORK/users.json"
+
+BROWSER_USER_ID=$("$PY" -c '
+import json, sys
+users = json.load(open(sys.argv[1], encoding="utf-8"))
+print(users[0]["id"] if users else "")
+' "$WORK/users.json" | tr -d '')
+
+if [ -n "$BROWSER_USER_ID" ]; then
+    admin_get "users/$BROWSER_USER_ID/credentials" > "$WORK/credentials.json"
+else
+    printf '[]' > "$WORK/credentials.json"
+fi
+
+# Each row is name, expected and actual, so one table drives the same `check` the rest of the file
+# uses. Reading it through process substitution keeps the failure counter in this shell.
+realm_shape() {
+    "$PY" - "$WORK/clients.json" "$WORK/scopes.json" "$WORK/users.json" "$WORK/credentials.json" <<'PYTHON'
+import json, sys
+
+# LF on every platform: a table read by bash must not carry a carriage return into the comparison.
+sys.stdout.reconfigure(newline=chr(10))
+
+clients_path, scopes_path, users_path, credentials_path = sys.argv[1:5]
+clients = {c["clientId"]: c for c in json.load(open(clients_path, encoding="utf-8"))}
+scopes = {s["name"]: s for s in json.load(open(scopes_path, encoding="utf-8"))}
+users = json.load(open(users_path, encoding="utf-8"))
+credentials = json.load(open(credentials_path, encoding="utf-8"))
+
+
+def row(name, expected, actual):
+    print(f"{name}	{expected}	{actual}")
+
+
+def mapper(name, protocol_mapper):
+    return next(
+        (m for m in scopes.get(name, {}).get("protocolMappers", []) if m["protocolMapper"] == protocol_mapper),
+        {},
+    )
+
+
+agent = clients.get("mcp-agent", {})
+row("mcp-agent is present", "yes", "yes" if agent else "no")
+row("mcp-agent is confidential", "yes", "yes" if agent and not agent.get("publicClient") else "no")
+row("mcp-agent has a service account", "yes", "yes" if agent.get("serviceAccountsEnabled") else "no")
+row("mcp-agent has a secret", "yes", "yes" if agent.get("secret") else "no")
+row("mcp-agent default scopes", "basic, rma:read", ", ".join(sorted(agent.get("defaultClientScopes", []))))
+
+browser = clients.get("mcp-browser", {})
+browser_attributes = browser.get("attributes", {})
+row("mcp-browser is present", "yes", "yes" if browser else "no")
+row("mcp-browser is public", "yes", "yes" if browser.get("publicClient") else "no")
+row("mcp-browser runs the authorization-code flow", "yes", "yes" if browser.get("standardFlowEnabled") else "no")
+row("mcp-browser redirect", "http://localhost:5173/*", ", ".join(browser.get("redirectUris", [])))
+row("mcp-browser requires S256", "S256", browser_attributes.get("pkce.code.challenge.method", ""))
+row("mcp-browser default scopes", "basic, rma:read", ", ".join(sorted(browser.get("defaultClientScopes", []))))
+
+read_scope = scopes.get("rma:read", {})
+row("rma:read appears in the token scope", "true", read_scope.get("attributes", {}).get("include.in.token.scope", ""))
+row(
+    "rma:read adds the transport's audience",
+    "aienabledrma-mcp",
+    mapper("rma:read", "oidc-audience-mapper").get("config", {}).get("included.custom.audience", ""),
+)
+
+basic_scope = scopes.get("basic", {})
+row("basic adds the subject", "oidc-sub-mapper", mapper("basic", "oidc-sub-mapper").get("protocolMapper", ""))
+row("basic is not a token scope", "false", basic_scope.get("attributes", {}).get("include.in.token.scope", ""))
+
+demo = users[0] if users else {}
+row("browser-demo is present", "yes", "yes" if demo.get("username") == "browser-demo" else "no")
+row("browser-demo is enabled", "yes", "yes" if demo.get("enabled") else "no")
+row("browser-demo has no required actions", "", ", ".join(demo.get("requiredActions") or []))
+row("browser-demo has a password", "password", ", ".join(c.get("type", "") for c in credentials))
+PYTHON
+}
+
+realm_shape > "$WORK/shape.tsv"
+
+# The row count is a check of its own. A python error writes nothing to the table, and a loop over an
+# empty table is a run with no failures — the gate would report success for having checked nothing.
+ROWS=$(wc -l < "$WORK/shape.tsv" | tr -d ' ')
+check "realm shape rows produced" 19 "$ROWS"
+
+# The table is written by python, which on Windows ends its lines with CRLF; the escape is stripped
+# so a passing value does not compare unequal to itself.
+while IFS=$'	' read -r name expected actual; do
+    check "${name%$''}" "${expected%$''}" "${actual%$''}"
+done < "$WORK/shape.tsv"
 
 echo
 echo "== client credentials"

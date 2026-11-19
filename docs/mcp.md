@@ -62,6 +62,10 @@ the committed secret `mcp-agent-secret`, plus a development user `browser-demo` 
 in the file. Every one of those is a demo value for a loopback-only container; nothing here
 belongs in a deployment.
 
+`scripts/verify-auth.sh` reads all of this back from the admin API after the import — both clients'
+settings, the two scope mappers and `browser-demo`'s password credential — because the file and what
+Keycloak produced are two different facts, and only the second one the flows depend on.
+
 One more client, `mcp-negative`, exists only for the gate. It is allow-listed on purpose and carries
 two audience scopes and a one-second token lifespan, so `scripts/verify-auth.sh` can mint the three
 tokens the transport has to refuse — an audience it does not serve (`401`), its own audience without

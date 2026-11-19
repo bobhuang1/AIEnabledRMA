@@ -305,6 +305,18 @@ bullets stay as requirements.
   starts anyway, so a developer can inspect the corpus rather than crash-loop. Registered in `AddRag` rather than per
   host because a host that forgets the call is the failure being guarded against. Mutation: returning before verifying
   fails the three startup tests (the drift refusal, the Development log, the count log). Suite: 400 passed, 0 skipped.
+- The imported realm shape was read back by hand and by nothing else. `verify-auth.sh` now asserts it through the
+  admin API after the import: `mcp-agent` (confidential, service account, secret, `basic` + `rma:read`), `mcp-browser`
+  (public, authorization-code flow, the loopback redirect, S256, the same scopes), the `rma:read` audience mapper,
+  `basic`'s `oidc-sub-mapper` and that it is not a token scope, and `browser-demo` (present, enabled, no required
+  actions, a password credential). Nineteen rows, each compared with the same `check` the rest of the file uses. A
+  reused stack is now re-imported (`rm -sf keycloak` + `up -d --wait`) rather than merely restarted, because the
+  checks are about what the committed file produces. Two failures found by running it: the table's rows carried
+  CRLF into the comparison, and — the worse one — a python error left the table empty, so the loop checked nothing and
+  the run reported success; the row count is now itself a check (`realm shape rows produced 19`). Mutation: pointing
+  the `rma:read` mapper at `aienabledrma-wrong` and re-importing makes the gate exit 1, with
+  `FAIL rma:read adds the transport's audience` plus the four checks downstream of it. Measured on the running
+  stack: 62 checks passed, exit 0. Suite: 401 passed, 0 skipped.
 - The `mcp-browser` authorization-code flow was then **driven by hand, once, outside the script**, to read what it
   actually mints: authorize `200`, sign-in `302` with a code, exchange `200` with `expires_in: 300`, a refresh token
   and an id token, and the transport answering `200 text/event-stream` with the `initialize` result and
