@@ -19,6 +19,13 @@ RUN dotnet restore src/AIEnabledRma.Web/AIEnabledRma.Web.csproj
 COPY . .
 RUN dotnet publish src/AIEnabledRma.Web -c Release -o /app --no-restore
 
+# The corpus is part of the image, not an optional mount. A host that starts without it answers every
+# question as though the corpus said nothing, so fail the build here instead of shipping that — the
+# publish step alone does not: a project that stops declaring the content still publishes cleanly.
+RUN test -f /app/knowledge-base/REVIEWED.sha256 \
+    && find /app/knowledge-base -name '*.md' | grep -q . \
+    || (echo "knowledge-base is missing from /app: the publish output carried no corpus" >&2; exit 1)
+
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app ./

@@ -564,6 +564,13 @@ bullets stay as requirements.
   aborted build: appending `knowledge-base/` to `.dockerignore` leaves both images without a corpus and the script
   reports `FAIL MCP image builds` and `FAIL Web image builds`, exit 1. Measured on this workstation: both images
   build, both carry all twenty files and the manifest, all checks passed.
+- The Dockerfiles now refuse to produce such an image at all: each one asserts `/app/knowledge-base/REVIEWED.sha256`
+  exists and at least one article does, right after publish, and fails the build with
+  `knowledge-base is missing from /app: the publish output carried no corpus`. This is the check that lives with the
+  artefact rather than beside it — `dotnet publish` exits zero when a project stops declaring the content, which is
+  how the corpus went missing the first time, and a plain `docker build` now inherits the failure instead of needing
+  someone to run the script. Mutation: deleting the corpus `ItemGroup` from the tool server's project leaves publish
+  clean and the build fails at that line, exit 1; with the group restored the image carries all twenty articles.
 - All three numbers are floored, not just printed. `mrrFloor: 0.8` sits beside `recallAt3Floor: 0.9` because
   recall@3 cannot see a hit slipping from rank 1 to rank 3: the same questions still appear in the top three, so the
   recall number does not move while the citation handed to the model gets worse. The acceptance test asserts the
