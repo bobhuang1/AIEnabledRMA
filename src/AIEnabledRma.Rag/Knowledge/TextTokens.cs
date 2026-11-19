@@ -101,18 +101,33 @@ public static partial class TextTokens
     /// reduce to different strings, and a corpus that writes both would never match the customer's
     /// one.
     /// </summary>
-    private static string DropFinalE(string stem) =>
-        stem.Length > 3 && stem.EndsWith("e", StringComparison.Ordinal) ? stem[..^1] : stem;
+    /// <remarks>
+    /// One word is exempt. "note" would otherwise become "not", and the corpus and the questions both
+    /// contain that word: an article's "Note which of the steps..." would match a customer's negation,
+    /// and a question asking what to note would match "not". The list is a collision guard, not a
+    /// dictionary — a stem is only exempt when shortening it would produce a different word that the
+    /// corpus actually uses.
+    /// </remarks>
+    private static string DropFinalE(string stem)
+    {
+        if (stem.Length <= 3 || !stem.EndsWith("e", StringComparison.Ordinal))
+        {
+            return stem;
+        }
+
+        var shortened = stem[..^1];
+
+        return CollidesWithAnotherWord.Contains(shortened) ? stem : shortened;
+    }
+
+    /// <summary>Stems that are themselves a different word, so no word may be shortened to one.</summary>
+    private static readonly HashSet<string> CollidesWithAnotherWord = new(StringComparer.Ordinal)
+    {
+        "not",
+    };
 
     private static string Strip(string token)
     {
-
-        // glasses -> glass. Done before the plural rule, which would otherwise leave "glasse".
-        if (token.EndsWith("sses", StringComparison.Ordinal) && token.Length > 5)
-        {
-            return token[..^2];
-        }
-
         // batteries -> battery, policies -> policy.
         if (token.EndsWith("ies", StringComparison.Ordinal) && token.Length > 5)
         {
@@ -122,16 +137,19 @@ public static partial class TextTokens
         // charging -> charg, spilling -> spill.
         if (token.EndsWith("ing", StringComparison.Ordinal) && token.Length > 5)
         {
-            return Complete(TrimDoubled(token[..^3]));
+            return TrimDoubled(token[..^3]);
         }
 
         // spilled -> spill, scratched -> scratch, dropped -> drop (via the doubled consonant).
         if (token.EndsWith("ed", StringComparison.Ordinal) && token.Length > 4)
         {
-            return Complete(TrimDoubled(token[..^2]));
+            return TrimDoubled(token[..^2]);
         }
 
-        // charges -> charg, crashes -> crash, boxes -> box: an -es that follows a sibilant is a suffix.
+        // charges -> charg, crashes -> crash, boxes -> box, glasses -> glass: an -es that follows a
+        // sibilant is a suffix. "glasses" used to have a branch of its own, but this rule already
+        // ends with "sses" in the list and strips it to the same thing.
+
         if (token.EndsWith("es", StringComparison.Ordinal) && token.Length > 4 && EndsInSibilant(token))
         {
             return token[..^2];
@@ -149,18 +167,6 @@ public static partial class TextTokens
 
         return token;
     }
-
-    /// <summary>
-    /// Puts back the "e" that the suffix was hiding: "updated" strips to "updat", which would no longer
-    /// match the article's own "update". The three endings are the ones where the silent "e" was
-    /// dropped to make room for the suffix, and adding it anywhere else would invent words.
-    /// </summary>
-    private static string Complete(string stem) =>
-        stem.EndsWith("at", StringComparison.Ordinal)
-        || stem.EndsWith("bl", StringComparison.Ordinal)
-        || stem.EndsWith("iz", StringComparison.Ordinal)
-            ? stem + "e"
-            : stem;
 
     private static bool EndsInSibilant(string token) =>
         token.EndsWith("ches", StringComparison.Ordinal)

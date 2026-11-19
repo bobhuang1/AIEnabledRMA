@@ -430,6 +430,14 @@ bullets stay as requirements.
   alone *lost* "it restarts by itself every few minutes" — the article's own keyword is `restarts`, and collapsing
   it to `restart` let a shorter article win on its other words. `TextTokensTests` pins each rule, including the
   ones that must not fire (`spill` must not become `spil`).
+- The stemmer was reviewed against the corpus's own vocabulary rather than by reading it, and one **over-stemming
+  collision** turned up: dropping the final `e` turned `note` into `not`, and both words are in use — an article says
+  "Note which of the four steps produced a response", and questions say "it will not switch on". The fix is a
+  collision guard rather than a dictionary: a stem is kept whole when shortening it would produce a word the corpus
+  already uses differently. Two pieces of dead weight went with it — a `Complete` helper whose added `e` was removed
+  again by the final-`e` rule on the next line, and a dedicated `sses` branch that the `-es` sibilant rule already
+  covered. The measurement did not move (0.925 / 0.825), which is the point of a simplification: no new entry, and
+  the per-case ranks still match the recorded ones.
 - Net effect on the forty cases, per case rather than netted: four recovered (`rq-010` 0→1, `rq-012` 0→1,
   `rq-022` 0→2, `rq-028` 0→1), four moved up without changing whether they hit (`rq-009` 2→1, `rq-026` 3→1,
   `rq-027` 3→1, `rq-006` 3→2), **two previously passing questions slipped a rank** (`rq-004` 1→2, `rq-005`

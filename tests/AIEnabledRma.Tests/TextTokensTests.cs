@@ -64,6 +64,22 @@ public sealed class TextTokensTests
     }
 
     [Fact]
+    public void A_stem_never_becomes_a_different_word()
+    {
+        // "note" contains "not" once the final e is dropped, and the collision is not academic: the
+        // corpus says "Note which of the four steps produced a response" and the questions say "it
+        // will not switch on". Both words are kept apart rather than merged.
+        Assert.Equal("note", TextTokens.Stem("note"));
+        Assert.Equal("note", TextTokens.Stem("notes"));
+        Assert.Equal("not", TextTokens.Stem("not"));
+        Assert.DoesNotContain("not", TextTokens.Tokenize("note which steps produced a response"));
+
+        // The exemption is only for that collision: every other e-final word still loses the e so its
+        // inflections meet it (charge / charging).
+        Assert.Equal("charg", TextTokens.Stem("charge"));
+    }
+
+    [Fact]
     public void Negation_survives()
     {
         // "not" is a stopword-shaped word that changes the answer, so it is kept.
