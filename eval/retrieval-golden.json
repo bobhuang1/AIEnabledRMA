@@ -1,5 +1,5 @@
 {
-  "description": "Golden retrieval questions for the shipped knowledge base. A question is written the way a customer or a bench technician would ask it, and lists every article that would be a correct citation for it. Forty cases covering all nineteen articles, deliberately including near-miss pairs (trigger vs firmware, decode vs window damage, freeze vs blank screen, cradle vs accessory, who decides vs what evidence) and scoped cases for both product-specific articles. recall@3 is the share of cases whose top three hits include one of the expected articles. P5's acceptance test is 'not worse than the lexical index measured here', so this file owns the floor and the cases, not a test constant.",
+  "description": "Golden retrieval questions for the shipped knowledge base. A question is written the way a customer or a bench technician would ask it, and lists every article that would be a correct citation for it. Forty cases covering all nineteen articles, deliberately including near-miss pairs (trigger vs firmware, decode vs window damage, freeze vs blank screen, cradle vs accessory, who decides vs what evidence) and scoped cases for both product-specific articles. recall@3 is the share of cases whose top three hits include one of the expected articles. P5's acceptance test is 'not worse than the lexical index measured here', so this file owns the floor and the cases, not a test constant. Five cases are unanswerable on purpose (rq-041 to rq-045): the right answer is no article at all, so they are left out of recall's denominator and counted against precision@3 and the rank-1 rate.",
   "acceptance": "recall@3 must be at least recallAt3Floor and MRR at least mrrFloor, for whatever IKnowledgeRetriever the host registers. Both floors are required: recall@3 alone permits a hit to slip from rank 1 to rank 3, because the same cases still appear in the top three. The acceptance test compares a run to the latest entry in measurements, per case and in aggregate; floorRules below say how either floor may move. Raising a floor is allowed; lowering one needs a measurement that shows why, and never happens in the same commit as a scoring change.",
   "recallAt3Floor": 0.85,
   "mrrFloor": 0.75,
@@ -75,6 +75,67 @@
         "rq-040": 1
       },
       "notes": "Measured after the tokeniser gained a stopword list and a shallow stemmer (TextTokens). Before it: recall@3 0.775 (31/40), MRR 0.646, nine misses; before the set was widened: 0.714 (15/21), MRR 0.627. Case by case against that measurement: four questions were recovered (rq-010 0->1, rq-012 0->1, rq-022 0->2, rq-028 0->1), four moved up without changing whether they hit (rq-009 2->1, rq-026 3->1, rq-027 3->1, rq-006 3->2), two previously passing questions slipped a rank (rq-004 1->2, rq-005 1->2) and one was lost (rq-038 3->miss, where the question now matches the cradle vocabulary more strongly than the evidence article's) — the losses are recorded rather than hidden, and the surface forms are indexed beside their stems precisely because stemming alone lost rq-014. The ranks block below records every case's rank; a run prints its own rank N -> M lines and fails on any case that moved. Six still miss, and they are no longer tokeniser problems: 'switch on' against the article's 'turn on' (rq-002), and a synonym or phrase the lexicon does not share — 'nothing happens when I pull the trigger' (rq-008), 'stopped halfway' (rq-013), 'evidence'/'faulty' (rq-017), 'photos' against 'documentation' (rq-033), 'write down' (rq-038). Those need synonyms or embeddings, not more suffix rules. The floor is the measurement rounded down; with forty cases one lost question is 0.025 and fails it. Do not raise the floor to 1.0 by rewriting the questions into the articles' own wording; the questions are the customer's. Re-recorded here as the third entry, with the per-case ranks and the corpus fingerprint, by the run that checked the measurement on 2026-11-19; the numbers are unchanged from the 2026-11-16 run."
+    },
+    {
+      "measuredOn": "2026-11-19",
+      "index": "KnowledgeIndex, BM25-style over article token sets, TopK 3, no product families enabled except those the scoped cases name",
+      "corpusFingerprint": "sha256:e7d527b50de35e15da92d73a514228abb664ab86f85755b9e5ee5b26fda164c4",
+      "recallAt3": 0.85,
+      "mrr": 0.75,
+      "precisionAt3": 0.31851851851851853,
+      "rank1Rate": 0.6222222222222222,
+      "cases": 45,
+      "answerable": 40,
+      "misses": ["rq-002", "rq-008", "rq-013", "rq-017", "rq-033", "rq-038"],
+      "ranks": {
+        "rq-001": 1,
+        "rq-002": 0,
+        "rq-003": 1,
+        "rq-004": 2,
+        "rq-005": 2,
+        "rq-006": 2,
+        "rq-007": 1,
+        "rq-008": 0,
+        "rq-009": 1,
+        "rq-010": 1,
+        "rq-011": 3,
+        "rq-012": 1,
+        "rq-013": 0,
+        "rq-014": 1,
+        "rq-015": 1,
+        "rq-016": 1,
+        "rq-017": 0,
+        "rq-018": 1,
+        "rq-019": 1,
+        "rq-020": 1,
+        "rq-021": 1,
+        "rq-022": 2,
+        "rq-023": 1,
+        "rq-024": 1,
+        "rq-025": 3,
+        "rq-026": 1,
+        "rq-027": 1,
+        "rq-028": 1,
+        "rq-029": 1,
+        "rq-030": 1,
+        "rq-031": 3,
+        "rq-032": 1,
+        "rq-033": 0,
+        "rq-034": 1,
+        "rq-035": 1,
+        "rq-036": 1,
+        "rq-037": 1,
+        "rq-038": 0,
+        "rq-039": 1,
+        "rq-040": 1
+      },
+      "falseCitations": {
+        "rq-041": 3,
+        "rq-043": 3,
+        "rq-044": 3,
+        "rq-045": 3
+      },
+      "notes": "The set gained five unanswerable cases (rq-041 to rq-045) and two citation metrics. Recall and MRR are unchanged because they are divided by the forty answerable questions. precision@3 is the mean share of the three citations that were correct; an unanswerable question scores 1 when nothing is cited and 0 when anything is, because zero is the correct number there. rank-1 rate is the share of questions whose first citation is correct, with no first citation counting for an unanswerable one. Measured: four of the five unanswerable questions were given three articles each (rq-041, rq-043, rq-044, rq-045); rq-042 was correctly left alone."
     }
   ],
   "cases": [
@@ -309,6 +370,36 @@
       "question": "a glass of water went over the desk and the unit was sitting in it",
       "expected": ["kb-0012"],
       "note": "Liquid described by the accident rather than by the word 'spill'; the article is explicit that brief exposure still counts."
+    },
+    {
+      "id": "rq-041",
+      "question": "can I pay the invoice in Norwegian kroner instead of euros",
+      "expected": [],
+      "note": "A billing question. Nothing in the corpus is about payment, currency or invoicing, so the right answer is no citation at all."
+    },
+    {
+      "id": "rq-042",
+      "question": "is there a mobile app for android and ios",
+      "expected": [],
+      "note": "Nothing in the corpus is about a mobile app, so a citation here would be an unrelated article chosen with confidence."
+    },
+    {
+      "id": "rq-043",
+      "question": "which courier do you use to deliver to a post office box",
+      "expected": [],
+      "note": "Logistics, not product support. An unanswerable case on purpose: the corpus has no shipping article to find."
+    },
+    {
+      "id": "rq-044",
+      "question": "do you sell a tablet version of the scanner",
+      "expected": [],
+      "note": "Sales and hardware that does not exist. 'tablet' and 'sell' appear nowhere in the corpus."
+    },
+    {
+      "id": "rq-045",
+      "question": "how do I change the email address on my subscription",
+      "expected": [],
+      "note": "Account administration the corpus does not cover. The right behaviour is to cite nothing rather than the nearest scanner article."
     }
   ]
 }

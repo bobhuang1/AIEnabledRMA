@@ -96,13 +96,20 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
         foreach (var caseScore in score.Cases)
         {
             output.WriteLine(
-                $"{caseScore.Case.Id} {(caseScore.Rank > 0 ? "hit " : "MISS")} rank={caseScore.Rank} "
-                + $"[{string.Join(",", caseScore.Top)}] <- {caseScore.Case.Question}");
+                caseScore.IsAnswerable
+                    ? $"{caseScore.Case.Id} {(caseScore.Rank > 0 ? "hit " : "MISS")} rank={caseScore.Rank} "
+                      + $"precision={caseScore.PrecisionAt3:0.00} [{string.Join(",", caseScore.Top)}] "
+                      + $"<- {caseScore.Case.Question}"
+                    : $"{caseScore.Case.Id} no-answer cited={caseScore.Top.Count} "
+                      + $"[{string.Join(",", caseScore.Top)}] <- {caseScore.Case.Question}");
         }
 
         output.WriteLine(
-            $"recall@3 = {score.RecallAt3:0.000} ({score.Hits}/{score.Cases.Count}); "
-            + $"MRR = {score.Mrr:0.000}; floors = {score.Floor:0.000} recall, {score.MrrFloor:0.000} MRR");
+            $"recall@3 = {score.RecallAt3:0.000} ({score.Hits}/{score.Answerable} answerable); "
+            + $"MRR = {score.Mrr:0.000}; precision@3 = {score.PrecisionAt3:0.000}; "
+            + $"rank-1 = {score.Rank1Rate:0.000}; unanswerable = {score.Unanswerable} "
+            + $"(false citations {score.FalseCitationRate:0.000}); floors = {score.Floor:0.000} recall, "
+            + $"{score.MrrFloor:0.000} MRR");
 
         var misses = score.Misses
             .Select(c =>
@@ -156,6 +163,31 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
             + "adds an entry at the end, and an existing entry is never edited or reordered.");
 
         var baseline = golden.Latest!;
+
+        // The two citation metrics are recorded, not only printed: a run that improves recall by
+        // citing one article more confidently and one more wrongly has to move them somewhere a
+        // reviewer can see, and a later edit cannot delete the fields without failing here.
+        Assert.True(
+            baseline.PrecisionAt3 is not null && baseline.Rank1Rate is not null,
+            $"the latest measurement ({baseline.MeasuredOn}) records no precisionAt3/rank1Rate, so a "
+            + "wrong first citation costs nothing on record. Append an entry carrying both.");
+
+        Assert.True(
+            Math.Abs(score.PrecisionAt3 - baseline.PrecisionAt3!.Value) < 1e-9,
+            $"precision@3 measures {score.PrecisionAt3:0.000} but the latest measurement records "
+            + $"{baseline.PrecisionAt3:0.000}. Precision is the share of the three citations that were "
+            + "correct, so a change that cites more wrong articles for the same recall lowers it.");
+
+        Assert.True(
+            Math.Abs(score.Rank1Rate - baseline.Rank1Rate!.Value) < 1e-9,
+            $"the rank-1 rate measures {score.Rank1Rate:0.000} but the latest measurement records "
+            + $"{baseline.Rank1Rate:0.000}. This is the share of questions whose first citation was "
+            + "correct; a swap of rank 1 and rank 3 leaves recall@3 untouched and moves this.");
+
+        Assert.True(
+            score.Unanswerable > 0,
+            "the golden set has no unanswerable cases, so precision and the rank-1 rate are only "
+            + "measuring answerable questions and cannot notice a confident wrong citation.");
 
         // The rules for moving the bar live in the data, so changing one is a reviewable diff beside
         // the number it governs. The one rule that matters most is asserted rather than trusted to
@@ -231,6 +263,27 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
 
         foreach (var caseScore in score.Cases)
         {
+            // Unanswerable questions are compared by how many articles were cited, not by rank:
+            // their rank is 0 by construction, and what can regress is a citation appearing where
+            // there should be none.
+            if (!caseScore.IsAnswerable)
+            {
+                var recordedCitations = baseline.FalseCitations?.GetValueOrDefault(caseScore.Case.Id) ?? 0;
+
+                output.WriteLine(
+                    $"{caseScore.Case.Id} no-answer cited {recordedCitations} -> {caseScore.Top.Count}"
+                    + (recordedCitations == caseScore.Top.Count ? string.Empty : "  CHANGED"));
+
+                if (recordedCitations != caseScore.Top.Count)
+                {
+                    drifted.Add(
+                        $"{caseScore.Case.Id} cited {recordedCitations} -> {caseScore.Top.Count} "
+                        + "(no article answers it)");
+                }
+
+                continue;
+            }
+
             if (!recordedRanks!.TryGetValue(caseScore.Case.Id, out var recorded))
             {
                 drifted.Add($"{caseScore.Case.Id} (not in the latest entry) -> rank {caseScore.Rank}");
@@ -249,7 +302,8 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
 
         Assert.True(
             drifted.Count == 0,
-            $"{drifted.Count} case(s) moved against the latest entry's ranks: "
+            $"{drifted.Count} case(s) moved against the latest entry (ranks for answerable "
+            + "questions, citation counts for unanswerable ones): "
             + string.Join(", ", drifted)
             + ". If the change is intended, append a new measurement (ranks, recallAt3, mrr and the "
             + "corpusFingerprint; the floor separately) deliberately; if not, this is the per-case "
@@ -368,6 +422,54 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
         Assert.Equal(1d, passing.RecallAt3);
         Assert.Equal(1d, passing.Mrr);
         Assert.True(passing.MeetsFloor);
+    }
+
+    /// <summary>
+    /// An unanswerable question is scored on abstaining, not on which article it happened to cite.
+    /// </summary>
+    /// <remarks>
+    /// The two stubs differ in one response only: the second returns nothing for the unanswerable
+    /// question. Recall is identical because it is divided by the answerable questions alone; the
+    /// citation metrics are what separate the two behaviour. Without this the unanswerable cases
+    /// would be a constant in the averages and could not tell abstention from a confident wrong
+    /// citation.
+    /// </remarks>
+    [Fact]
+    public async Task An_unanswerable_question_is_scored_on_abstaining()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var golden = new GoldenSet
+        {
+            Description = "in memory, one answerable and one not",
+            RecallAt3Floor = 1d,
+            Measurements = [],
+            Cases =
+            [
+                new GoldenSetCase { Id = "a-1", Question = "answerable", Expected = ["kb-0001"] },
+                new GoldenSetCase { Id = "u-1", Question = "unanswerable", Expected = [] },
+            ],
+        };
+
+        var citing = new StubRetriever(query => Articles("kb-0001"));
+        var measured = await RetrievalGoldenSet.ScoreAsync(golden, citing, ct);
+
+        Assert.Equal(1d, measured.RecallAt3);
+        Assert.Equal(1, measured.Answerable);
+        Assert.Equal(1, measured.Unanswerable);
+        Assert.Equal(1d / 6, measured.PrecisionAt3, 3);
+        Assert.Equal(0.5d, measured.Rank1Rate, 3);
+        Assert.Equal(1d, measured.FalseCitationRate);
+
+        var abstaining = new StubRetriever(query =>
+            query.Query == "unanswerable" ? [] : Articles("kb-0001"));
+        var abstained = await RetrievalGoldenSet.ScoreAsync(golden, abstaining, ct);
+
+        // Same recall, better citations: this is the difference the new cases exist to measure.
+        Assert.Equal(1d, abstained.RecallAt3);
+        Assert.Equal(2d / 3, abstained.PrecisionAt3, 3);
+        Assert.Equal(1d, abstained.Rank1Rate);
+        Assert.Equal(0d, abstained.FalseCitationRate);
     }
 
     /// <summary>The corpus path, review, and families the eval states it measures with.</summary>

@@ -418,11 +418,11 @@ bullets stay as requirements.
   test, the data or the floor. `The_scorer_measures_the_retriever_it_is_given` pins that with two stubs, and
   registering an empty retriever in `AddRag` fails the acceptance test with recall 0.000 without any change to
   the cases, which is the proof that the number now follows the implementation rather than the class.
-- History now, three appended entries rather than one block: **0.714 (15/21) MRR 0.627** on the set before it was
-  widened, **0.775 (31/40) MRR 0.646** on the unstemmed tokeniser, **0.850 (34/40) MRR 0.750** after it, floor
-  0.85. Before: recall@3 = 0.775 (31/40), MRR = 0.646, floor 0.77. The set was extended to forty without weakening
-  any question first, and the earliest measurement was 0.714 (15/21) with MRR 0.627 — so the numbers read
-  0.714 → 0.775 → 0.850, each step a different cause (more questions, then a better tokeniser).
+- History now, four appended entries rather than one block: **0.714 (15/21) MRR 0.627** on the set before it was
+  widened, **0.775 (31/40) MRR 0.646** on the unstemmed tokeniser, **0.850 (34/40) MRR 0.750** after it, then the
+  same two numbers with the five unanswerable questions added and the citation metrics first recorded, floor 0.85.
+  The earliest measurement was 0.714 (15/21); the numbers read 0.714 → 0.775 → 0.850, each step a different cause
+  (more questions, then a better tokeniser).
 - The tokeniser (`TextTokens`) now does what the first baseline said was missing: a stopword list, so `the`,
   `and` and `now` are no longer scored terms; a shallow suffix stemmer (`-s`, `-es`, `-ies`, `-ed`, `-ing`, the
   doubled consonant an inflection leaves, and the final `e`), so `spilled` reaches `spill`, `scratched` reaches
@@ -467,6 +467,23 @@ bullets stay as requirements.
   time; add cases but never weaken one. The acceptance test asserts the rules are present and that the
   same-commit prohibition and the append-only rule are both stated, so deleting the sentence fails the suite
   rather than degrading the file to convention.
+- **The set now has five questions whose correct answer is no article at all** (`rq-041`…`rq-045`: currency and
+  invoicing, a mobile app, a courier, a tablet version, an account e-mail). They are not near-misses: the corpus
+  contains no `invoice`, `kroner`, `android`, `ios`, `courier`, `tablet` or `subscription`, so a citation for one
+  is an unrelated article chosen with confidence.
+- **Recall keeps its floor and its meaning**: recall@3 is divided by the forty answerable questions only, so the
+  five new cases cannot move it (0.850, 34/40, floor unchanged). Two citation metrics are measured beside it.
+  precision@3 is the mean share of the three citations that were correct; rank-1 rate is the share of questions
+  whose first citation was correct. For an unanswerable question zero is the right number of citations, so
+  abstaining scores 1 and citing anything scores 0 on both — scoring those cases as 0/3 either way would make them
+  a constant in the average and leave a retriever that abstains indistinguishable from one that cites nonsense.
+  Measured now: **precision@3 0.319, rank-1 0.622**; four of the five unanswerable questions were still handed
+  three articles each (`rq-041`, `rq-043`, `rq-044`, `rq-045`), `rq-042` was correctly left alone.
+- The new metrics are **recorded, not floored**: the floors stay recall and MRR, the latest entry carries
+  `precisionAt3`, `rank1Rate`, `answerable` and a `falseCitations` map naming the questions that cited anything,
+  and the acceptance test fails if the fields are missing or disagree with the run. `An_unanswerable_question_is_
+  scored_on_abstaining` pins the semantics with two stubs that differ only in whether they abstain: same recall,
+  precision 1/6 vs 2/3, rank-1 0.5 vs 1.0, false-citation rate 1 vs 0.
 - The ranks are the part that can move quietly: one question up a rank and another down leaves both aggregates
   identical, so the latest entry's ranks plus a printed `rank N -> M` for every case makes that swap a failure
   naming two question ids instead of a silent pass. Re-recording is per case too — the appended entry records the

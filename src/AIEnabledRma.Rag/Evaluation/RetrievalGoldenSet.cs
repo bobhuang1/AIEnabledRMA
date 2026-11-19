@@ -55,6 +55,16 @@ public sealed record GoldenSetCase
 
     public required string Question { get; init; }
 
+    /// <summary>
+    /// Every correct article. Empty means the right answer is no citation at all.
+    /// </summary>
+    /// <remarks>
+    /// A question the corpus cannot answer is not a question with a wrong answer: a retriever that
+    /// cites an unrelated article for it has made an error that recall cannot see, because recall
+    /// only asks whether the expected article appeared — and an empty set can never appear. Those
+    /// cases therefore count against precision@3 and the rank-1 rate, and are left out of recall's
+    /// denominator.
+    /// </remarks>
     public required IReadOnlyList<string> Expected { get; init; }
 
     /// <summary>Product families the case needs enabled, because the expected article is product-scoped.</summary>
@@ -89,7 +99,25 @@ public sealed record GoldenSetMeasurement
 
     public required int Cases { get; init; }
 
+    /// <summary>Answerable cases the recall and MRR figures were divided by.</summary>
+    public int? Answerable { get; init; }
+
+    /// <summary>Mean share of correct citations in the top three, over every case. Null before it was recorded.</summary>
+    public double? PrecisionAt3 { get; init; }
+
+    /// <summary>Share of every case whose first citation was correct. Null before it was recorded.</summary>
+    public double? Rank1Rate { get; init; }
+
     public IReadOnlyList<string>? Misses { get; init; }
+
+    /// <summary>
+    /// How many articles each unanswerable case was given, when any were.
+    /// </summary>
+    /// <remarks>
+    /// The precision and rank-1 aggregates say a citation happened; this says which question
+    /// produced it, which is the only form of the answer a reviewer can act on.
+    /// </remarks>
+    public IReadOnlyDictionary<string, int>? FalseCitations { get; init; }
 
     /// <summary>
     /// The rank each case landed at, so a later run can be compared question by question.
@@ -112,6 +140,36 @@ public sealed record GoldenSetCaseScore
     public required int Rank { get; init; }
 
     public required IReadOnlyList<string> Top { get; init; }
+
+    /// <summary>Whether the corpus has a correct article for this question.</summary>
+    public bool IsAnswerable => Case.Expected.Count > 0;
+
+    /// <summary>How many of the cited articles are correct ones. Always 0 for an unanswerable case.</summary>
+    public int Relevant => Top.Count(id => Case.Expected.Contains(id, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The share of the three citations that were correct: 0/3, 1/3, 2/3 or 3/3.
+    /// </summary>
+    /// <remarks>
+    /// For an unanswerable question the correct number of citations is zero, so an empty answer
+    /// scores 1 and any citation scores 0. Scoring it as 0/3 either way would make the unanswerable
+    /// cases a constant in the average, and a retriever that abstains would be indistinguishable from
+    /// one that cites an unrelated article.
+    /// </remarks>
+    public double PrecisionAt3 => IsAnswerable
+        ? Relevant / (double)RetrievalGoldenSet.TopK
+        : Top.Count == 0 ? 1d : 0d;
+
+    /// <summary>
+    /// Whether the first article cited is a correct one.
+    /// </summary>
+    /// <remarks>
+    /// For an unanswerable question the first citation is correctly absent, so an empty answer
+    /// counts and any citation does not.
+    /// </remarks>
+    public bool Rank1 => IsAnswerable
+        ? Top.Count > 0 && Case.Expected.Contains(Top[0], StringComparer.OrdinalIgnoreCase)
+        : Top.Count == 0;
 }
 
 /// <summary>The whole run: per-case results plus the two numbers the floor is compared against.</summary>
@@ -119,11 +177,56 @@ public sealed record GoldenSetScore
 {
     public required IReadOnlyList<GoldenSetCaseScore> Cases { get; init; }
 
-    /// <summary>Share of cases whose top three included one of the expected articles.</summary>
+    /// <summary>
+    /// Share of answerable cases whose top three included one of the expected articles.
+    /// </summary>
+    /// <remarks>
+    /// Unanswerable cases are excluded from the denominator, because there is no article for them
+    /// to retrieve: counting them as misses would let a change that cites nothing look like a
+    /// regression in recall while improving what the model is told.
+    /// </remarks>
     public required double RecallAt3 { get; init; }
 
-    /// <summary>Mean reciprocal rank of the first correct article, counting a miss as zero.</summary>
+    /// <summary>Mean reciprocal rank of the first correct article, over answerable cases, a miss counting zero.</summary>
     public required double Mrr { get; init; }
+
+    /// <summary>
+    /// Mean share of the three citations that were correct, over every case.
+    /// </summary>
+    /// <remarks>
+    /// The complement of "how much of what the model reads is noise". Unanswerable cases are in the
+    /// denominator: the right answer is no citation, so abstaining scores 1 and citing anything scores
+    /// 0. That is a different question from recall, which cannot see a wrong article that displaced a
+    /// right one it never had.
+    /// </remarks>
+    public required double PrecisionAt3 { get; init; }
+
+    /// <summary>
+    /// Share of every case whose first cited article is a correct one.
+    /// </summary>
+    /// <remarks>
+    /// The metric for "the model was handed the wrong article first" — recall@3 is unchanged by a
+    /// swap of rank 1 and 3, and MRR moves only in proportion. Unanswerable cases are in the
+    /// denominator and count as correct only when nothing was cited.
+    /// </remarks>
+    public required double Rank1Rate { get; init; }
+
+    /// <summary>Cases with a correct article in the corpus; recall and MRR are measured over these.</summary>
+    public int Answerable => Cases.Count(c => c.IsAnswerable);
+
+    /// <summary>Cases whose right answer is no citation at all.</summary>
+    public int Unanswerable => Cases.Count(c => !c.IsAnswerable);
+
+    /// <summary>
+    /// Share of unanswerable cases that cited something anyway.
+    /// </summary>
+    /// <remarks>
+    /// A diagnostic rather than a bar: precision@3 already charges for each such citation, and this
+    /// says how often the error happens instead of how much it costs.
+    /// </remarks>
+    public double FalseCitationRate => Unanswerable == 0
+        ? 0d
+        : Cases.Count(c => !c.IsAnswerable && c.Top.Count > 0) / (double)Unanswerable;
 
     public required double Floor { get; init; }
 
@@ -132,7 +235,7 @@ public sealed record GoldenSetScore
 
     public int Hits => Cases.Count(c => c.Rank > 0);
 
-    public IEnumerable<GoldenSetCaseScore> Misses => Cases.Where(c => c.Rank == 0);
+    public IEnumerable<GoldenSetCaseScore> Misses => Cases.Where(c => c.IsAnswerable && c.Rank == 0);
 
     public bool MeetsFloor => RecallAt3 >= Floor;
 
@@ -228,13 +331,23 @@ public static class RetrievalGoldenSet
             });
         }
 
-        var hits = scored.Count(c => c.Rank > 0);
+        var answerable = scored.Where(c => c.IsAnswerable).ToList();
+
+        if (answerable.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "The golden set has no answerable cases, so recall and MRR would measure nothing.");
+        }
+
+        var hits = answerable.Count(c => c.Rank > 0);
 
         return new GoldenSetScore
         {
             Cases = scored,
-            RecallAt3 = hits / (double)scored.Count,
-            Mrr = scored.Average(c => c.Rank == 0 ? 0d : 1d / c.Rank),
+            RecallAt3 = hits / (double)answerable.Count,
+            Mrr = answerable.Average(c => c.Rank == 0 ? 0d : 1d / c.Rank),
+            PrecisionAt3 = scored.Average(c => c.PrecisionAt3),
+            Rank1Rate = scored.Count(c => c.Rank1) / (double)scored.Count,
             Floor = set.RecallAt3Floor,
             MrrFloor = set.MrrFloor,
         };
