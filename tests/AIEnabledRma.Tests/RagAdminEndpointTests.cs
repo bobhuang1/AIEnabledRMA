@@ -211,7 +211,6 @@ public sealed class RagAdminEndpointTests
         Assert.Equal(OffHost.ToString(), attempt.RemoteAddress);
         Assert.True(attempt.ArticleCountBefore > 0);
         Assert.True(attempt.ArticleCountAfter > 0);
-        Assert.Null(attempt.RefusalReason);
         Assert.InRange(attempt.DurationMilliseconds, 0, 60_000);
     }
 
@@ -241,7 +240,6 @@ public sealed class RagAdminEndpointTests
         Assert.False(attempt.Succeeded);
         Assert.Equal("loopback", attempt.Caller);
         Assert.Equal(0, attempt.ArticleCountAfter);
-        Assert.Contains("load errors", attempt.RefusalReason, StringComparison.Ordinal);
     }
 
     [Fact]

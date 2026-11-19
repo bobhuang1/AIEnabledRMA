@@ -88,25 +88,20 @@ public static class McpHttpHost
         app.UseAuthentication();
         app.UseAuthorization();
 
-        // The policy is applied globally rather than as endpoint metadata on purpose: a preflight
-        // OPTIONS does not match the POST route, so endpoint-scoped CORS would never see it and an
-        // allowed page's preflight would fall through to the origin check and be refused.
         app.MapMcp(http.Path).RequireAuthorization(McpHttpAuthentication.PolicyName);
 
         // RFC 9728 discovery, served without a token because it describes how to get one. Both
         // addresses exist: the path-specific one the 401 names and the root one an MCP client falls
-        // back to when it ignores the header.
-        app.MapGet(
-            ProtectedResourceMetadata.WellKnownPath,
-            (HttpContext context) =>
-                Results.Json(ProtectedResourceMetadata.DocumentFor(context.Request, http)));
-
-        var endpointMetadataPath = ProtectedResourceMetadata.PathFor(http.Path);
-
-        if (!string.Equals(endpointMetadataPath, ProtectedResourceMetadata.WellKnownPath, StringComparison.Ordinal))
+        // back to when it ignores the header. Distinct, because a host whose endpoint is at the root
+        // maps the same path twice and ASP.NET refuses a duplicate route at startup.
+        foreach (var path in new[]
+                 {
+                     ProtectedResourceMetadata.WellKnownPath,
+                     ProtectedResourceMetadata.PathFor(http.Path),
+                 }.Distinct(StringComparer.Ordinal))
         {
             app.MapGet(
-                endpointMetadataPath,
+                path,
                 (HttpContext context) =>
                     Results.Json(ProtectedResourceMetadata.DocumentFor(context.Request, http)));
         }

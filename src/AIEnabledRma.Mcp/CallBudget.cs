@@ -85,10 +85,10 @@ public sealed class CallBudget(
     ICallerIdentity caller)
 {
     /// <summary>The stamp kind for any tool call.</summary>
-    public const string CallKind = "call";
+    private const string CallKind = "call";
 
     /// <summary>The stamp kind for a customer lookup.</summary>
-    public const string LookupKind = "lookup";
+    private const string LookupKind = "lookup";
 
     private static readonly TimeSpan CallWindow = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan LookupWindow = TimeSpan.FromDays(1);
@@ -114,7 +114,7 @@ public sealed class CallBudget(
         return taken
             ? BudgetDecision.Yes
             : BudgetDecision.No(
-                $"This session has made {_options.CallsPerMinute} tool calls in the last minute, "
+                $"This caller has made {_options.CallsPerMinute} tool calls in the last minute, "
                 + "which is the configured limit. Wait a minute and try again.");
     }
 

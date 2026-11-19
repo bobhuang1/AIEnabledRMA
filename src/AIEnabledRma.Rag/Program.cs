@@ -116,7 +116,6 @@ operations.MapPost("/rag/reload", async (
         ArticleCountBefore = before,
         ArticleCountAfter = holder.Current.Articles.Count,
         DurationMilliseconds = (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-        RefusalReason = reloaded ? null : "the corpus produced load errors",
     });
 
     return reloaded

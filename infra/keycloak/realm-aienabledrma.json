@@ -47,11 +47,7 @@
       "directAccessGrantsEnabled": false,
       "defaultClientScopes": [
         "rma:read"
-      ],
-      "optionalClientScopes": [],
-      "attributes": {
-        "access.token.lifespan": "300"
-      }
+      ]
     },
     {
       "clientId": "mcp-browser",
@@ -63,7 +59,6 @@
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": false,
       "redirectUris": [
         "http://localhost:5173/*"
       ],
@@ -73,10 +68,8 @@
       "defaultClientScopes": [
         "rma:read"
       ],
-      "optionalClientScopes": [],
       "attributes": {
-        "pkce.code.challenge.method": "S256",
-        "access.token.lifespan": "300"
+        "pkce.code.challenge.method": "S256"
       }
     }
   ],

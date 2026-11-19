@@ -21,9 +21,9 @@ public static class McpServices
         services.AddRmaDbContext(configuration);
         services.AddRmaData(configuration);
 
-        // Every tool call is audited and counted against the session's per-minute budget at one
+        // Every tool call is audited and counted against the caller's per-minute budget at one
         // choke point (the tools/call filter), so a tool added later is covered without being
-        // wrapped. The customer tools additionally cap customer lookups per session.
+        // wrapped. The customer tools additionally cap customer lookups per caller per day.
         services.AddSingleton(TimeProvider.System);
         services.AddOptions<McpBudgetOptions>()
             .Bind(configuration.GetSection(McpBudgetOptions.SectionName));

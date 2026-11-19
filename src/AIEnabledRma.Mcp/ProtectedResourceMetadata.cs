@@ -60,7 +60,7 @@ public static class ProtectedResourceMetadata
     }
 
     /// <summary>The absolute URL the challenge names, as seen by the host the caller reached.</summary>
-    public static string UrlFor(HttpRequest request, McpHttpOptions http)
+    private static string UrlFor(HttpRequest request, McpHttpOptions http)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(http);

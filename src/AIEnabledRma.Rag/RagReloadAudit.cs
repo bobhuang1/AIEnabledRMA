@@ -29,8 +29,6 @@ public sealed record RagReloadAttempt
     public required int ArticleCountAfter { get; init; }
 
     public required long DurationMilliseconds { get; init; }
-
-    public string? RefusalReason { get; init; }
 }
 
 /// <summary>
@@ -52,12 +50,11 @@ public sealed class LoggingRagReloadAudit(ILogger<LoggingRagReloadAudit> logger)
     public void Record(RagReloadAttempt attempt) =>
         logger.LogInformation(
             "Knowledge base reload by {Caller} from {RemoteAddress}: succeeded={Succeeded}, "
-            + "articles {ArticlesBefore} -> {ArticlesAfter}, {DurationMilliseconds} ms, refusal={RefusalReason}",
+            + "articles {ArticlesBefore} -> {ArticlesAfter}, {DurationMilliseconds} ms",
             attempt.Caller,
             attempt.RemoteAddress ?? "unknown",
             attempt.Succeeded,
             attempt.ArticleCountBefore,
             attempt.ArticleCountAfter,
-            attempt.DurationMilliseconds,
-            attempt.RefusalReason ?? "none");
+            attempt.DurationMilliseconds);
 }
