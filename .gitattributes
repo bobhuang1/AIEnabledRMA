@@ -3,3 +3,7 @@
 # in knowledge-base/REVIEWED.sha256 would match on at most one of them.
 knowledge-base/**/*.md text eol=lf
 knowledge-base/REVIEWED.sha256 text eol=lf
+
+# Shell scripts run under bash on Linux and in Git Bash, and a CRLF shebang is a syntax error
+# there. Pin them the way the corpus is pinned, rather than relying on how a checkout was made.
+*.sh text eol=lf

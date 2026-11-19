@@ -117,3 +117,18 @@ jobs:
             echo "::error::A dependency has a known vulnerability."
             exit 1
           fi
+
+  auth-flows:
+    # The realm import and both token flows were verified by hand, in a terminal, and the realm has
+    # already failed to import once on a field Keycloak rejects. This boots the committed realm and
+    # the mcp-http profile and drives the client-credentials and PKCE flows with the same script
+    # docs/mcp.md points at, so an edit that breaks the import or a check fails here instead of in a
+    # runbook nobody re-ran. It builds the tool server's image, which is why it is a separate job.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Verify the realm import and both auth flows
+        run: ./scripts/verify-auth.sh

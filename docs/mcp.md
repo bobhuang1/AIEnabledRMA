@@ -15,6 +15,27 @@ device tools to the network.
 This runbook is the recipe that produced a `200` from the transport against a real Keycloak,
 not a signing key held by a test.
 
+## Verify it in one command
+
+```bash
+./scripts/verify-auth.sh
+```
+
+The script boots Keycloak with the committed realm and the `mcp-http` profile, waits for both
+discovery documents, then drives the two flows and asserts the answers rather than printing them:
+the machine token's `iss`, `aud`, `scope` and `azp`; `200` for `initialize` with it; `401` with no
+token, including the `resource_metadata` pointer; `403` from an origin that is not in the
+allow-list; `204` preflights with CORS headers for the listed origin and none for an unlisted one;
+the PKCE authorization-code exchange with no secret; a code refused without its verifier; and a
+replayed code refused. It mints tokens from inside the compose network, where the issuer is
+`http://keycloak:8080/…`, because that is the hostname the transport validates.
+
+CI runs the same script on every pull request (`auth-flows` in `.github/workflows/ci.yml`), so the
+realm's validity and both flows are a check rather than a memory: the import has already failed once
+on a field Keycloak rejects, and that failure is silent until something depends on the client.
+`KEEP=1` leaves the stack running; the script stops only the containers it started and never
+removes a volume.
+
 ## What the realm has to provide
 
 Four things, all committed in `infra/keycloak/realm-aienabledrma.json`:
@@ -65,7 +86,9 @@ curl -s -X POST \
   -d 'scope=rma:read'
 ```
 
-The access token's payload must carry all four of these, or the transport will refuse it:
+The script above performs this request and asserts the four claims; the curl is here so you can see
+the request the assertions are about. The access token's payload must carry all four of these, or
+the transport will refuse it:
 
 ```json
 {
@@ -158,7 +181,9 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"runbook","version":"1"}}}'
 ```
 
-`200`. The body arrives as one server-sent event (`event: message` followed by a `data:` line
+`200`. The script above checks this answer, the `401` below, the `403` for an unlisted origin and
+the preflight that precedes either, so these curls are for reading rather than for running the gate.
+The body arrives as one server-sent event (`event: message` followed by a `data:` line
 carrying the JSON-RPC result), which is why the `Accept` header names both types; a request
 without it is refused by the SDK rather than by any check here. The transport is stateless, so no
 session id is issued and each request stands alone — `tools/list` can be sent the same way without
