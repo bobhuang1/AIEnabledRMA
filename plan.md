@@ -429,6 +429,10 @@ bullets stay as requirements.
   more: `rq-002` (`switch on` vs the article's `turn on`), `rq-008`/`rq-013`/`rq-017`/`rq-033`/`rq-038` (a synonym
   or a whole phrase the lexicon does not share, such as `photos` vs `documentation`). Those need synonyms or
   embeddings, not stemming, and the file's `baseline` block lists each miss with the articles that beat it.
+- The file's `baseline` block is now asserted, not just published: the acceptance test compares the measured
+  recall@3, MRR and case count to it and fails with "re-record deliberately" when they differ. Floors catch a
+  regression; the baseline catches a stale record — a case edited, an article added, a change that clears the floor
+  while still moving the number — which would otherwise leave the file claiming a measurement nobody can reproduce.
 - Both numbers are floored, not just printed. `mrrFloor: 0.75` sits beside `recallAt3Floor: 0.85`, because recall@3
   cannot see a hit slipping from rank 1 to rank 3: the same questions still appear in the top three, so the recall
   number does not move while the citation handed to the model gets worse. The acceptance test asserts both and names

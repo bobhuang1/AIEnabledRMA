@@ -131,6 +131,41 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
             + "rank 1:"
             + Environment.NewLine
             + string.Join(Environment.NewLine, lowered));
+
+        // A floor says "not worse than the bar"; the baseline says "this is exactly what was
+        // measured". Without this, the recorded numbers go stale silently: edit a case, add an
+        // article, change the tokeniser, and as long as the floor still passes the file keeps
+        // claiming a measurement nobody can reproduce. The tolerance is for averaging doubles,
+        // not for drift: one case changed is at least 0.025 on recall with forty questions.
+        var baseline = golden.Baseline;
+
+        Assert.True(
+            baseline is not null,
+            "eval/retrieval-golden.json has no baseline block, so the recorded measurement cannot be "
+            + "checked against a run. Re-record it in the same commit as the change that moved it.");
+
+        Assert.True(
+            Math.Abs(score.RecallAt3 - baseline!.RecallAt3) < 1e-9,
+            $"recall@3 measures {score.RecallAt3:0.000} ({score.Hits}/{score.Cases.Count}) but the "
+            + $"baseline records {baseline.RecallAt3:0.000}. If the change is intended, re-record "
+            + "baseline.recallAt3 — and the floor, if it moved — in eval/retrieval-golden.json as a "
+            + "deliberate edit; if not, this is the regression the baseline exists to catch."
+            + Environment.NewLine
+            + string.Join(Environment.NewLine, misses));
+
+        Assert.True(
+            Math.Abs(score.Mrr - baseline.Mrr) < 1e-9,
+            $"MRR measures {score.Mrr:0.000} but the baseline records {baseline.Mrr:0.000}. Re-record "
+            + "baseline.mrr deliberately if the change is intended; a hit that moved rank without "
+            + "changing recall@3 is exactly what this number is for."
+            + Environment.NewLine
+            + string.Join(Environment.NewLine, lowered));
+
+        Assert.True(
+            score.Cases.Count == baseline.Cases,
+            $"the set now has {score.Cases.Count} cases but the baseline was measured on "
+            + $"{baseline.Cases}. A changed case count moves both numbers by arithmetic alone, so "
+            + "re-record baseline.cases, recallAt3 and mrr together deliberately.");
     }
 
     /// <summary>
