@@ -183,12 +183,20 @@ internal sealed class FakeCustomerRepository : ICustomerRepository
 
     public AddressResolution? Resolution { get; set; }
 
+    /// <summary>Returned by every search, standing in for the fuzzy repository's candidates.</summary>
+    public List<Customer> Customers { get; } = [];
+
+    public List<CustomerSearchQuery> Queries { get; } = [];
+
     public Task<Customer?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-        Task.FromResult<Customer?>(null);
+        Task.FromResult(Customers.FirstOrDefault(c => c.Id == id));
 
     public Task<IReadOnlyList<Customer>> SearchAsync(
-        CustomerSearchQuery query, CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<Customer>>([]);
+        CustomerSearchQuery query, CancellationToken cancellationToken = default)
+    {
+        Queries.Add(query);
+        return Task.FromResult<IReadOnlyList<Customer>>(Customers.ToList());
+    }
 
     public Task<AddressResolution?> ResolveAddressAsync(
         Guid customerId, string? freeTextAddress, CancellationToken cancellationToken = default) =>

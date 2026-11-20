@@ -145,6 +145,16 @@ Tools:
 | `get_fee_quote` | Repair price for a device from the same per-product price table the wizard bills from |
 | `lookup_device` / `lookup_customer` | Catalog and customer lookups through the same fuzzy matchers the wizard uses |
 | `resolve_shipping_address` | Matches free text to a customer's stored addresses, never claiming a weak match is confident |
+| `reveal_customer_contact` | Full name, email and phone. Authenticated callers with the `rma:support` role only; needs a reason |
+
+**What an agent can see.** Customer results are masked exactly as the anonymous wizard masks them
+(`Jane S.`, a masked email and phone, city plus a postal-code prefix; no street lines and no external
+CRM id). `find_customer` matches email and phone exactly, so a partial value returns nothing, and a
+name search needs at least 3 characters. Every tool call passes through `ToolCallGuard`, which
+writes one row to `mcp_tool_calls` (tool, caller, session, SHA-256 prefixes of the arguments but
+never their values, result count, outcome, latency) and enforces `McpSecurity:CallsPerMinute` and
+`McpSecurity:CustomerLookupsPerSession`. On stdio the caller is the configured `LocalCallerName`
+and has no roles, so `reveal_customer_contact` is always refused there.
 
 Example agent question: *"AX2-0001-0005 is dead on arrival and out of warranty — what happens
 if the customer returns it, and how much would it cost?"* — `check_coverage` routes it to a

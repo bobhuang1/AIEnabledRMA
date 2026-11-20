@@ -1,7 +1,5 @@
-using AIEnabledRma.Data;
-using AIEnabledRma.Mcp.Tools;
+using AIEnabledRma.Mcp;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -10,16 +8,9 @@ var builder = Host.CreateApplicationBuilder(args);
 // makes an MCP host fail to parse the first response frame.
 builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 
-builder.Services.AddMcpServer()
-    .WithStdioServerTransport()
-    .WithToolsFromAssembly();
-
-builder.Services.AddRmaDbContext(builder.Configuration);
-builder.Services.AddRmaData(builder.Configuration);
-
-builder.Services.AddScoped<DeviceLookupTools>();
-builder.Services.AddScoped<CustomerLookupTools>();
-builder.Services.AddScoped<PolicyTools>();
+// Tools, data access, and the guard that checks permission and budgets and audits every call.
+builder.Services.AddRmaMcpServer(builder.Configuration)
+    .WithStdioServerTransport();
 
 await builder.Build().RunAsync();
 

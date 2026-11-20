@@ -19,7 +19,7 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 | Step | Workstream | Status | Notes |
 |---|---|---|---|
 | 1 | P0 Baseline and CI | Done (local) | CI workflow written; it has not run on GitHub yet because nothing is pushed. |
-| 2 | P1 MCP data surface | In progress | Shared `CustomerMasking`, `McpToolCall` entity, `mcp_tool_calls` migration and `EfToolAuditSink` landed. Left: masked MCP projection, exact-only contact search, call-tool filter (caller, budgets, audit), `reveal_customer_contact`, tests. |
+| 2 | P1 MCP data surface | Done | Masked projection, exact-only contact search, `ToolCallGuard` (permission, budgets, audit), `reveal_customer_contact` (support role only). Budgets are in-process memory. |
 | 2 | P3 Redact before model calls | Not started | |
 | 2 | P8 Wizard hardening | Not started | |
 | 3 | P4 Secure KB ingestion | Not started | |
@@ -48,3 +48,11 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 - **P1 part 1 landed.** `CustomerMasking` in Domain (the wizard now delegates to it), `McpToolCall` audit
   entity, `AddMcpToolCalls` migration, `EfToolAuditSink` (not yet registered in the MCP host). Evidence:
   solution builds with 0 errors. Work stopped here because the session's usage limit was reached.
+- **P1 finished.** `find_customer` and the address tools return masked data only (no street lines, no
+  external id); email/phone search is exact-only; name search needs 3+ characters. `ToolCallGuard`, wired as
+  an MCP call-tool filter in `McpServerSetup`, refuses `reveal_customer_contact` without an authenticated
+  `rma:support` caller, enforces calls-per-minute and customer-lookups-per-session budgets, and writes one
+  `mcp_tool_calls` row per call with argument hash prefixes only. Evidence: 20 new tests in
+  `McpSecurityTests` (projection, enumeration, audit, budgets, caller); full suite 219 passed, 0 skipped;
+  stdio smoke against a throwaway database wrote two audit rows (`find_customer` Ok,
+  `reveal_customer_contact` RefusedPermission) with hashes, not values.
