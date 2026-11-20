@@ -55,6 +55,8 @@ public static class RmaDataServiceCollectionExtensions
         services.AddScoped<IRmaRepository, RmaRepository>();
         services.AddScoped<IUnitOfWork, EfUnitOfWork>();
         services.AddScoped<IEligibilityService, RmaPolicyEvaluator>();
+        services.AddScoped<AIEnabledRma.Domain.Operations.IOperationsRepository, EfOperationsRepository>();
+        services.AddSingleton<AIEnabledRma.Domain.Operations.IReviewQueue, EfReviewQueue>();
 
         return services;
     }

@@ -70,6 +70,9 @@ public sealed partial class CaseIngestionPipeline(
 
     public const string WatermarkKey = "case_watermark";
 
+    /// <summary>The last run's report (counts and opaque keys only), for the operator view.</summary>
+    public const string LastReportKey = "case_report:last";
+
     [GeneratedRegex(@"^\s*(?:from|to|cc|bcc|sent|date|subject|reply-to)\s*:.*$", RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.CultureInvariant)]
     private static partial Regex HeaderLineRegex();
 
@@ -272,7 +275,7 @@ public sealed partial class CaseIngestionPipeline(
             }
         }
 
-        return new CaseIngestionReport
+        var finished = new CaseIngestionReport
         {
             Source = source.Name,
             Read = read,
@@ -282,6 +285,9 @@ public sealed partial class CaseIngestionPipeline(
             Cases = reports,
             Published = published,
         };
+
+        await store.SetMetaAsync(LastReportKey, System.Text.Json.JsonSerializer.Serialize(finished), cancellationToken);
+        return finished;
     }
 
     public static string CaseKey(string sourceRecordId) =>

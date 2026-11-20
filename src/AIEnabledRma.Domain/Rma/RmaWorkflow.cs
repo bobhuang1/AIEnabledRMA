@@ -1,6 +1,7 @@
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Catalog;
 using AIEnabledRma.Domain.Customers;
+using AIEnabledRma.Domain.Operations;
 using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Domain.Rules;
 using AIEnabledRma.Domain.Triage;
@@ -128,7 +129,8 @@ public sealed partial class RmaWorkflow(
     IUnitOfWork unitOfWork,
     IOptions<RmaPolicyOptions> policyOptions,
     IClock clock,
-    ILogger<RmaWorkflow> logger) : IRmaWorkflow
+    ILogger<RmaWorkflow> logger,
+    IReviewQueue? reviewQueue = null) : IRmaWorkflow
 {
     private readonly RmaPolicyOptions _policy = policyOptions.Value;
 
@@ -197,6 +199,19 @@ public sealed partial class RmaWorkflow(
                 "RMA start blocked by policy: {Reason} (rules: {Rules})",
                 worst.Reason,
                 string.Join(", ", worst.MatchedRuleIds));
+
+            // Human review creates no return, so this row is the only trace a person will see.
+            if (worst.Eligibility == RmaEligibility.RequiresHumanReview)
+            {
+                await EnqueueAsync(
+                    ReviewSources.StartRefused,
+                    worst.Reason.ToString(),
+                    worst.Explanation,
+                    string.Join(", ", command.Devices.Select(d => d.Device?.SerialNumber).Where(s => s is not null)),
+                    rmaId: null,
+                    command.CustomerId,
+                    cancellationToken);
+            }
 
             return new StepResult
             {
@@ -378,6 +393,19 @@ logger.LogInformation(
         await rmaRepository.UpdateAsync(request, cancellationToken);
         await CommitAsync(cancellationToken);
 
+        if (!triage.Verdict.Resolved
+            && (triage.UsedFallback || triage.Verdict.Confidence < _policy.HumanReviewConfidenceThreshold))
+        {
+            await EnqueueAsync(
+                ReviewSources.TriageLowConfidence,
+                triage.UsedFallback ? "TriageFallback:" + (triage.FailureReason ?? "unknown") : "LowConfidenceTriage",
+                $"Confidence {triage.Verdict.Confidence:0.00}.",
+                serials: null,
+                request.Id,
+                request.CustomerId,
+                cancellationToken);
+        }
+
         return new StepResult
         {
             Outcome = triage.Verdict.Resolved
@@ -554,6 +582,15 @@ if (addressId is { } address)
 
         if (result.IsFailure)
         {
+            await EnqueueAsync(
+                ReviewSources.PaymentFailed,
+                "PaymentAuthorisationFailed",
+                result.ErrorMessage,
+                serials: null,
+                request.Id,
+                request.CustomerId,
+                cancellationToken);
+
             return new StepResult
             {
                 Outcome = StepOutcome.RequiresHumanReview,
@@ -613,6 +650,44 @@ if (addressId is { } address)
             Message = "Return confirmed.",
             Status = request.Status,
         };
+    }
+
+    private async Task EnqueueAsync(
+        string source,
+        string reason,
+        string? explanation,
+        string? serials,
+        Guid? rmaId,
+        Guid? customerId,
+        CancellationToken cancellationToken)
+    {
+        if (reviewQueue is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await reviewQueue.AddAsync(
+                new ReviewItem
+                {
+                    Id = Guid.NewGuid(),
+                    CreatedAtUtc = clock.UtcNow,
+                    Source = source,
+                    Reason = reason,
+                    Explanation = explanation is null || explanation.Length <= 2000 ? explanation : explanation[..2000],
+                    Serials = serials,
+                    RmaRequestId = rmaId,
+                    CustomerId = customerId,
+                },
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The customer's step has already succeeded or been answered; a queue failure is
+            // logged loudly rather than turned into an error page.
+            logger.LogError(ex, "Could not file a review item ({Source}, {Reason}).", source, reason);
+        }
     }
 
     private Task<RmaRequest?> LoadAsync(Guid rmaId, CancellationToken cancellationToken) =>

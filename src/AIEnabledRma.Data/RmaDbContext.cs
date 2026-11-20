@@ -2,6 +2,7 @@ using System.Text.Json;
 using AIEnabledRma.Domain.Audit;
 using AIEnabledRma.Domain.Catalog;
 using AIEnabledRma.Domain.Customers;
+using AIEnabledRma.Domain.Operations;
 using AIEnabledRma.Domain.Rma;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
@@ -29,6 +30,10 @@ public sealed class RmaDbContext(DbContextOptions<RmaDbContext> options) : DbCon
     public DbSet<RmaExclusion> RmaExclusions => Set<RmaExclusion>();
 
     public DbSet<McpToolCall> McpToolCalls => Set<McpToolCall>();
+
+    public DbSet<ReviewItem> ReviewItems => Set<ReviewItem>();
+
+    public DbSet<OperatorAction> OperatorActions => Set<OperatorAction>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -271,5 +276,36 @@ public sealed class McpToolCallConfiguration : IEntityTypeConfiguration<McpToolC
         builder.Property(c => c.ArgumentHashes).HasColumnType("jsonb").IsRequired();
         builder.Property(c => c.Outcome).HasMaxLength(32).IsRequired();
         builder.HasIndex(c => new { c.Caller, c.AtUtc }).HasDatabaseName("ix_mcp_tool_calls_caller_at");
+    }
+}
+
+public sealed class ReviewItemConfiguration : IEntityTypeConfiguration<ReviewItem>
+{
+    public void Configure(EntityTypeBuilder<ReviewItem> builder)
+    {
+        builder.ToTable("review_items");
+        builder.HasKey(r => r.Id);
+        builder.Property(r => r.Source).HasMaxLength(64).IsRequired();
+        builder.Property(r => r.Reason).HasMaxLength(128).IsRequired();
+        builder.Property(r => r.Explanation).HasMaxLength(2000);
+        builder.Property(r => r.Serials).HasMaxLength(1000);
+        builder.Property(r => r.Status).HasMaxLength(16).IsRequired();
+        builder.Property(r => r.ResolvedBy).HasMaxLength(256);
+        builder.Property(r => r.Resolution).HasMaxLength(2000);
+        builder.HasIndex(r => new { r.Status, r.CreatedAtUtc }).HasDatabaseName("ix_review_items_status_created");
+    }
+}
+
+public sealed class OperatorActionConfiguration : IEntityTypeConfiguration<OperatorAction>
+{
+    public void Configure(EntityTypeBuilder<OperatorAction> builder)
+    {
+        builder.ToTable("operator_actions");
+        builder.HasKey(a => a.Id);
+        builder.Property(a => a.Operator).HasMaxLength(256).IsRequired();
+        builder.Property(a => a.Action).HasMaxLength(32).IsRequired();
+        builder.Property(a => a.Target).HasMaxLength(64).IsRequired();
+        builder.Property(a => a.Detail).HasMaxLength(2000);
+        builder.HasIndex(a => a.AtUtc).HasDatabaseName("ix_operator_actions_at");
     }
 }

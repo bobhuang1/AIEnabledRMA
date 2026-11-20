@@ -17,6 +17,10 @@
     <ProjectReference Include="..\AIEnabledRma.Rag\AIEnabledRma.Rag.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
+  </ItemGroup>
+
   <!-- The knowledge corpus ships with the site. A deployment that forgot to copy it would
        otherwise start cleanly and then treat every question as "no evidence", which reads as
        a working assistant that happens to know nothing. -->

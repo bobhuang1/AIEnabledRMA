@@ -18,6 +18,16 @@ public sealed class WebStartupTests
         Assert.Contains("FakePaymentGateway", Flatten(ex), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Operator_dev_sign_in_is_refused_outside_development()
+    {
+        using var factory = new EnvironmentFactory("Production", ("OperatorAuth:DevSignIn", "true"), ("Payments:AllowFakeGateway", "true"));
+
+        var ex = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        Assert.Contains("DevSignIn", Flatten(ex), StringComparison.Ordinal);
+    }
+
     private static readonly DateTimeOffset Created = new(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
 
     [Theory]
@@ -40,12 +50,16 @@ public sealed class WebStartupTests
     private static string Flatten(Exception ex) =>
         ex.InnerException is null ? ex.Message : ex.Message + " | " + Flatten(ex.InnerException);
 
-    private sealed class EnvironmentFactory(string environment) : WebApplicationFactory<global::WebAppAnchor>
+    private sealed class EnvironmentFactory(string environment, params (string Key, string Value)[] settings) : WebApplicationFactory<global::WebAppAnchor>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment(environment);
             builder.UseSetting("ConnectionStrings:Rma", "Host=localhost;Database=unused;Username=x;Password=placeholder");
+            foreach (var (key, value) in settings)
+            {
+                builder.UseSetting(key, value);
+            }
         }
     }
 }

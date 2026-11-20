@@ -25,6 +25,7 @@ namespace AIEnabledRma.Web.Controllers;
 /// steps (the request is not yet a commitment until confirmed) and must be revisited if the
 /// wizard grows authenticated pages, an operator portal, or a second user on one return.
 /// </summary>
+[ServiceFilter(typeof(AIEnabledRma.Web.Security.CapabilityExpiryFilter))]
 public sealed class RmaWizardController(
     IRmaWorkflow workflow,
     ITriageService triage,

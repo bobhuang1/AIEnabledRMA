@@ -574,7 +574,8 @@
           "AIEnabledRma.Ai": "[1.0.0, )",
           "AIEnabledRma.Data": "[1.0.0, )",
           "AIEnabledRma.Domain": "[1.0.0, )",
-          "AIEnabledRma.Rag": "[1.0.0, )"
+          "AIEnabledRma.Rag": "[1.0.0, )",
+          "Microsoft.AspNetCore.Authentication.OpenIdConnect": "[10.0.12, )"
         }
       },
       "EFCore.NamingConventions": {
@@ -593,6 +594,15 @@
         "requested": "[10.0.12, )",
         "resolved": "10.0.12",
         "contentHash": "DeE+Bq2OqB3FikFkZk+7gFBeLOQhkSolejLrbi+a9zpfvXtW1Ff6Nd6DIvHXIm+pc4aM4+52vDy3jnuau0qoUQ==",
+        "dependencies": {
+          "Microsoft.IdentityModel.Protocols.OpenIdConnect": "8.19.2"
+        }
+      },
+      "Microsoft.AspNetCore.Authentication.OpenIdConnect": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.12, )",
+        "resolved": "10.0.12",
+        "contentHash": "UfkKr9EP+LBgnFfxwkfnZzta7XkalCroZWoxg2yW9dt8iPXO7bJYpcmyFIeM+FLcAlOKZeduP93XhuCcfWaYIQ==",
         "dependencies": {
           "Microsoft.IdentityModel.Protocols.OpenIdConnect": "8.19.2"
         }

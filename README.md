@@ -301,6 +301,24 @@ $env:RMA_EVAL_REPORT = "$PWD\TestResults\eval-report.json"
 dotnet test tests\AIEnabledRma.Tests --filter "FullyQualifiedName~TriageEvaluationTests"
 ```
 
+## Operator back office
+
+`/Operator` is the authenticated back office:
+
+- **Human review queue** (`review_items`): starts the policy sent to a person (these create no return, so before
+  this they were shown to the customer and lost), triage that fell back or came back below the confidence
+  threshold, and failed payment authorisations. Operators resolve each item with a note.
+- **Returns in progress:** mark received, record the inspection and capture the authorised repair fee, or void
+  the authorisation and cancel. Capture is refused before the item is received.
+- **Knowledge base review:** articles refused at load, and (Development only) unreviewed articles with the
+  content hash to stamp. **CRM ingestion:** the last `kb-cases` report (counts and opaque keys only).
+- Every action, refused or not, is written to `operator_actions` with the operator's name.
+
+Sign-in is OpenID Connect (`OperatorAuth:Authority`, `ClientId`, `ClientSecret` from the environment) and the
+token must carry the `rma:operator` role or scope. For local development only, set
+`OperatorAuth:DevSignIn=true` in `appsettings.Development.json` for a one-click `dev-operator` sign-in; the app
+refuses to start with it in any other environment.
+
 ## Why the AI is advisory
 
 A return touches a customer's money, a company's stock, and a warranty obligation. A model

@@ -712,6 +712,143 @@ public sealed class WebWizardTests : IAsyncLifetime
     }
 
 
+    [Fact]
+    public async Task The_operator_area_needs_sign_in()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var response = await CreateClient().GetAsync("/Operator", ct);
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.StartsWith("/Operator/SignIn", response.Headers.Location!.PathAndQuery, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_operator_receives_inspects_and_captures_and_every_action_is_audited()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new WizardFactory(
+            _applicationConnectionString,
+            settings: new Dictionary<string, string> { ["OperatorAuth:DevSignIn"] = "true" });
+
+        // A confirmed paid repair with a real (fake-gateway) authorisation behind it.
+        var gateway = factory.Services.GetRequiredService<AIEnabledRma.Domain.Abstractions.IPaymentGateway>();
+        var authorisation = await gateway.AuthorizeAsync(
+            new AIEnabledRma.Domain.Abstractions.PaymentAuthorizationRequest
+            {
+                RmaNumber = "RMA-2026-09901",
+                Amount = new AIEnabledRma.Domain.Common.Money(69m, "USD"),
+                Purpose = AIEnabledRma.Domain.Abstractions.PaymentPurpose.Deposit,
+                CaptureMode = AIEnabledRma.Domain.Abstractions.PaymentCaptureMode.ManualLater,
+                CustomerEmail = "test@example.com",
+            },
+            ct);
+        var requestId = Guid.NewGuid();
+        await using (var db = CreateContext())
+        {
+            db.RmaRequests.Add(new RmaRequest
+            {
+                Id = requestId,
+                RmaNumber = "RMA-2026-09901",
+                Status = RmaRequestStatus.AwaitingShipment,
+                Kind = RmaRequestKind.PaidRepair,
+                DepositAmount = 69m,
+                CurrencyCode = "USD",
+                PaymentTransactionId = authorisation.Value!.TransactionId,
+                CreatedAtUtc = PinnedNow,
+                UpdatedAtUtc = PinnedNow,
+            });
+            await db.SaveChangesAsync(ct);
+        }
+
+        var client = await SignedInOperatorAsync(factory, ct);
+
+        // Capture before receipt is refused, and the refusal is audited too.
+        var refused = await OperatorPostAsync(client, $"/Operator/Capture/{requestId}", [("inspectionNote", "looks fine")], ct);
+        Assert.Contains("Not done", refused, StringComparison.Ordinal);
+
+        await OperatorPostAsync(client, $"/Operator/Receive/{requestId}", [], ct);
+        var captured = await OperatorPostAsync(client, $"/Operator/Capture/{requestId}", [("inspectionNote", "Charging port corroded; repair confirmed.")], ct);
+        Assert.Contains("Done: Captured 69.00 USD", captured, StringComparison.Ordinal);
+
+        await using var check = CreateContext();
+        var request = await check.RmaRequests.SingleAsync(r => r.Id == requestId, ct);
+        Assert.Equal(RmaRequestStatus.InRepair, request.Status);
+
+        var actions = await check.OperatorActions.Where(a => a.Target == "RMA-2026-09901").OrderBy(a => a.AtUtc).ToListAsync(ct);
+        Assert.Equal(["capture", "receive", "capture"], actions.Select(a => a.Action).ToArray());
+        Assert.Equal([false, true, true], actions.Select(a => a.Succeeded).ToArray());
+        Assert.All(actions, a => Assert.Equal("dev-operator", a.Operator));
+    }
+
+    [Fact]
+    public async Task A_start_sent_to_human_review_is_queued_for_an_operator_and_can_be_resolved()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new WizardFactory(
+            _applicationConnectionString,
+            settings: new Dictionary<string, string> { ["OperatorAuth:DevSignIn"] = "true" });
+        var customer = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true, AllowAutoRedirect = false });
+
+        // AX2-0001-0002 already has an open return, so the policy wants a person to look.
+        var start = await customer.GetAsync("/RmaWizard/Start", ct);
+        await PostStepAsync(
+            customer,
+            "/RmaWizard/Start",
+            TokenOf(await start.Content.ReadAsStringAsync(ct)),
+            [("Customer", CustomerEmail), ("Identifiers", "AX2-0001-0002"), ("CurrencyCode", CurrencyCode)],
+            ct);
+
+        await using (var db = CreateContext())
+        {
+            var item = await db.ReviewItems.SingleAsync(ct);
+            Assert.Equal(AIEnabledRma.Domain.Operations.ReviewSources.StartRefused, item.Source);
+            Assert.Contains("AX2-0001-0002", item.Serials, StringComparison.Ordinal);
+        }
+
+        var operatorClient = await SignedInOperatorAsync(factory, ct);
+        var dashboard = await operatorClient.GetStringAsync("/Operator", ct);
+        Assert.Contains(AIEnabledRma.Domain.Operations.ReviewSources.StartRefused, dashboard, StringComparison.Ordinal);
+
+        Guid itemId;
+        await using (var db = CreateContext())
+        {
+            itemId = (await db.ReviewItems.SingleAsync(ct)).Id;
+        }
+
+        await OperatorPostAsync(operatorClient, $"/Operator/Resolve/{itemId}", [("resolution", "Duplicate of the open return; customer told.")], ct);
+
+        await using var after = CreateContext();
+        var resolved = await after.ReviewItems.SingleAsync(ct);
+        Assert.Equal(AIEnabledRma.Domain.Operations.ReviewStatuses.Resolved, resolved.Status);
+        Assert.Equal("dev-operator", resolved.ResolvedBy);
+        Assert.True(await after.OperatorActions.AnyAsync(a => a.Action == "resolve-review" && a.Succeeded, ct));
+    }
+
+    private static async Task<HttpClient> SignedInOperatorAsync(WizardFactory factory, CancellationToken ct)
+    {
+        var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true, AllowAutoRedirect = false });
+        var signIn = await client.GetAsync("/Operator/SignIn", ct);
+        var posted = await client.PostAsync(
+            "/Operator/DevSignIn",
+            new FormUrlEncodedContent([new("__RequestVerificationToken", TokenOf(await signIn.Content.ReadAsStringAsync(ct)))]),
+            ct);
+        Assert.Equal(HttpStatusCode.Redirect, posted.StatusCode);
+        return client;
+    }
+
+    /// <summary>Posts an operator form and returns the dashboard it redirects to.</summary>
+    private static async Task<string> OperatorPostAsync(HttpClient client, string path, (string Key, string Value)[] fields, CancellationToken ct)
+    {
+        var page = await client.GetStringAsync("/Operator", ct);
+        var values = new List<KeyValuePair<string, string>> { new("__RequestVerificationToken", TokenOf(page)) };
+        values.AddRange(fields.Select(f => new KeyValuePair<string, string>(f.Key, f.Value)));
+
+        var posted = await client.PostAsync(path, new FormUrlEncodedContent(values), ct);
+        Assert.Equal(HttpStatusCode.Redirect, posted.StatusCode);
+        return System.Net.WebUtility.HtmlDecode(await client.GetStringAsync("/Operator", ct));
+    }
+
     private HttpClient CreateClient()
     {
         Assert.NotNull(_factory);

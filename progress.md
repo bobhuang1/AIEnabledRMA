@@ -28,7 +28,7 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 | 5 | P6 CRM case ingestion | Done except real import: **blocked on D1** | Tenant, app registration and field list are the owner's; everything else runs on synthetic data. |
 | 5 | P7 Retrieval/triage eval | Done | Real-model run is wired (`eval.yml`) but needs a model endpoint and secrets from the owner. |
 | 6 | P9 Real payment gateway | Not started | |
-| 6 | P10 Operator view | Not started | |
+| 6 | P10 Operator view | Done | OIDC provider (D2) is configuration; a dev sign-in exists for Development/Testing only. |
 | 6 | P11 Production pack | Not started | |
 
 ## Log
@@ -122,3 +122,12 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
   model when enabled. Evidence (example-local model, lexical index): recall@3 1.000, MRR 0.955, citation
   validity 1.000 (84 citations), fallback rate 0.000, out-of-scope accuracy 1.000, injection pass rate 1.000
   (6 customer-side + 4 article-side).
+- **P10 landed.** `review_items` and `operator_actions` tables (migration `AddOperations`); the workflow files
+  review items for human-review starts (previously not persisted at all), low-confidence or fallback triage, and
+  failed payment authorisations; `OperatorService` (receive, capture after inspection, void with reason,
+  resolve review item; every attempt audited); `/Operator` area behind an `operator` policy (cookie session,
+  OpenID Connect when configured, Development/Testing-only dev sign-in, refused at startup elsewhere); the
+  link-expiry filter now applies to the wizard only. Evidence: new `WebWizardTests` (anonymous redirect to
+  sign-in; receive + capture with a refused early capture, three audit rows, status InRepair, fake-gateway
+  capture; a duplicate-serial start filed as a review item, shown on the dashboard and resolved) and
+  `WebStartupTests` (dev sign-in refused in Production); full suite 309 passed, 1 skipped (symlink, Windows).

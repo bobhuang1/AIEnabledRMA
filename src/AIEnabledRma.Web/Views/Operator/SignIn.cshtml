@@ -1,0 +1,17 @@
+@{
+    ViewData["Title"] = "Operator sign-in";
+}
+
+<h1>Operator sign-in</h1>
+@if (ViewBag.DevSignIn == true)
+{
+    <p>Development sign-in: you will be signed in as <code>dev-operator</code>.</p>
+    <form method="post" asp-action="DevSignIn">
+        <input type="hidden" name="returnUrl" value="@ViewBag.ReturnUrl" />
+        <button class="btn" type="submit">Sign in</button>
+    </form>
+}
+else
+{
+    <p>Operator sign-in is not configured. Set <code>OperatorAuth:Authority</code> and <code>OperatorAuth:ClientId</code>.</p>
+}

@@ -1,0 +1,125 @@
+@model AIEnabledRma.Web.Controllers.OperatorDashboard
+@{
+    ViewData["Title"] = "Operator";
+}
+
+<h1>Operator</h1>
+<form method="post" asp-action="SignOut"><button class="btn" type="submit">Sign out</button></form>
+
+@if (Model.Message is not null)
+{
+    <p class="notice" role="status">@Model.Message</p>
+}
+
+<section>
+    <h2>Human review (@Model.ReviewItems.Count)</h2>
+    @if (Model.ReviewItems.Count == 0)
+    {
+        <p>Nothing waiting.</p>
+    }
+    else
+    {
+        <table>
+            <thead><tr><th>Filed</th><th>Source</th><th>Reason</th><th>Detail</th><th>Resolve</th></tr></thead>
+            <tbody>
+            @foreach (var item in Model.ReviewItems)
+            {
+                <tr>
+                    <td>@item.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
+                    <td>@item.Source</td>
+                    <td>@item.Reason</td>
+                    <td>@item.Explanation @item.Serials</td>
+                    <td>
+                        <form method="post" asp-action="Resolve" asp-route-id="@item.Id">
+                            <label>Resolution <input name="resolution" required maxlength="2000" /></label>
+                            <button class="btn" type="submit">Resolve</button>
+                        </form>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    }
+</section>
+
+<section>
+    <h2>Returns in progress (@Model.Requests.Count)</h2>
+    <table>
+        <thead><tr><th>RMA</th><th>Status</th><th>Kind</th><th>Fee</th><th>Actions</th></tr></thead>
+        <tbody>
+        @foreach (var request in Model.Requests)
+        {
+            <tr>
+                <td>@request.RmaNumber</td>
+                <td>@request.Status</td>
+                <td>@request.Kind</td>
+                <td>@(request.DepositAmount > 0 ? $"{request.DepositAmount:0.00} {request.CurrencyCode}" : "-")</td>
+                <td>
+                    @if (request.Status == RmaRequestStatus.AwaitingShipment)
+                    {
+                        <form method="post" asp-action="Receive" asp-route-id="@request.Id"><button class="btn" type="submit">Mark received</button></form>
+                    }
+                    @if (request.Status == RmaRequestStatus.Received && request.DepositAmount > 0)
+                    {
+                        <form method="post" asp-action="Capture" asp-route-id="@request.Id">
+                            <label>Inspection <input name="inspectionNote" required maxlength="2000" /></label>
+                            <button class="btn" type="submit">Capture fee</button>
+                        </form>
+                    }
+                    @if (request.Status is RmaRequestStatus.AwaitingShipment or RmaRequestStatus.Received)
+                    {
+                        <form method="post" asp-action="Void" asp-route-id="@request.Id">
+                            <label>Reason <input name="reason" required maxlength="400" /></label>
+                            <button class="btn" type="submit">Void and cancel</button>
+                        </form>
+                    }
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+<section>
+    <h2>Knowledge base review</h2>
+    @if (Model.KnowledgeLoadErrors.Count > 0)
+    {
+        <p>Articles refused at load:</p>
+        <ul>@foreach (var error in Model.KnowledgeLoadErrors) { <li>@error</li> }</ul>
+    }
+    @if (Model.UnreviewedArticles.Count == 0)
+    {
+        <p>Every loaded article is reviewed.</p>
+    }
+    else
+    {
+        <p>Loaded without review (Development only). Add <code>reviewed_by</code>, <code>reviewed_at</code> and this <code>content_hash</code>:</p>
+        <ul>@foreach (var article in Model.UnreviewedArticles) { <li>@article.Id - @article.Title - <code>@article.ContentHash</code></li> }</ul>
+    }
+</section>
+
+<section>
+    <h2>CRM case ingestion</h2>
+    @if (Model.CaseReportJson is null)
+    {
+        <p>No case ingestion report (the vector store is off, or kb-cases has not run).</p>
+    }
+    else
+    {
+        <p>Last run (counts and opaque case keys only; quarantined cases were not indexed):</p>
+        <pre>@Model.CaseReportJson</pre>
+    }
+</section>
+
+<section>
+    <h2>Recent operator actions</h2>
+    <table>
+        <thead><tr><th>When</th><th>Operator</th><th>Action</th><th>Target</th><th>Result</th></tr></thead>
+        <tbody>
+        @foreach (var action in Model.RecentActions)
+        {
+            <tr><td>@action.AtUtc.ToString("yyyy-MM-dd HH:mm")</td><td>@action.Operator</td><td>@action.Action</td><td>@action.Target</td><td>@(action.Succeeded ? "done" : "refused")</td></tr>
+        }
+        </tbody>
+    </table>
+</section>

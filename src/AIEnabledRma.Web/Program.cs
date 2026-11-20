@@ -115,7 +115,13 @@ builder.Services.AddOptions<TriagePipelineOptions>()
 
 // Antiforgery is on because every wizard step is a POST that changes the return's state. The
 // [ValidateAntiForgeryToken] attributes on the POST actions enforce it.
-builder.Services.AddControllersWithViews(mvc => mvc.Filters.AddService<CapabilityExpiryFilter>());
+// The link-expiry filter is applied to the wizard controller only (ServiceFilter attribute):
+// operators act on returns of any age.
+builder.Services.AddControllersWithViews();
+
+// Operator back office (P10): cookie session, OpenID Connect sign-in when configured.
+builder.Services.AddOperatorAuth(builder.Configuration, builder.Environment);
+builder.Services.AddScoped<AIEnabledRma.Domain.Operations.OperatorService>();
 
 var app = builder.Build();
 
@@ -129,6 +135,8 @@ app.UseRmaSecurityHeaders();
 app.UseStaticFiles();
 app.UseRouting();
 app.UseRateLimiter();
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseAntiforgery();
 
 app.MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}");
