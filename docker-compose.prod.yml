@@ -71,8 +71,12 @@ services:
       Ai__OpenAiCompatible__BaseUrl: ${AI_BASE_URL:-}
       Ai__OpenAiCompatible__ApiKey: ${AI_API_KEY:-}
       Rag__VectorStore__Enabled: ${RAG_VECTOR_STORE:-false}
-      Embeddings__Provider: ${EMBEDDINGS_PROVIDER:-hashing}
-      Embeddings__BaseUrl: ${EMBEDDINGS_BASE_URL:-}
+      # D4: a local Ollama model by default; switch to a hosted one with EMBEDDINGS_PROVIDER=openai-compatible.
+      Embeddings__Provider: ${EMBEDDINGS_PROVIDER:-ollama}
+      Embeddings__BaseUrl: ${EMBEDDINGS_BASE_URL:-http://ollama:11434}
+      Embeddings__Model: ${EMBEDDINGS_MODEL:-nomic-embed-text}
+      Embeddings__Dimensions: ${EMBEDDINGS_DIMENSIONS:-768}
+      Embeddings__ApiKey: ${EMBEDDINGS_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,6 +96,14 @@ services:
       postgres:
         condition: service_healthy
 
+  # Local embedding model (D4). Internal only; pull the model once:
+  #   docker compose -f docker-compose.prod.yml exec ollama ollama pull nomic-embed-text
+  ollama:
+    image: ollama/ollama:0.12.3@sha256:c622a7adec67cf5bd7fe1802b7e26aa583a955a54e91d132889301f50c3e0bd0
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
   rag:
     <<: *hardening
     build:
@@ -103,6 +115,7 @@ services:
       Rag__Security__ReaderKey: ${RAG_READER_KEY:?set RAG_READER_KEY}
 
 volumes:
+  ollama:
   pgdata:
   caddy-data:
   caddy-config:

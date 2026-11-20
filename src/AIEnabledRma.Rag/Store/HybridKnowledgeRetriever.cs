@@ -57,6 +57,12 @@ public sealed class HybridKnowledgeRetriever(
                 };
             }
         }
+        catch (EmbeddingModelMismatchException ex)
+        {
+            // Configuration error, not an outage: the store was built with another model.
+            logger.LogError(ex, "Embedding model mismatch; serving from the in-memory article index until the store is re-embedded.");
+            return await fallback.RetrieveAsync(query, cancellationToken);
+        }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             logger.LogWarning(ex, "Vector store retrieval failed; serving from the in-memory article index.");

@@ -248,10 +248,10 @@ dotnet run --project src\AIEnabledRma.Web
 - **Chunking:** markdown-aware; split on headings with the title and heading path as each chunk's prefix,
   packed towards 350 and at most 500 estimated tokens, short overlap inside long sections, lists and code
   blocks never split (`Rag:Chunking`).
-- **Embeddings:** `Embeddings:Provider` is `hashing` (deterministic, offline, the default and what CI uses) or
-  `openai-compatible` with `Embeddings:BaseUrl`/`Model`/`Dimensions` (for example a local Ollama at
-  `http://localhost:11434/v1`). The store records the model and refuses a different one until
-  `kb-ingest --rebuild`.
+- **Embeddings:** a configuration choice (`Embeddings` section), see "Choosing the embedding model" below.
+  The store records the model and dimension on every chunk and in `kb_meta`, and refuses to mix: ingesting
+  or querying with a different model fails until `kb-ingest --rebuild` re-embeds everything (retrieval falls
+  back to the in-memory index meanwhile).
 - **Publishing:** each run writes a new generation and activates it only when every chunk has a vector;
   unchanged content is a no-op, unchanged chunks reuse their stored vectors, and a failed embedding leaves the
   previous generation in service (exit code 2) for a retry.
@@ -260,6 +260,34 @@ dotnet run --project src\AIEnabledRma.Web
 - **Evidence:** on the golden question set (`tests/.../Fixtures/golden-questions.json`) recall@3 is 0.955 for
   both the lexical index and hybrid retrieval with the hashing embedder; a real embedding model is expected to
   do better on paraphrases.
+
+### Choosing the embedding model
+
+The default is a **local Ollama model**, so article and case text never leave the company:
+
+```powershell
+ollama pull nomic-embed-text      # once; or: ollama pull bge-m3
+```
+
+| Setting | Ollama (default) | Hosted / OpenAI-compatible | Offline tests |
+| --- | --- | --- | --- |
+| `Embeddings:Provider` | `ollama` | `openai-compatible` | `hashing` |
+| `Embeddings:BaseUrl` | `http://localhost:11434` | e.g. `https://embeddings.example.com/v1` | (none) |
+| `Embeddings:Model` | `nomic-embed-text` or `bge-m3` | e.g. `text-embedding-3-small` | (none) |
+| `Embeddings:Dimensions` | `768` (nomic) or `1024` (bge-m3) | the model's size, e.g. `1536` | e.g. `384` |
+| `Embeddings:ApiKey` | (none) | from the environment only | (none) |
+
+Switching is a configuration change plus a re-embed:
+
+```powershell
+$env:Embeddings__Provider = 'ollama'; $env:Embeddings__Model = 'bge-m3'; $env:Embeddings__Dimensions = '1024'
+dotnet run --project tools\DbAdmin -- kb-ingest --rebuild
+```
+
+Use the same `Embeddings` settings for `DbAdmin` and the web host: a host whose model differs from the store's is
+refused (vectors from different models are never compared). Vectors of the wrong size are refused at ingest.
+In Production a hosted endpoint must be `https`; Ollama is expected on the internal network
+(`docker-compose.prod.yml` runs it as the `ollama` service). CI and the unit tests use `hashing`.
 
 ## Resolved CRM cases as knowledge
 

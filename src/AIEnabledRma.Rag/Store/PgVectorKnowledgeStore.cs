@@ -123,7 +123,7 @@ public sealed partial class PgVectorKnowledgeStore(NpgsqlDataSource dataSource, 
         var dimensions = await MetaAsync(connection, "embedding_dimensions", cancellationToken);
         if (model is not null && (model != embedder.Name || dimensions != embedder.Dimensions.ToString(CultureInfo.InvariantCulture)))
         {
-            throw new InvalidOperationException(
+            throw new EmbeddingModelMismatchException(
                 $"The knowledge store was built with '{model}' ({dimensions} dimensions) but the configured "
                 + $"embedding model is '{embedder.Name}' ({embedder.Dimensions}). Re-run kb-ingest with --rebuild.");
         }
@@ -163,7 +163,21 @@ public sealed partial class PgVectorKnowledgeStore(NpgsqlDataSource dataSource, 
             CREATE INDEX IF NOT EXISTS ix_kb_chunks_tsv ON kb_chunks USING gin (tsv);
             CREATE INDEX IF NOT EXISTS ix_kb_chunks_hash ON kb_chunks (chunk_hash);
             CREATE INDEX IF NOT EXISTS ix_kb_documents_scope ON kb_documents USING gin (product_scope);
+            ALTER TABLE kb_chunks ADD COLUMN IF NOT EXISTS embedding_model text;
             """, cancellationToken);
+
+        // Belt and braces beside kb_meta: every stored vector names its model, so a store that was
+        // edited by hand or half-migrated is caught too.
+        await using (var foreign = new NpgsqlCommand(
+            "SELECT count(*) FROM kb_chunks WHERE embedding_model IS NOT NULL AND embedding_model <> @model", connection))
+        {
+            foreign.Parameters.AddWithValue("model", embedder.Name);
+            if (Convert.ToInt64(await foreign.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture) > 0)
+            {
+                throw new EmbeddingModelMismatchException(
+                    $"The knowledge store holds vectors from a model other than '{embedder.Name}'. Re-run kb-ingest with --rebuild.");
+            }
+        }
 
         await SetMetaAsync(connection, null, "embedding_model", embedder.Name, cancellationToken);
         await SetMetaAsync(connection, null, "embedding_dimensions", dim, cancellationToken);
@@ -190,6 +204,7 @@ public sealed partial class PgVectorKnowledgeStore(NpgsqlDataSource dataSource, 
         }
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await VerifyModelAsync(connection, cancellationToken);
         var active = int.Parse(await MetaAsync(connection, ActiveKey(kind), cancellationToken) ?? "0", CultureInfo.InvariantCulture);
 
         if (active > 0 && await IsSameAsActiveAsync(connection, kind, active, documents, cancellationToken))
@@ -260,17 +275,18 @@ public sealed partial class PgVectorKnowledgeStore(NpgsqlDataSource dataSource, 
         var reused = 0;
         await using (var reuse = new NpgsqlCommand("""
             UPDATE kb_chunks AS target
-            SET embedding = source.embedding, embedding_status = 'ok'
+            SET embedding = source.embedding, embedding_status = 'ok', embedding_model = source.embedding_model
             FROM (
-                SELECT DISTINCT ON (chunk_hash) chunk_hash, embedding
+                SELECT DISTINCT ON (chunk_hash) chunk_hash, embedding, embedding_model
                 FROM kb_chunks
-                WHERE embedding_status = 'ok' AND chunk_hash = ANY(@hashes)
+                WHERE embedding_status = 'ok' AND chunk_hash = ANY(@hashes) AND embedding_model = @model
             ) AS source
             WHERE target.chunk_hash = source.chunk_hash AND target.id = ANY(@ids)
             """, connection))
         {
             reuse.Parameters.AddWithValue("hashes", pending.Select(p => p.Hash).Distinct().ToArray());
             reuse.Parameters.AddWithValue("ids", pending.Select(p => p.Id).ToArray());
+            reuse.Parameters.AddWithValue("model", embedder.Name);
             reused = await reuse.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -307,12 +323,13 @@ public sealed partial class PgVectorKnowledgeStore(NpgsqlDataSource dataSource, 
                 await using var update = new NpgsqlCommand(
                     vectors is null
                         ? "UPDATE kb_chunks SET embedding_status = 'failed' WHERE id = @id"
-                        : "UPDATE kb_chunks SET embedding = @vector::vector, embedding_status = 'ok' WHERE id = @id",
+                        : "UPDATE kb_chunks SET embedding = @vector::vector, embedding_status = 'ok', embedding_model = @model WHERE id = @id",
                     connection);
                 update.Parameters.AddWithValue("id", batch[i].Id);
                 if (vectors is not null)
                 {
                     update.Parameters.AddWithValue("vector", VectorLiteral(vectors[i]));
+                    update.Parameters.AddWithValue("model", embedder.Name);
                 }
 
                 await update.ExecuteNonQueryAsync(cancellationToken);
@@ -380,9 +397,12 @@ public sealed partial class PgVectorKnowledgeStore(NpgsqlDataSource dataSource, 
         CancellationToken cancellationToken)
     {
         var words = WordRegex().Matches(query.ToLowerInvariant()).Select(m => m.Value).Where(w => w.Length > 2).Distinct().Take(64).ToList();
-        var vector = (await embedder.EmbedAsync([query], cancellationToken))[0];
-
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+
+        // A query vector from another model would be compared with stored vectors it has nothing in
+        // common with (or of another size): refuse instead of returning confident nonsense.
+        await VerifyModelAsync(connection, cancellationToken);
+        var vector = (await embedder.EmbedAsync([query], cancellationToken))[0];
 
         const string scoped = """
             FROM kb_chunks c
@@ -409,13 +429,14 @@ public sealed partial class PgVectorKnowledgeStore(NpgsqlDataSource dataSource, 
         var semantic = new List<KbChunkHit>();
         await using (var cmd = new NpgsqlCommand($"""
             SELECT {columns}
-            {scoped} AND c.embedding_status = 'ok'
+            {scoped} AND c.embedding_status = 'ok' AND c.embedding_model = @model
             ORDER BY c.embedding <=> @vector::vector, d.source_id, c.ordinal
             LIMIT {CandidatesPerList}
             """, connection))
         {
             cmd.Parameters.AddWithValue("allowed", allowedScopes.Select(NormaliseScope).ToArray());
             cmd.Parameters.AddWithValue("vector", VectorLiteral(vector));
+            cmd.Parameters.AddWithValue("model", embedder.Name);
             semantic.AddRange(await ReadHitsAsync(cmd, cancellationToken));
         }
 
@@ -536,6 +557,29 @@ public sealed partial class PgVectorKnowledgeStore(NpgsqlDataSource dataSource, 
     public static string VectorLiteral(float[] vector) =>
         "[" + string.Join(',', vector.Select(v => v.ToString("R", CultureInfo.InvariantCulture))) + "]";
 
+    /// <summary>Refuses when the store was built with another model or dimension than <see cref="Embedder"/>.</summary>
+    private async Task VerifyModelAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        if (_verified)
+        {
+            return;
+        }
+
+        var model = await MetaAsync(connection, "embedding_model", cancellationToken);
+        var dimensions = await MetaAsync(connection, "embedding_dimensions", cancellationToken);
+        if (model is not null
+            && (model != embedder.Name || dimensions != embedder.Dimensions.ToString(CultureInfo.InvariantCulture)))
+        {
+            throw new EmbeddingModelMismatchException(
+                $"The knowledge store was built with '{model}' ({dimensions} dimensions) but the configured embedding "
+                + $"model is '{embedder.Name}' ({embedder.Dimensions}). Switch back, or re-embed with kb-ingest --rebuild.");
+        }
+
+        _verified = model is not null;
+    }
+
+    private bool _verified;
+
     private static string NormaliseScope(string entry) => entry.Trim().ToLowerInvariant();
 
     private static string ActiveKey(string kind) => "active_generation:" + kind;
@@ -619,3 +663,6 @@ public sealed partial class PgVectorKnowledgeStore(NpgsqlDataSource dataSource, 
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 }
+
+/// <summary>The store holds vectors from a different embedding model or dimension than the one configured.</summary>
+public sealed class EmbeddingModelMismatchException(string message) : InvalidOperationException(message);

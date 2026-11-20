@@ -86,6 +86,8 @@ public static class RagServiceCollectionExtensions
         var vectorStore = configuration.GetSection(Store.VectorStoreOptions.SectionName).Get<Store.VectorStoreOptions>();
         if (vectorStore?.Enabled == true)
         {
+            // Hosts register the configured model first (AddEmbeddingModel, default Ollama); this
+            // fallback only serves a host that enables the store without choosing a model.
             services.TryAddSingleton<Domain.Knowledge.IEmbeddingModel>(new Domain.Knowledge.HashingEmbeddingModel());
             services.TryAddSingleton(sp => Npgsql.NpgsqlDataSource.Create(
                 configuration.GetConnectionString("Rma")

@@ -24,10 +24,10 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 | 2 | P8 Wizard hardening | Done | Rate limits, link expiry, no contact-detail probing, security headers, fake gateway refused outside Development/Testing, split health endpoints. `/health/details` uses a shared operator key until P10 brings sign-in. |
 | 3 | P4 Secure KB ingestion | Done | API keys (not JWT) on the RAG host; JWT comes with P2's identity provider. Symlink test skips on Windows without Developer Mode, runs in Linux CI. |
 | 3 | P2 Remote MCP + OAuth | Done (provider-neutral) | Streamable HTTP + JWT + RFC 9728 metadata; which identity provider (D2) is still the owner's call and is pure configuration. |
-| 4 | P5 Vector store + chunking | Done (hashing embedder) | Real embedding model is D4 (config only). Token sizes are estimated (4/3 per word), not tokenizer-exact. |
-| 5 | P6 CRM case ingestion | Done except real import: **blocked on D1** | Tenant, app registration and field list are the owner's; everything else runs on synthetic data. |
+| 4 | P5 Vector store + chunking | Done | Embedding model per D4: Ollama by default, hosted or hashing by configuration. Token sizes are estimated (4/3 per word), not tokenizer-exact. |
+| 5 | P6 CRM case ingestion | Done; real import waits on the owner's tenant (D1 decided) | Tenant, app registration and field list; everything else runs on synthetic data. |
 | 5 | P7 Retrieval/triage eval | Done | Real-model run is wired (`eval.yml`) but needs a model endpoint and secrets from the owner. |
-| 6 | P9 Real payment gateway | Done except account setup: **blocked on D5** | No Stripe account, keys or Elements card form yet; everything else is tested against a fake Stripe API. |
+| 6 | P9 Real payment gateway | Done; real payments wait on the owner's Stripe account (D5 decided) | No account, keys or Elements card form yet; everything else is tested against a fake Stripe API. |
 | 6 | P10 Operator view | Done | OIDC provider (D2) is configuration; a dev sign-in exists for Development/Testing only. |
 | 6 | P11 Production pack | Done | Not deployed anywhere: no host, domain or identity provider yet (owner). |
 
@@ -152,14 +152,16 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 
 ## Final state (2026-11-20)
 
-All twelve workstreams are done. Three parts can only finish with the owner's decisions; each is written into
-plan.md as blocked:
+All twelve workstreams are done and all six owner decisions are recorded as decided (plan.md section 4). Two
+parts wait only on the owner supplying accounts:
 
 | Blocked part | Needs |
 |---|---|
-| P6 real CRM import | D1: CRM tenant URL, app registration (client credentials), agreed field list |
-| P9 taking real payments | D5: Stripe account and keys, webhook registration, Stripe Elements card form |
-| Real identity provider, embedding model and model eval | D2 (Keycloak or Entra ID), D4 (local embedding model), plus `RMA_EVAL_*` secrets for `eval.yml` |
+| P6 real CRM import (D1, decided: Dataverse) | The tenant URL, app registration (client credentials) and the field list |
+| P9 taking real payments (D5, decided: Stripe test mode first) | The Stripe account and keys, webhook registration, Stripe Elements card form |
+
+The identity provider (D2) and the embedding model (D4) are configuration only. The real-model evaluation
+workflow (`eval.yml`) runs once `RMA_EVAL_*` secrets and `RMA_EVAL_ENABLED` are set.
 
 Everything else runs locally on synthetic data. Last full run: `dotnet test` 328 passed, 1 skipped (the
 symlink test, which needs Windows Developer Mode and runs on Linux CI), 0 failed, with
@@ -171,3 +173,18 @@ Notes for the owner:
   `docker rm -f aienabledrma-testpg`.
 - On this machine the shared C# compiler server twice served stale Razor output (bogus errors in
   `Confirm.cshtml`); `dotnet build-server shutdown` clears it.
+
+### 2026-11-20 (owner decisions)
+
+- **Decisions D1-D6 recorded as decided** in plan.md section 4: D1, D2, D3, D5 and D6 accepted as built; D4
+  decided as a local Ollama model by default, interchangeable by configuration.
+- **D4 landed.** `Embeddings:Provider` = `ollama` (default, native `/api/embed`, `nomic-embed-text`/768 unless
+  configured), `openai-compatible` or `hashing`; model, base URL, key and dimension in configuration; wrong-size
+  vectors refused. The store records `embedding_model` on every chunk as well as in `kb_meta`, and refuses
+  another model or dimension on schema check, ingest and query (`EmbeddingModelMismatchException`); the hybrid
+  retriever falls back to the lexical index and logs an error until `kb-ingest --rebuild`. Web appsettings and
+  the production compose default to Ollama (an internal, digest-pinned `ollama` service). README explains how to
+  switch. Evidence: `EmbeddingProviderTests` (Ollama default, each provider selected by configuration, invalid
+  configuration refused, `/api/embed` batching, wrong-size refusal) and `EmbeddingMismatchLiveTests` (another
+  dimension refused at schema and ingest, another model refused at query, model recorded per chunk, lexical
+  fallback, rebuild re-embeds); prod compose config valid; full suite 334 passed, 1 skipped (symlink, Windows), 0 failed.

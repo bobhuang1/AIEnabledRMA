@@ -83,22 +83,16 @@ Severity is for a deployment that faces real customers. None of these bite in th
    - CI, a real payment gateway behind the interface, refusal of unsafe configuration, rate limits;
    - an operator view for human-review cases.
 
-## 4. Decisions needed from the owner
+## 4. Decisions (decided by the owner, 2026-11-20)
 
-> Status 2026-11-20: the proposed defaults were built where they needed no owner input (masked MCP data with
-> a support-role unmask tool for D3, an anonymous wizard with expiry and rate limits for D6, provider-neutral
-> OIDC for D2, the offline hashing embedder plus an OpenAI-compatible client for D4, Stripe test mode for
-> D5). Still open and blocking real use: **D1** (CRM tenant and fields), **D2** (which identity provider),
-> **D4** (which embedding model), **D5** (Stripe account). See progress.md.
-
-| # | Decision | Blocks | Proposed default |
+| # | Decision | Outcome | Still needs from the owner |
 |---|---|---|---|
-| D1 | Which CRM holds the support cases (Dynamics 365/Dataverse assumed, as for Docketglass), and which case fields may be used | P6 | Dynamics incidents: title, description, resolution, notes; synthetic data until the tenant is configured by the owner |
-| D2 | How agents will reach the MCP server: local stdio only, or remote HTTP with an identity provider (which one?) | P2 | Both: stdio for a developer, HTTP + OAuth (Keycloak or Entra ID) for anything shared |
-| D3 | Whether an agent may see unmasked customer contact data at all | P1 | No. Masked by default, and an unmask tool only for an authenticated support role, audited |
-| D4 | The embedding model: a local model (BGE-M3 / nomic via Ollama) or a hosted API | P5 | Local, so no case text leaves the company |
-| D5 | The real payment provider | P9 | Stripe, test mode first |
-| D6 | Whether the wizard stays anonymous or gets customer sign-in | P8 | Stay anonymous; add expiry and rate limits |
+| D1 | CRM for support cases | **Decided:** Dynamics 365 / Dataverse incidents (title, description, notes, resolution, product), as built in P6. Synthetic data until the tenant is configured. | Tenant URL, app registration (client credentials), confirmation of the field list. P6's real import is blocked only on this. |
+| D2 | How agents reach the MCP server | **Decided:** stdio for developers, plus HTTP + OAuth that works with any standard OpenID Connect provider, as built in P2. | Nothing for the code; the identity provider is configuration. |
+| D3 | Unmasked customer contact data for agents | **Decided:** masked by default; `reveal_customer_contact` only for an authenticated support role, with a reason, audited (P1). | Nothing. |
+| D4 | Embedding model | **Decided:** a local model by default (Ollama, e.g. `nomic-embed-text` or `bge-m3`), interchangeable with a hosted model by configuration (`Embeddings:Provider` = `ollama`, `openai-compatible` or `hashing` for tests). The store refuses to mix models or dimensions. Built 2026-11-20. | Nothing; the model is pulled on the host. |
+| D5 | Payment provider | **Decided:** Stripe, test mode first, as built in P9. | The Stripe account, keys, webhook registration and the Elements card form. P9's real use is blocked only on this. |
+| D6 | Customer sign-in for the wizard | **Decided:** stays anonymous, with link expiry and rate limits, as built in P8. | Nothing. |
 
 ## 5. Workstreams
 
