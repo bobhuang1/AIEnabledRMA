@@ -25,7 +25,7 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 | 3 | P4 Secure KB ingestion | Done | API keys (not JWT) on the RAG host; JWT comes with P2's identity provider. Symlink test skips on Windows without Developer Mode, runs in Linux CI. |
 | 3 | P2 Remote MCP + OAuth | Done (provider-neutral) | Streamable HTTP + JWT + RFC 9728 metadata; which identity provider (D2) is still the owner's call and is pure configuration. |
 | 4 | P5 Vector store + chunking | Done (hashing embedder) | Real embedding model is D4 (config only). Token sizes are estimated (4/3 per word), not tokenizer-exact. |
-| 5 | P6 CRM case ingestion | Not started | |
+| 5 | P6 CRM case ingestion | Done except real import: **blocked on D1** | Tenant, app registration and field list are the owner's; everything else runs on synthetic data. |
 | 5 | P7 Retrieval/triage eval | Not started | |
 | 6 | P9 Real payment gateway | Not started | |
 | 6 | P10 Operator view | Not started | |
@@ -103,3 +103,13 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
   fallback when the store is unreachable).
 - **Note for the owner:** the next `docker compose up` recreates `aienabledrma-postgres` on the pgvector image
   (same PG 16, data directory kept). Not done from here: the running container was left alone.
+- **P6 landed.** `SupportCase` (no customer/contact/owner/order fields), `ICaseSource` with `FileCaseSource`
+  and `DataverseCaseSource` (`$select` of troubleshooting columns only, resolved incidents, incremental
+  `modifiedon`), `CaseIngestionPipeline` (header/signature/quoted-reply stripping, greeted/signed/labelled names,
+  `PiiRedactor`, fail-closed verification and quarantine, symptom/diagnosis/resolution chunks, opaque case keys,
+  "Resolved case (product, month)" citations, incremental merge with a watermark), `DbAdmin kb-cases` (dry run
+  by default, `--publish` needs `--reviewed-by`). Fixed on the way: `PiiRedactor.Detect` no longer reads the
+  word after a removed placeholder as a name. Evidence: `CaseIngestionTests` + `CaseLeakLiveTests`; the leak
+  gate ingests 6 synthetic cases with 30 planted values (4 published, 1 not eligible, 1 quarantined) and finds
+  zero planted values in kb tables, logs, the report or retrieval results; live `kb-cases` dry run and publish
+  on the throwaway database.

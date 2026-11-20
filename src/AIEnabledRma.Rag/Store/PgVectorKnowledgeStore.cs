@@ -453,6 +453,83 @@ public sealed partial class PgVectorKnowledgeStore(NpgsqlDataSource dataSource, 
         return Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
     }
 
+    /// <summary>Reads a store setting (watermarks and the like).</summary>
+    public async Task<string?> GetMetaAsync(string key, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        return await MetaAsync(connection, key, cancellationToken);
+    }
+
+    public async Task SetMetaAsync(string key, string value, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await SetMetaAsync(connection, null, key, value, cancellationToken);
+    }
+
+    /// <summary>
+    /// The documents of the active generation of <paramref name="kind"/>, with their chunks, so an
+    /// incremental run can merge new documents into them and publish the result as a generation.
+    /// </summary>
+    public async Task<IReadOnlyList<KbDocumentInput>> LoadActiveDocumentsAsync(string kind, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var cmd = new NpgsqlCommand("""
+            SELECT d.id, d.source_id, d.title, d.category, d.product_scope, d.reviewed_by, d.reviewed_at,
+                   d.content_hash, d.policy_version, d.citation_label,
+                   c.ordinal, c.heading_path, c.text, c.token_count
+            FROM kb_documents d
+            JOIN kb_meta m ON m.key = 'active_generation:' || d.kind AND m.value = d.generation::text
+            JOIN kb_chunks c ON c.document_id = d.id
+            WHERE d.kind = @kind
+            ORDER BY d.source_id, c.ordinal
+            """, connection);
+        cmd.Parameters.AddWithValue("kind", kind);
+
+        var documents = new List<KbDocumentInput>();
+        var chunks = new List<KnowledgeChunk>();
+        KbDocumentInput? current = null;
+        var currentId = Guid.Empty;
+
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var id = reader.GetGuid(0);
+            if (id != currentId)
+            {
+                if (current is not null)
+                {
+                    documents.Add(current with { Chunks = chunks.ToList() });
+                }
+
+                chunks.Clear();
+                currentId = id;
+                current = new KbDocumentInput
+                {
+                    SourceId = reader.GetString(1),
+                    Kind = kind,
+                    Title = reader.GetString(2),
+                    Category = reader.GetString(3),
+                    ProductScope = reader.GetFieldValue<string[]>(4),
+                    ReviewedBy = reader.IsDBNull(5) ? null : reader.GetString(5),
+                    ReviewedAt = reader.IsDBNull(6) ? null : reader.GetFieldValue<DateOnly>(6),
+                    ContentHash = reader.GetString(7),
+                    PolicyVersion = reader.IsDBNull(8) ? null : reader.GetString(8),
+                    CitationLabel = reader.IsDBNull(9) ? null : reader.GetString(9),
+                    Chunks = [],
+                };
+            }
+
+            chunks.Add(new KnowledgeChunk(reader.GetInt32(10), reader.GetString(11), reader.GetString(12), reader.GetInt32(13)));
+        }
+
+        if (current is not null)
+        {
+            documents.Add(current with { Chunks = chunks.ToList() });
+        }
+
+        return documents;
+    }
+
     public static string ChunkHash(string indexText, string modelName) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(modelName + "\n" + indexText)));
 

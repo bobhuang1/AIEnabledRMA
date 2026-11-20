@@ -261,6 +261,30 @@ dotnet run --project src\AIEnabledRma.Web
   both the lexical index and hybrid retrieval with the hashing embedder; a real embedding model is expected to
   do better on paraphrases.
 
+## Resolved CRM cases as knowledge
+
+`DbAdmin kb-cases` turns resolved support cases into troubleshooting knowledge with the customer removed:
+
+```powershell
+dotnet run --project tools\DbAdmin -- kb-cases --file cases.json --report report.json          # dry run
+dotnet run --project tools\DbAdmin -- kb-cases --file cases.json --publish --reviewed-by "J. Reviewer"
+```
+
+- The case model (`SupportCase`) has no customer, account, contact, owner or order field; a source drops them
+  when it maps the CRM record. `DataverseCaseSource` requests only troubleshooting columns of resolved
+  incidents (`$select`), incrementally on `modifiedon`; wiring it to a tenant waits on decision D1.
+- Only resolved cases with a resolution are used. E-mail header lines, quoted replies and signature blocks
+  are removed; names from greetings, sign-offs and labels ("Agent: ...") are redacted throughout the case,
+  together with everything the PII redactor recognises.
+- **Fails closed:** a verification pass looks for anything identifying that survived (an `@`, a long digit run,
+  a case/order reference, a recognisable identifier). Such a case is quarantined, not indexed.
+- The default is a dry run whose report holds counts per kind per case and the quarantine list, never values.
+  Publishing needs `--reviewed-by`: a person reviews a sample first.
+- Cases are stored as symptom / diagnosis / resolution chunks (`kind = crm_case`), scoped to their product,
+  keyed by an opaque hash, and cited as "Resolved case (product, month)", never by case number.
+- The leak test (`CaseLeakLiveTests`) ingests a synthetic corpus with planted personal data end to end and checks
+  that none of it reaches the store, the logs, the report or retrieval results.
+
 ## Why the AI is advisory
 
 A return touches a customer's money, a company's stock, and a warranty obligation. A model

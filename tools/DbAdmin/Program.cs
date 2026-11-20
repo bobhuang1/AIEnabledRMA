@@ -4,6 +4,7 @@ using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Ai;
 using AIEnabledRma.Rag;
+using AIEnabledRma.Rag.Cases;
 using AIEnabledRma.Rag.Knowledge;
 using AIEnabledRma.Rag.Store;
 using Microsoft.EntityFrameworkCore;
@@ -22,6 +23,8 @@ using Microsoft.Extensions.Options;
 //   DbAdmin stats                row counts per table
 //   DbAdmin kb-ingest [--rebuild] [--path <dir>]
 //                                chunk, embed and publish the knowledge base to the pgvector store
+//   DbAdmin kb-cases --file <cases.json> [--report <path>] [--publish --reviewed-by <name>]
+//                                redact resolved CRM cases; dry run by default (report only)
 
 // The content root defaults to the current working directory, which would make the tool
 // fail with a bare "ConnectionStrings:Rma is not configured" when it is run as
@@ -152,8 +155,60 @@ switch (command)
         return report.Activated ? 0 : 2;
     }
 
+    case "kb-cases":
+    {
+        string? Arg(string name)
+        {
+            var i = Array.FindIndex(args, a => a.Equals(name, StringComparison.OrdinalIgnoreCase));
+            return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+        }
+
+        // Only the file source is wired here. The Dataverse source needs the tenant, app
+        // registration and field list from the owner (plan D1) before it can be configured.
+        var file = Arg("--file");
+        if (file is null)
+        {
+            Console.Error.WriteLine("kb-cases needs --file <cases.json>. The Dataverse source is waiting on decision D1 (plan.md).");
+            return 1;
+        }
+
+        var publish = args.Contains("--publish", StringComparer.OrdinalIgnoreCase);
+        var reviewer = Arg("--reviewed-by") ?? string.Empty;
+        if (publish && string.IsNullOrWhiteSpace(reviewer))
+        {
+            Console.Error.WriteLine("--publish needs --reviewed-by <name>: a person must review the dry-run sample first.");
+            return 1;
+        }
+
+        var store = host.Services.GetRequiredService<PgVectorKnowledgeStore>();
+        await store.EnsureSchemaAsync(rebuild: false, CancellationToken.None);
+        var pipeline = new CaseIngestionPipeline(store, host.Services.GetRequiredService<IOptions<ChunkingOptions>>().Value);
+        var report = await pipeline.RunAsync(
+            new FileCaseSource(file),
+            publish,
+            reviewer,
+            DateOnly.FromDateTime(DateTime.UtcNow),
+            CancellationToken.None);
+
+        // The report holds counts and opaque case keys only, never values.
+        var json = System.Text.Json.JsonSerializer.Serialize(report, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        if (Arg("--report") is { } reportPath)
+        {
+            await File.WriteAllTextAsync(reportPath, json);
+        }
+
+        Console.WriteLine($"Cases: {report.Read} read, {report.Prepared} prepared, {report.NotEligible} not eligible, {report.Quarantined} quarantined.");
+        Console.WriteLine(report.Published is null
+            ? "Dry run: nothing was indexed. Review the report, then re-run with --publish --reviewed-by <name>."
+            : report.Published.Unchanged
+                ? "Published: unchanged."
+                : $"Published generation {report.Published.Generation}: {report.Published.Documents} case(s), "
+                  + (report.Published.Activated ? "activated." : "NOT activated (embedding failures; re-run)."));
+        return report.Published is { Activated: false } ? 2 : 0;
+    }
+
     default:
-        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats|kb-ingest [--rebuild] [--path <dir>]>");
+        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats|kb-ingest [--rebuild] [--path <dir>]|kb-cases --file <json> [--report <path>] [--publish --reviewed-by <name>]>");
         return 1;
 }
 

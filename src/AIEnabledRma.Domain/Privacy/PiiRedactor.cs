@@ -110,7 +110,10 @@ public static partial class PiiRedactor
         }
 
         var probe = new RedactionSession(session.ProtectedValues, session.KnownNames);
-        Redact(PlaceholderRegex().Replace(text, " "), probe);
+        // Each placeholder becomes a neutral symbol, not whitespace: a blank would let a pattern
+        // such as a sign-off ("Thanks, [NAME_1]") bridge into the next line and read its first
+        // word as a name.
+        Redact(PlaceholderRegex().Replace(text, "•"), probe);
         return probe.Counts.Where(c => c.Value > 0).Select(c => c.Key).ToList();
     }
 

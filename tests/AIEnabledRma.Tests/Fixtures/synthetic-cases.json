@@ -1,0 +1,90 @@
+{
+  "description": "Synthetic CRM support cases for the P6 leak test. Every name, address, number and email is invented (555-01xx phones, example.com/example.org mail, published test card numbers). 'planted' lists values that must never appear in the knowledge store, logs, reports or retrieval results.",
+  "planted": [
+    "Dana Whitfield", "Whitfield", "dana.w@example.com", "555-010-3344", "5550103344",
+    "41 Elm Street", "Elm Street", "4111 1111 1111 1111", "CAS-20931", "20931",
+    "Priya Raman", "Raman", "priya.raman@example.org", "+1 (555) 010-7781", "7781",
+    "Marcus Lee", "INV-88123", "88123", "Morgan Ellery", "Ellery", "m.ellery@example.net",
+    "2210 Harrison Street", "Harrison", "ORD-55120", "55120", "Tomas Brandt", "Brandt",
+    "ZX9-4410-7731", "Olivia Chen", "1Z999AA10123456784"
+  ],
+  "cases": [
+    {
+      "sourceRecordId": "8a1f0c2e-0001-4000-8000-000000000001",
+      "title": "Cradle not charging AX-200 handset",
+      "description": "Hi Support,\nMy AX-200 sits in the cradle overnight and the light never turns green. Please call me on 555-010-3344 or mail dana.w@example.com.\nThanks, Dana Whitfield\n--\nDana Whitfield\nWarehouse lead, 41 Elm Street, Springfield\n555-010-3344",
+      "notes": [
+        "Spoke with Dana: cradle LED is solid amber, handset LED off.",
+        "Technician: Marcus Lee checked the cradle contacts, they were dirty. Case CAS-20931 linked."
+      ],
+      "resolution": "Cleaned the cradle charging contacts with isopropyl alcohol and reseated the handset. Charging resumed within ten minutes; the indicator turned green after two hours.",
+      "product": "AX-200",
+      "status": "Resolved",
+      "closedOn": "2026-08-14T10:00:00Z",
+      "modifiedOn": "2026-08-14T10:05:00Z"
+    },
+    {
+      "sourceRecordId": "8a1f0c2e-0002-4000-8000-000000000002",
+      "title": "Scanner trigger does nothing after a drop",
+      "description": "From: Priya Raman <priya.raman@example.org>\nSent: Monday\nSubject: scanner broken\n\nHello, the scan trigger stopped working after the unit fell off a cart. My number is +1 (555) 010-7781.",
+      "notes": [
+        "Called Priya, trigger feels loose. Invoice INV-88123 attached for proof of purchase.",
+        "Asked customer to test the soft-trigger in the settings menu: soft-trigger works, so the imager is fine."
+      ],
+      "resolution": "Hardware trigger switch was dislodged by the impact. Advised a paid repair under the impact-damage exclusion; the soft-trigger is a workaround until then.",
+      "product": "BX-100",
+      "status": "Resolved",
+      "closedOn": "2026-07-02T09:00:00Z",
+      "modifiedOn": "2026-07-02T09:30:00Z"
+    },
+    {
+      "sourceRecordId": "8a1f0c2e-0003-4000-8000-000000000003",
+      "title": "Unit reboots in a loop after firmware update",
+      "description": "Dear team, since last night's update the unit restarts every two minutes. I paid for priority service with card 4111 1111 1111 1111.\nRegards, Morgan Ellery (m.ellery@example.net)",
+      "notes": [
+        "Agent: Olivia Chen walked the customer through a recovery boot (hold power + scan for 15 s).",
+        "Firmware reflashed to the previous release from recovery mode."
+      ],
+      "resolution": "Rolled back to the previous firmware via recovery boot, then applied the corrected update. No reboots in a 24 hour soak.",
+      "product": "AX-400",
+      "status": "Resolved",
+      "closedOn": "2026-09-10T16:00:00Z",
+      "modifiedOn": "2026-09-10T16:10:00Z"
+    },
+    {
+      "sourceRecordId": "8a1f0c2e-0004-4000-8000-000000000004",
+      "title": "Bluetooth drops when walking away from host",
+      "description": "Hi, shipping address for any swap is 2210 Harrison Street, Oakland. Order ORD-55120. The handset loses its Bluetooth link at about 8 metres.",
+      "notes": [
+        "Customer Tomas Brandt also has a spare unit ZX9-4410-7731 that behaves the same.",
+        "Found a metal shelving rack between host and handset; moving the host improved range."
+      ],
+      "resolution": "Relocated the Bluetooth host above the shelving and re-paired. Link now holds to 25 metres.",
+      "product": "AX-200",
+      "status": "Resolved",
+      "closedOn": "2026-06-21T12:00:00Z",
+      "modifiedOn": "2026-06-21T12:30:00Z"
+    },
+    {
+      "sourceRecordId": "8a1f0c2e-0005-4000-8000-000000000005",
+      "title": "Screen flicker, still investigating",
+      "description": "Screen flickers when the backlight is at full brightness.",
+      "notes": ["Waiting for a replacement display assembly."],
+      "resolution": null,
+      "product": "AX-200",
+      "status": "Active",
+      "modifiedOn": "2026-09-20T08:00:00Z"
+    },
+    {
+      "sourceRecordId": "8a1f0c2e-0006-4000-8000-000000000006",
+      "title": "Display dim after drop",
+      "description": "Backlight very dim. Courier tracking 1Z999AA10123456784 on the box.",
+      "notes": ["Backlight connector reseated."],
+      "resolution": "Reseated the backlight connector; brightness back to normal.",
+      "product": "AX-400",
+      "status": "Resolved",
+      "closedOn": "2026-09-01T08:00:00Z",
+      "modifiedOn": "2026-09-01T08:30:00Z"
+    }
+  ]
+}

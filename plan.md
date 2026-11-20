@@ -200,6 +200,12 @@ about a week.
 
 ### P6. CRM support-case ingestion with PII removed (L) — D1, after P3 and P5
 
+> Status 2026-11-20: pipeline, file source, Dataverse source (tested against a fake Web API) and the leak
+> gate are done. **Blocked on D1** for a real import: tenant URL, app registration (client credentials) and
+> the agreed field list. The case summary uses the redacted fields as written; a local-model summary waits
+> on D4. Deviation from the text below: the pipeline reads no name fields at all, so names in free text are
+> caught by patterns (greetings, sign-offs, "Agent:" labels) and the fail-closed verification pass.
+
 - A `ICaseSource` interface with a `DataverseCaseSource` (Dynamics 365 incidents: title, description, notes,
   resolution, product, status, closed date) and a `FakeCaseSource` for CI.
   - Credentials come from configuration or secret storage only.
