@@ -5,6 +5,9 @@ category: merchandise
 product_scope: ["*"]
 keywords: [cable, adapter, cradle, mount, holster, accessory, merchandise, strap, charger]
 related: []
+reviewed_by: kb-maintainers
+reviewed_at: 2026-11-20
+content_hash: 6f222080ac7331e189110d788dfdabc10587165fa6784c89c96d3ce673fbf582
 ---
 
 # Cables, adapters, and other non-electronic merchandise

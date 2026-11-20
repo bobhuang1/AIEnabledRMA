@@ -5,6 +5,9 @@ category: scanning
 product_scope: ["*"]
 keywords: [barcode, decode, scan, read, laser, symbology, blurry, damaged label, not reading]
 related: [kb-0008, kb-0010]
+reviewed_by: kb-maintainers
+reviewed_at: 2026-11-20
+content_hash: 1595311fe263431d76b818e88a9054e03596c9522d87be3ea751908613914bb4
 ---
 
 # Barcode will not decode

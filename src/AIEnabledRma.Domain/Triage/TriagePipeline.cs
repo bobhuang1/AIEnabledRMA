@@ -249,9 +249,9 @@ public sealed partial class TriagePipeline(
         var context = string.Join(
             "\n\n",
             retrieval.Articles.Select(a =>
-                $"<article id=\"{a.Id}\" category=\"{a.Category}\" score=\"{a.Score:0.000}\">\n"
-                + $"TITLE: {a.Title}\n"
-                + $"{(a.Snippet ?? string.Empty)}\n"
+                $"<article id=\"{AsData(a.Id)}\" category=\"{AsData(a.Category)}\" score=\"{a.Score:0.000}\">\n"
+                + $"TITLE: {AsData(a.Title)}\n"
+                + $"{AsData(a.Snippet ?? string.Empty)}\n"
                 + "</article>"));
 
         messages.Add(new ChatMessage
@@ -448,6 +448,15 @@ public sealed partial class TriagePipeline(
         UsedFallback = true,
         FailureReason = reason,
     };
+
+    /// <summary>
+    /// Retrieved text goes inside the &lt;article&gt; and &lt;knowledge&gt; delimiters that the
+    /// system prompt declares as data. Angle brackets and quotes are swapped for look-alikes so
+    /// no article (or a CRM case, or a remote retriever's output) can close those delimiters
+    /// and continue as if it were the system speaking.
+    /// </summary>
+    internal static string AsData(string value) =>
+        value.Replace('<', '‹').Replace('>', '›').Replace('"', '”');
 
     private static string StripControlCharacters(string value) =>
         new string(value.Where(c => !char.IsControl(c) || c == '\n' || c == '\t').ToArray())

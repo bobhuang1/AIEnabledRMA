@@ -34,6 +34,12 @@ public static class RagServiceCollectionExtensions
             .Validate(o => o.MaxRelatedExpansions >= 0, "MaxRelatedExpansions cannot be negative.")
             .ValidateOnStart();
 
+        services.AddOptions<KnowledgeIngestionOptions>()
+            .Bind(configuration.GetSection(KnowledgeIngestionOptions.SectionName))
+            .Validate(o => o.MaxFileBytes > 0 && o.MaxArticles > 0 && o.MaxFrontMatterBytes > 0,
+                "Rag:Ingestion limits must be positive.")
+            .ValidateOnStart();
+
         services.AddSingleton<KnowledgeBaseLoader>();
 
         // Resolved once per process. A reload is a deliberate operation (see ReloadAsync), not
@@ -44,7 +50,7 @@ public static class RagServiceCollectionExtensions
             var loader = sp.GetRequiredService<KnowledgeBaseLoader>();
             var root = ResolveKnowledgeBaseRoot(options.KnowledgeBasePath);
 
-            return loader.Load(root);
+            return loader.Load(root, EffectiveIngestion(sp));
         });
 
         // The holder owns the mutable reference. KnowledgeIndex is registered as a factory
@@ -89,7 +95,7 @@ public static class RagServiceCollectionExtensions
             .Value;
 
         var result = await Task.Run(
-            () => loader.Load(ResolveKnowledgeBaseRoot(options.KnowledgeBasePath)),
+            () => loader.Load(ResolveKnowledgeBaseRoot(options.KnowledgeBasePath), EffectiveIngestion(services)),
             cancellationToken);
 
         if (result.Errors.Count > 0)
@@ -109,10 +115,31 @@ public static class RagServiceCollectionExtensions
     }
 
     /// <summary>
+    /// The configured ingestion rules, with review required everywhere except Development: only
+    /// reviewed articles may reach a real customer, whatever the configuration says.
+    /// </summary>
+    internal static KnowledgeIngestionOptions EffectiveIngestion(IServiceProvider services)
+    {
+        var configured = services
+            .GetRequiredService<Microsoft.Extensions.Options.IOptions<KnowledgeIngestionOptions>>()
+            .Value;
+        var environment = services.GetService<IHostEnvironment>();
+
+        return new KnowledgeIngestionOptions
+        {
+            MaxFileBytes = configured.MaxFileBytes,
+            MaxArticles = configured.MaxArticles,
+            MaxFrontMatterBytes = configured.MaxFrontMatterBytes,
+            RequireReviewed = configured.RequireReviewed
+                || (environment is not null && !environment.IsDevelopment()),
+        };
+    }
+
+    /// <summary>
     /// Resolves the knowledge-base root. Falls back to the content root so a project run
     /// under `dotnet run` and a published deployment both find the corpus.
     /// </summary>
-    internal static string ResolveKnowledgeBaseRoot(string configuredPath)
+    public static string ResolveKnowledgeBaseRoot(string configuredPath)
     {
         if (Path.IsPathRooted(configuredPath))
         {

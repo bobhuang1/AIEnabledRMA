@@ -5,6 +5,9 @@ category: power
 product_scope: ["Nimbus Beacon"]
 keywords: ["dock", "charging", "stalled", "beacon", "queue", "contacts", "clean"]
 related: ["kb-0002", "kb-0018"]
+reviewed_by: kb-maintainers
+reviewed_at: 2026-11-20
+content_hash: 14441fc819eb4f4155d1906069723a94bb05b857d51fad40eb3381b044913c72
 ---
 
 # Nimbus Beacon dock reports a stalled charge

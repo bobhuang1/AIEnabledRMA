@@ -5,6 +5,9 @@ category: software
 product_scope: ["*"]
 keywords: [firmware, update, upgrade, failed update, bricked, will not boot, software, version]
 related: [kb-0003, kb-0014]
+reviewed_by: kb-maintainers
+reviewed_at: 2026-11-20
+content_hash: 048604f4b6288f7e3698b161c88e09ad0fa08d33332a9384418db5f8a18eb9b3
 ---
 
 # Firmware update failed or unit will not boot after update

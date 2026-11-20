@@ -5,6 +5,9 @@ category: power
 product_scope: ["*"]
 keywords: [cradle, charge, charging, dock, cradle, power supply, adapter, not charging]
 related: [kb-0001]
+reviewed_by: kb-maintainers
+reviewed_at: 2026-11-20
+content_hash: 4edac125012ec2baa34d58ea27ea43aa27a8d457a79ffc9ad8a53624244c0407
 ---
 
 # Charging cradle will not charge the unit

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace AIEnabledRma.Rag.Knowledge;
@@ -25,6 +26,17 @@ public sealed record KnowledgeArticle
     public required IReadOnlyList<string> Keywords { get; init; }
 
     public required IReadOnlyList<string> Related { get; init; }
+
+    /// <summary>Who reviewed this article (front matter <c>reviewed_by</c>), if anyone.</summary>
+    public string? ReviewedBy { get; init; }
+
+    /// <summary>When it was reviewed (front matter <c>reviewed_at</c>).</summary>
+    public DateOnly? ReviewedAt { get; init; }
+
+    /// <summary>SHA-256 of the body as written, line endings normalised.</summary>
+    public string ContentHash { get; init; } = string.Empty;
+
+    public bool IsReviewed => !string.IsNullOrWhiteSpace(ReviewedBy) && ReviewedAt is not null;
 
     public bool IsUniversal => ProductScope.Contains("*", StringComparer.Ordinal);
 
@@ -66,9 +78,10 @@ public sealed partial class KnowledgeBaseLoader
     /// in-memory index is swapped atomically, so a reload never leaves retrieval serving a
     /// half-updated corpus.
     /// </summary>
-    public KnowledgeBaseLoadResult Load(string rootPath)
+    public KnowledgeBaseLoadResult Load(string rootPath, KnowledgeIngestionOptions? options = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        options ??= new KnowledgeIngestionOptions();
 
         var errors = new List<string>();
         var articles = new List<KnowledgeArticle>();
@@ -82,22 +95,40 @@ public sealed partial class KnowledgeBaseLoader
             return new KnowledgeBaseLoadResult { Errors = errors, RootPath = rootPath };
         }
 
+        var fullRoot = Path.GetFullPath(rootPath);
+
+        // Links are not followed: a symlinked directory or file could pull in text from anywhere
+        // on the machine, outside the reviewed tree.
         var files = Directory
-            .EnumerateFiles(rootPath, "*.md", SearchOption.AllDirectories)
+            .EnumerateFiles(rootPath, "*.md", new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                AttributesToSkip = 0,
+                IgnoreInaccessible = false,
+            })
+            .Where(f => !string.Equals(Path.GetFileName(f), "README.md", StringComparison.OrdinalIgnoreCase))
             .OrderBy(f => f, StringComparer.Ordinal)
             .ToList();
 
+        if (files.Count > options.MaxArticles)
+        {
+            errors.Add(
+                $"The knowledge base has {files.Count} article files, more than the limit of "
+                + $"{options.MaxArticles}. Nothing beyond the limit is read.");
+            files = files.Take(options.MaxArticles).ToList();
+        }
+
         foreach (var file in files)
         {
-            // The directory's own README documents the format; it is not an article.
-            if (string.Equals(Path.GetFileName(file), "README.md", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
             try
             {
-                if (!TryParseFile(file, out var article, out var error))
+                if (LinkProblem(file, fullRoot) is { } linkError)
+                {
+                    errors.Add(linkError);
+                    continue;
+                }
+
+                if (!TryParseFile(file, options, out var article, out var error))
                 {
                     // The failure reason is recorded, not just logged. A corpus that silently
                     // drops an article is the dangerous case: retrieval keeps working, so
@@ -148,11 +179,35 @@ public sealed partial class KnowledgeBaseLoader
     /// logging and returning null, so the caller can surface the problem in the load result
     /// and the reload endpoint can refuse to publish a degraded corpus.
     /// </summary>
-    private bool TryParseFile(string file, out KnowledgeArticle? article, out string error)
+    private bool TryParseFile(
+        string file,
+        KnowledgeIngestionOptions options,
+        out KnowledgeArticle? article,
+        out string error)
     {
         article = null;
 
-        var raw = File.ReadAllText(file);
+        var length = new FileInfo(file).Length;
+        if (length > options.MaxFileBytes)
+        {
+            error = $"Article {file} is {length} bytes, over the {options.MaxFileBytes}-byte limit.";
+            _logger.LogError("{Error}", error);
+            return false;
+        }
+
+        string raw;
+        try
+        {
+            raw = StrictUtf8.GetString(File.ReadAllBytes(file)).TrimStart('\uFEFF');
+        }
+        catch (DecoderFallbackException)
+        {
+            error = $"Article {file} is not valid UTF-8.";
+            _logger.LogError("{Error}", error);
+            return false;
+        }
+
+        raw = raw.Replace("\r\n", "\n", StringComparison.Ordinal);
         var match = ArticleRegex().Match(raw);
 
         if (!match.Success)
@@ -162,8 +217,16 @@ public sealed partial class KnowledgeBaseLoader
             return false;
         }
 
-        var frontMatter = ParseFrontMatter(match.Groups["frontMatter"].Value);
-        var body = match.Groups["body"].Value.Trim();
+        var frontMatterText = match.Groups["frontMatter"].Value;
+        if (Encoding.UTF8.GetByteCount(frontMatterText) > options.MaxFrontMatterBytes)
+        {
+            error = $"Article {file} has front matter over the {options.MaxFrontMatterBytes}-byte limit.";
+            _logger.LogError("{Error}", error);
+            return false;
+        }
+
+        var frontMatter = ParseFrontMatter(frontMatterText);
+        var rawBody = match.Groups["body"].Value.Trim();
 
         var id = frontMatter.GetValueOrDefault("id")?.Trim();
         var title = frontMatter.GetValueOrDefault("title")?.Trim();
@@ -180,6 +243,45 @@ public sealed partial class KnowledgeBaseLoader
             _logger.LogError("{Error}", error);
             return false;
         }
+
+        // Provenance. The hash covers the body as written; when the front matter records one,
+        // an edit made after review no longer matches and the article is refused.
+        var contentHash = KnowledgeSanitizer.ContentHash(rawBody);
+        var recordedHash = frontMatter.GetValueOrDefault("content_hash")?.Trim();
+        if (!string.IsNullOrEmpty(recordedHash)
+            && !string.Equals(recordedHash, contentHash, StringComparison.OrdinalIgnoreCase))
+        {
+            error = $"Article {file} ({id}) was changed after review: its content_hash does not match the body.";
+            _logger.LogError("{Error}", error);
+            return false;
+        }
+
+        var reviewedBy = frontMatter.GetValueOrDefault("reviewed_by")?.Trim();
+        DateOnly? reviewedAt = DateOnly.TryParseExact(
+            frontMatter.GetValueOrDefault("reviewed_at")?.Trim(),
+            "yyyy-MM-dd",
+            out var parsedReviewedAt)
+            ? parsedReviewedAt
+            : null;
+
+        if (options.RequireReviewed && (string.IsNullOrWhiteSpace(reviewedBy) || reviewedAt is null))
+        {
+            error = $"Article {file} ({id}) has not been reviewed (reviewed_by and reviewed_at are required).";
+            _logger.LogError("{Error}", error);
+            return false;
+        }
+
+        // An article that talks to the model is refused outright. It is reference data; a
+        // reviewed article has no reason to contain instructions.
+        if (KnowledgeSanitizer.FindInstructionLikeText(title + "\n" + rawBody) is { } injected)
+        {
+            error = $"Article {file} ({id}) contains instruction-like text and was refused: \"{Truncate(injected, 80)}\".";
+            _logger.LogError("{Error}", error);
+            return false;
+        }
+
+        var body = KnowledgeSanitizer.Sanitize(rawBody).Trim();
+        title = KnowledgeSanitizer.NeutraliseDelimiters(title);
 
         if (string.IsNullOrWhiteSpace(body))
         {
@@ -231,6 +333,9 @@ public sealed partial class KnowledgeBaseLoader
             Keywords = keywords,
             Related = related,
             Tokens = tokens,
+            ReviewedBy = string.IsNullOrWhiteSpace(reviewedBy) ? null : reviewedBy,
+            ReviewedAt = reviewedAt,
+            ContentHash = contentHash,
         };
 
         error = string.Empty;
@@ -309,6 +414,40 @@ public sealed partial class KnowledgeBaseLoader
             .Where(t => t.Length > 0)
             .ToList();
     }
+
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
+    /// <summary>
+    /// Refuses a file that is a link, or that sits under a linked directory, or that resolves
+    /// outside the root.
+    /// </summary>
+    private static string? LinkProblem(string file, string fullRoot)
+    {
+        var info = new FileInfo(file);
+        if (info.LinkTarget is not null || info.Attributes.HasFlag(FileAttributes.ReparsePoint))
+        {
+            return $"Article {file} is a symbolic link and was not read.";
+        }
+
+        var fullPath = Path.GetFullPath(file);
+        var rootWithSeparator = fullRoot.EndsWith(Path.DirectorySeparatorChar) ? fullRoot : fullRoot + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
+        {
+            return $"Article {file} resolves outside the knowledge-base root and was not read.";
+        }
+
+        for (var dir = info.Directory; dir is not null && dir.FullName.Length > fullRoot.TrimEnd(Path.DirectorySeparatorChar).Length; dir = dir.Parent)
+        {
+            if (dir.LinkTarget is not null || dir.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                return $"Article {file} is under a linked directory ({dir.FullName}) and was not read.";
+            }
+        }
+
+        return null;
+    }
+
+    private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max] + "...";
 
     private static IEnumerable<string> Tokenize(string value) =>
         Regex.Matches(value.ToLowerInvariant(), "[a-z0-9]+")

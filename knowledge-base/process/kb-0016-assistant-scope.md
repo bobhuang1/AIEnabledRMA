@@ -5,6 +5,9 @@ category: process
 product_scope: ["*"]
 keywords: [process, return, rma, policy, what can you do, help, assistant, scope, warranty]
 related: [kb-0017]
+reviewed_by: kb-maintainers
+reviewed_at: 2026-11-20
+content_hash: 9f0d2cd4ff0191b077d3656032ea339145c241cb274e21ba77caffd68de15891
 ---
 
 # What the troubleshooting assistant can and cannot do

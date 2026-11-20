@@ -5,6 +5,9 @@ category: connectivity
 product_scope: ["*"]
 keywords: [range, distance, drops, intermittent, radio, wifi, interference, far away]
 related: [kb-0005]
+reviewed_by: kb-maintainers
+reviewed_at: 2026-11-20
+content_hash: 4151f4bff5a42b1a652a696be1e7fcbace3772490be32009b6fabb6f888f600a
 ---
 
 # Wireless link drops at range

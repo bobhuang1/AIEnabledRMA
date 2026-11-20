@@ -5,6 +5,9 @@ category: scanning
 product_scope: ["*"]
 keywords: [trigger, scan, scan button, wont scan, laser, imager, read, barcode, dead trigger]
 related: [kb-0009, kb-0010]
+reviewed_by: kb-maintainers
+reviewed_at: 2026-11-20
+content_hash: 5230644a17faacb2a32cd81036c68316d495793268d07ea2085e0d34be1fd410
 ---
 
 # Scan trigger does not fire

@@ -5,6 +5,9 @@ category: power
 product_scope: ["*"]
 keywords: [power, charge, indicator, light, led, battery, blinking]
 related: [kb-0002, kb-0003]
+reviewed_by: kb-maintainers
+reviewed_at: 2026-11-20
+content_hash: ad297d9cd839d35a38ca7597ac4ac2df2e1cc1b7eae57f33e1e12c69a67efb13
 ---
 
 # Reading the charge indicator light

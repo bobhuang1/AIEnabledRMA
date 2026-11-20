@@ -5,6 +5,9 @@ category: scanning
 product_scope: ["*"]
 keywords: [cracked, damaged, scratched, window, lens, laser, imager, physical damage, broken]
 related: [kb-0009]
+reviewed_by: kb-maintainers
+reviewed_at: 2026-11-20
+content_hash: 18bd088aba6aaca669438b1e86ca949bd9d51666e681e63eca0f29439be6bcbc
 ---
 
 # Laser or imager window damaged

@@ -22,7 +22,7 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 | 2 | P1 MCP data surface | Done | Masked projection, exact-only contact search, `ToolCallGuard` (permission, budgets, audit), `reveal_customer_contact` (support role only). Budgets are in-process memory. |
 | 2 | P3 Redact before model calls | Done (pattern recognisers) | `PiiRedactor` in `Domain/Privacy` (not a separate project). The optional local-model NER pass is not built: it needs a local model choice (D4). |
 | 2 | P8 Wizard hardening | Done | Rate limits, link expiry, no contact-detail probing, security headers, fake gateway refused outside Development/Testing, split health endpoints. `/health/details` uses a shared operator key until P10 brings sign-in. |
-| 3 | P4 Secure KB ingestion | Not started | |
+| 3 | P4 Secure KB ingestion | Done | API keys (not JWT) on the RAG host; JWT comes with P2's identity provider. Symlink test skips on Windows without Developer Mode, runs in Linux CI. |
 | 3 | P2 Remote MCP + OAuth | Not started | |
 | 4 | P5 Vector store + chunking | Not started | |
 | 5 | P6 CRM case ingestion | Not started | |
@@ -72,3 +72,13 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
   the workflow's load (now `AsNoTracking`). Evidence: new tests in `WebWizardTests` (health split, headers,
   partial-email probe, rate limit 429, expiry 410) and `WebStartupTests` (Production refuses to start, expiry
   rule); full suite 258 passed, 0 skipped.
+- **P4 landed.** RAG host: `X-Api-Key` admin/reader keys (`Rag:Security`); anonymous `/diagnostics` shows
+  counts only; `/retrieve` needs a key outside Development; `/rag/reload` admin only with an `AUDIT` log line
+  per attempt; no keys configured outside Development grants nothing. Loader: size/count/front-matter limits,
+  strict UTF-8, no symlinked files or directories, provenance (`reviewed_by`, `reviewed_at`, `content_hash`
+  checked against the body), review required outside Development, instruction-like text refused, HTML/link
+  targets/URLs stripped and angle brackets neutralised. `TriagePipeline` also neutralises delimiters in
+  retrieved text. All 19 shipped articles stamped (`kb-maintainers`, 2026-11-20, hash). Evidence:
+  `KnowledgeIngestionSecurityTests` + `RagHostSecurityTests` (20 tests, including the shipped corpus loading
+  with review required and a Production RAG host); full suite 278 passed, 1 skipped (the symlink test: this
+  Windows machine cannot create symlinks without Developer Mode; it runs on Linux CI).

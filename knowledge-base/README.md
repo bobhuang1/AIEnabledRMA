@@ -74,3 +74,24 @@ Every article here is fictional. The products, models, part references, and symp
 describe generic hardware and generic faults, and no article refers to a real vendor,
 a real product line, or a real support policy. Replace this directory with your own content
 before using the system for a real returns process.
+
+## Review and provenance
+
+Every article carries three provenance fields in its front matter:
+
+| Field | Purpose |
+| --- | --- |
+| `reviewed_by` | Who reviewed the article (a person or a team alias). |
+| `reviewed_at` | Review date, `yyyy-MM-dd`. |
+| `content_hash` | SHA-256 of the body (everything after the closing `---`, trimmed, line endings as `\n`). An edit made after review no longer matches and the article is refused. |
+
+Outside Development the loader refuses any article without `reviewed_by` and `reviewed_at`, and a reload
+that hits a refused article is not published. To get the hash for a reviewed article, run the loader in
+Development and read `contentHash` from `GET /diagnostics` with the admin key, or compute it with any
+SHA-256 tool over the normalised body.
+
+The loader also refuses: files over 64 KB, front matter over 4 KB, more than 500 articles, invalid UTF-8,
+symbolic links (files or directories), and any article containing instruction-like text (for example "ignore
+previous instructions", "you are now", role markers such as `system:`). HTML, comments, link targets and bare
+URLs are stripped from the body before it is indexed, and angle brackets are replaced so an article can never
+close the delimiters it is wrapped in inside the prompt.
