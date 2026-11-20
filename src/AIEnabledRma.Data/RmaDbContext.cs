@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AIEnabledRma.Domain.Audit;
 using AIEnabledRma.Domain.Catalog;
 using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Rma;
@@ -26,6 +27,8 @@ public sealed class RmaDbContext(DbContextOptions<RmaDbContext> options) : DbCon
     public DbSet<RmaLine> RmaLines => Set<RmaLine>();
 
     public DbSet<RmaExclusion> RmaExclusions => Set<RmaExclusion>();
+
+    public DbSet<McpToolCall> McpToolCalls => Set<McpToolCall>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -253,5 +256,20 @@ public sealed class RmaExclusionConfiguration : IEntityTypeConfiguration<RmaExcl
             .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasIndex(e => e.RmaRequestId).HasDatabaseName("ix_rma_exclusions_request");
+    }
+}
+
+public sealed class McpToolCallConfiguration : IEntityTypeConfiguration<McpToolCall>
+{
+    public void Configure(EntityTypeBuilder<McpToolCall> builder)
+    {
+        builder.ToTable("mcp_tool_calls");
+        builder.HasKey(c => c.Id);
+        builder.Property(c => c.Tool).HasMaxLength(64).IsRequired();
+        builder.Property(c => c.Caller).HasMaxLength(256).IsRequired();
+        builder.Property(c => c.SessionId).HasMaxLength(128);
+        builder.Property(c => c.ArgumentHashes).HasColumnType("jsonb").IsRequired();
+        builder.Property(c => c.Outcome).HasMaxLength(32).IsRequired();
+        builder.HasIndex(c => new { c.Caller, c.AtUtc }).HasDatabaseName("ix_mcp_tool_calls_caller_at");
     }
 }

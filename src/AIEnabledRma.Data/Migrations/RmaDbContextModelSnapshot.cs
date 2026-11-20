@@ -22,6 +22,62 @@ namespace AIEnabledRma.Data.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("AIEnabledRma.Domain.Audit.McpToolCall", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ArgumentHashes")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("argument_hashes");
+
+                    b.Property<DateTimeOffset>("AtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("at_utc");
+
+                    b.Property<string>("Caller")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("caller");
+
+                    b.Property<int>("LatencyMs")
+                        .HasColumnType("integer")
+                        .HasColumnName("latency_ms");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("outcome");
+
+                    b.Property<int?>("ResultCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("result_count");
+
+                    b.Property<string>("SessionId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("session_id");
+
+                    b.Property<string>("Tool")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("tool");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mcp_tool_calls");
+
+                    b.HasIndex("Caller", "AtUtc")
+                        .HasDatabaseName("ix_mcp_tool_calls_caller_at");
+
+                    b.ToTable("mcp_tool_calls", (string)null);
+                });
+
             modelBuilder.Entity("AIEnabledRma.Domain.Catalog.Device", b =>
                 {
                     b.Property<Guid>("Id")

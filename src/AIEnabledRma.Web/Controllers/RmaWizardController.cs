@@ -540,54 +540,14 @@ public sealed class RmaWizardController(
 
     public sealed record MaskedAddressView(Guid Id, string? Label, string Masked, bool IsDefault);
 
-    public static bool IsExactContactMatch(string? typed, Customer c)
-    {
-        if (string.IsNullOrWhiteSpace(typed))
-        {
-            return false;
-        }
+    public static bool IsExactContactMatch(string? typed, Customer c) =>
+        CustomerMasking.IsExactContactMatch(typed, c);
 
-        var value = typed.Trim();
-        if (!string.IsNullOrEmpty(c.Email) && string.Equals(value, c.Email.Trim(), StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
+    public static string MaskName(string? first, string? last) => CustomerMasking.MaskName(first, last);
 
-        var typedDigits = new string(value.Where(char.IsAsciiDigit).ToArray());
-        var phoneDigits = new string((c.PhoneNumber ?? string.Empty).Where(char.IsAsciiDigit).ToArray());
-        return typedDigits.Length >= 7 && typedDigits == phoneDigits;
-    }
+    public static string? MaskEmail(string? email) => CustomerMasking.MaskEmail(email);
 
-    public static string MaskName(string? first, string? last)
-    {
-        var f = string.IsNullOrWhiteSpace(first) ? "?" : first.Trim();
-        var l = string.IsNullOrWhiteSpace(last) ? string.Empty : $" {last.Trim()[0]}.";
-        return f + l;
-    }
+    public static string? MaskPhone(string? phone) => CustomerMasking.MaskPhone(phone);
 
-    public static string? MaskEmail(string? email)
-    {
-        if (string.IsNullOrWhiteSpace(email) || email.IndexOf('@') is var at && at <= 0)
-        {
-            return null;
-        }
-
-        var domain = email[(at + 1)..];
-        var dot = domain.LastIndexOf('.');
-        var maskedDomain = dot > 0 ? $"{domain[0]}•••{domain[dot..]}" : "•••";
-        return $"{email[0]}•••@{maskedDomain}";
-    }
-
-    public static string? MaskPhone(string? phone)
-    {
-        var digits = new string((phone ?? string.Empty).Where(char.IsAsciiDigit).ToArray());
-        return digits.Length < 4 ? null : $"••• {digits[^2..]}";
-    }
-
-    public static string MaskAddress(Address a)
-    {
-        var postal = string.IsNullOrWhiteSpace(a.PostalCode) ? string.Empty : a.PostalCode.Trim();
-        var postalMasked = postal.Length <= 2 ? "•••" : postal[..2] + new string('•', postal.Length - 2);
-        return $"•••, {postalMasked} {a.CountryCode}".Trim();
-    }
+    public static string MaskAddress(Address a) => CustomerMasking.MaskAddress(a);
 }

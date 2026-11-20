@@ -152,3 +152,9 @@ public interface IEligibilityService
 {
     RmaEligibilityDecision Evaluate(RmaPolicyRequest request);
 }
+
+/// <summary>Writes the MCP tool-call audit trail. Must never throw into the tool call it records.</summary>
+public interface IToolAuditSink
+{
+    Task RecordAsync(AIEnabledRma.Domain.Audit.McpToolCall call, CancellationToken cancellationToken);
+}

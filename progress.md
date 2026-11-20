@@ -19,7 +19,7 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 | Step | Workstream | Status | Notes |
 |---|---|---|---|
 | 1 | P0 Baseline and CI | Done (local) | CI workflow written; it has not run on GitHub yet because nothing is pushed. |
-| 2 | P1 MCP data surface | Not started | |
+| 2 | P1 MCP data surface | In progress | Shared `CustomerMasking`, `McpToolCall` entity, `mcp_tool_calls` migration and `EfToolAuditSink` landed. Left: masked MCP projection, exact-only contact search, call-tool filter (caller, budgets, audit), `reveal_customer_contact`, tests. |
 | 2 | P3 Redact before model calls | Not started | |
 | 2 | P8 Wizard hardening | Not started | |
 | 3 | P4 Secure KB ingestion | Not started | |
@@ -45,3 +45,6 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
   `contents: read`); compose PostgreSQL bound to 127.0.0.1 (F8); README no longer claims a payments
   diagnostics endpoint (F7, part). Evidence: `dotnet test` 199 passed, 0 skipped, 0 failed with
   `RMA_REQUIRE_LIVE_DB=1`; `dotnet list package --vulnerable --include-transitive` clean for all projects.
+- **P1 part 1 landed.** `CustomerMasking` in Domain (the wizard now delegates to it), `McpToolCall` audit
+  entity, `AddMcpToolCalls` migration, `EfToolAuditSink` (not yet registered in the MCP host). Evidence:
+  solution builds with 0 errors. Work stopped here because the session's usage limit was reached.
