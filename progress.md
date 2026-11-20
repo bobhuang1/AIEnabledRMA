@@ -20,7 +20,7 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 |---|---|---|---|
 | 1 | P0 Baseline and CI | Done (local) | CI workflow written; it has not run on GitHub yet because nothing is pushed. |
 | 2 | P1 MCP data surface | Done | Masked projection, exact-only contact search, `ToolCallGuard` (permission, budgets, audit), `reveal_customer_contact` (support role only). Budgets are in-process memory. |
-| 2 | P3 Redact before model calls | Not started | |
+| 2 | P3 Redact before model calls | Done (pattern recognisers) | `PiiRedactor` in `Domain/Privacy` (not a separate project). The optional local-model NER pass is not built: it needs a local model choice (D4). |
 | 2 | P8 Wizard hardening | Not started | |
 | 3 | P4 Secure KB ingestion | Not started | |
 | 3 | P2 Remote MCP + OAuth | Not started | |
@@ -56,3 +56,10 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
   `McpSecurityTests` (projection, enumeration, audit, budgets, caller); full suite 219 passed, 0 skipped;
   stdio smoke against a throwaway database wrote two audit rows (`find_customer` Ok,
   `reveal_customer_contact` RefusedPermission) with hashes, not values.
+- **P3 landed.** `PiiRedactor`/`RedactionSession` (email, Luhn card, phone, street address, order/ticket
+  numbers, serial-like ids, self-introduced and signed-off names, known customer names; device serial/SKU/
+  model protected; stable `[EMAIL_1]` placeholders). `TriagePipeline` redacts the statement and every turn
+  before retrieval and the model call, logs counts only, and discards a reply containing a raw identifier
+  (`pii-in-model-output`, human review). The wizard passes the matched customer's names. Evidence:
+  `PiiRedactionTests` (31 cases incl. a 7-statement planted corpus: zero planted values in model requests
+  or retrieval queries; serial still present).

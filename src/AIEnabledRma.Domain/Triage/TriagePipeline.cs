@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Privacy;
 using AIEnabledRma.Domain.Rules;
 using AIEnabledRma.Domain.Triage;
 using Microsoft.Extensions.Logging;
@@ -23,6 +24,9 @@ namespace AIEnabledRma.Domain.Triage;
 ///      it can never make an ineligible request eligible. Only
 ///      <see cref="IRmaPolicy"/> grants eligibility.
 ///   6. Any error, timeout, or parse failure resolves to the configured fail-closed fallback.
+///   7. Personal data never reaches the model: the customer's text is redacted
+///      (<see cref="PiiRedactor"/>) before retrieval and before the model call, and a reply
+///      that contains a raw identifier is discarded in favour of human review.
 /// </summary>
 public sealed partial class TriagePipeline(
     IChatModel chatModel,
@@ -53,6 +57,25 @@ public sealed partial class TriagePipeline(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        // 0. Redact. Everything below sees the redacted request only. The device serial, SKU,
+        //    model and product name are protected because the policy and the knowledge base
+        //    need them; they identify a unit, not a person.
+        var redaction = new RedactionSession(
+            request.Devices.SelectMany(d => new[] { d.SerialNumber, d.Sku, d.Model, d.ProductName })
+                .Where(v => v is not null)
+                .Select(v => v!),
+            request.KnownPersonalNames);
+        request = Redact(request, redaction);
+
+        if (redaction.Total > 0)
+        {
+            // Counts only, never values.
+            logger.LogInformation(
+                "Redacted personal data before triage: {Counts} (correlation {CorrelationId})",
+                string.Join(", ", redaction.Counts.Where(c => c.Value > 0).Select(c => $"{c.Key}={c.Value}")),
+                request.CorrelationId);
+        }
 
         // 1. Retrieve, scoped to the devices in this session.
         var retrieval = await RetrieveAsync(request, cancellationToken);
@@ -113,12 +136,37 @@ public sealed partial class TriagePipeline(
         var allowedIds = retrieval.Articles.Select(a => a.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var verified = VerifyAndClamp(verdict, allowedIds, request.CorrelationId);
 
+        // 6. The reply is shown to the customer and stored. One that carries a raw identifier
+        //    (the model invented or reconstructed one) is not shown at all.
+        var leaked = PiiRedactor.Detect(
+            string.Join('\n', verified.Verdict.Steps.Select(s => s.Instruction).Prepend(verified.Verdict.Summary)),
+            redaction);
+        if (leaked.Count > 0)
+        {
+            logger.LogWarning(
+                "Triage reply contained personal data ({Kinds}); discarded for human review. "
+                + "Correlation {CorrelationId}.",
+                string.Join(", ", leaked),
+                request.CorrelationId);
+            return Fallback("pii-in-model-output");
+        }
+
         return new TriageResult
         {
             Verdict = verified.Verdict,
             Sources = retrieval.Articles,
         };
     }
+
+    private static TriageRequest Redact(TriageRequest request, RedactionSession session) => request with
+    {
+        CustomerStatement = request.CustomerStatement is null
+            ? null
+            : PiiRedactor.Redact(request.CustomerStatement, session),
+        Conversation = request.Conversation
+            .Select(t => t with { Content = PiiRedactor.Redact(t.Content, session) })
+            .ToList(),
+    };
 
     private async Task<KnowledgeRetrievalResult> RetrieveAsync(
         TriageRequest request,
@@ -261,7 +309,8 @@ public sealed partial class TriagePipeline(
            Never assume it is fixed. Never claim success.
         5. Do not invent serial numbers, part numbers, error codes, or article ids.
         6. Do not ask for or repeat personal information such as names, addresses, email
-           addresses, or phone numbers.
+           addresses, or phone numbers. Personal data in the customer's text has been replaced
+           with placeholders such as [EMAIL_1]; never try to guess what they stand for.
         7. Respond with a single JSON object and nothing else. No prose, no markdown fences.
 
         Required JSON shape:

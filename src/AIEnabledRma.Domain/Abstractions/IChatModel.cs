@@ -110,4 +110,10 @@ public sealed record TriageRequest
     public string? RegionCode { get; init; }
 
     public string? CorrelationId { get; init; }
+
+    /// <summary>
+    /// Names already known for this return (the matched customer). They are redacted from the
+    /// customer's text before any model call, alongside the pattern-recognised personal data.
+    /// </summary>
+    public IReadOnlyList<string> KnownPersonalNames { get; init; } = [];
 }

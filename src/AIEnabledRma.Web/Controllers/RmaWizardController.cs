@@ -260,9 +260,21 @@ public sealed class RmaWizardController(
         // Retrieval and the model call happen inside the pipeline, which enforces the scope
         // guard, the closed schema, and citation verification. The controller cannot skip those
         // because it has no path to IChatModel.
+        // The matched customer's names are redacted from their own text before the model call.
+        var customer = request.CustomerId is { } customerId
+            ? await customers.GetByIdAsync(customerId, cancellationToken)
+            : null;
+        var knownNames = customer is null
+            ? Array.Empty<string>()
+            : new[] { customer.FullName, customer.FirstName, customer.MiddleName, customer.LastName }
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Select(n => n!)
+                .ToArray();
+
         var triageResult = await triage.TriageAsync(
             new TriageRequest
             {
+                KnownPersonalNames = knownNames,
                 Devices = TriageContext.Build(request, today),
                 Conversation =
                 [

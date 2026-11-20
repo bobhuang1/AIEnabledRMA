@@ -389,9 +389,15 @@ internal sealed class FakeRetriever : IKnowledgeRetriever
 
     public Exception? ThrowFrom { get; set; }
 
+    public List<KnowledgeRetrievalQuery> Queries { get; } = [];
+
     public Task<KnowledgeRetrievalResult> RetrieveAsync(
-        KnowledgeRetrievalQuery query, CancellationToken cancellationToken) =>
-        ThrowFrom is not null
+        KnowledgeRetrievalQuery query, CancellationToken cancellationToken)
+    {
+        Queries.Add(query);
+
+        return ThrowFrom is not null
             ? Task.FromException<KnowledgeRetrievalResult>(ThrowFrom)
             : Task.FromResult(new KnowledgeRetrievalResult { Articles = Articles });
+    }
 }

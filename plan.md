@@ -138,6 +138,9 @@ about a week.
 
 ### P3. Redact before every model call (M) — F3
 
+> Status 2026-11-19: done with pattern recognisers, in `AIEnabledRma.Domain.Privacy` rather than a new
+> project (every host already references Domain). The local-model NER pass waits on D4.
+
 - New `AIEnabledRma.Privacy` library: a `PiiRedactor` with pattern recognisers for email, phone, card (Luhn),
   postal address, serial-like and order numbers, and names of the matched customer (known from context), plus a
   name/NER pass when a local model is configured.
