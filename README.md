@@ -437,6 +437,23 @@ provider before taking money.
   when `Payments:AllowFakeGateway=true` is set for a demo that takes no real money. Anywhere else the app
   refuses to start.
 
+## Production
+
+`docker-compose.prod.yml` runs the web host, the MCP server (HTTP) and the RAG host behind Caddy
+(`deploy/Caddyfile`, automatic TLS); PostgreSQL with pgvector is not published. Copy
+`deploy/prod.env.example` to `prod.env` (ignored by git) and fill it in; compose refuses to start while any
+required value is missing.
+
+- Base images are pinned by digest and every image restores with `--locked-mode`.
+- App containers run as non-root with a read-only root filesystem, `no-new-privileges` and no capabilities.
+- Caddy routes web traffic only while `/health/ready` (database reachable) answers.
+- In Production every host refuses to start with an unsafe configuration: a default or empty database
+  password, an `http` model or embedding endpoint, the fake payment gateway, the web host without OpenID
+  Connect operator sign-in, or the RAG host without its API keys.
+
+For the local demo, `Demo:Today` (Development only, `yyyy-MM-dd`) runs the wizard on a fixed date so the
+demo serials keep their designed outcomes: `Demo:Today=2026-09-29`.
+
 ## License
 
 This project is free software, released under the **GNU General Public License v3.0**. You may redistribute and/or modify it under those terms; see [LICENSE.md](LICENSE.md) for the full text.

@@ -1,0 +1,108 @@
+# Production pack (P11). Everything that is a secret or deployment-specific comes from the
+# environment (an .env file kept out of git, or the orchestrator's secret store); every one marked
+# :? must be set or compose refuses to start. Nothing but the TLS proxy is published.
+#
+#   docker compose -f docker-compose.prod.yml --env-file prod.env up -d --build
+#
+name: aienabledrma-prod
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  restart: unless-stopped
+
+x-app-env: &app-env
+  ASPNETCORE_ENVIRONMENT: Production
+  ConnectionStrings__Rma: Host=postgres;Port=5432;Database=${POSTGRES_DB:-rmaprod};Username=${POSTGRES_USER:?set POSTGRES_USER};Password=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+
+services:
+  proxy:
+    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    ports:
+      - "443:443"
+      - "80:80"
+    environment:
+      RMA_WEB_HOST: ${RMA_WEB_HOST:?set RMA_WEB_HOST}
+      RMA_MCP_HOST: ${RMA_MCP_HOST:?set RMA_MCP_HOST}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [web, mcp]
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector@sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rmaprod}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    # Not published: only the app containers on the internal network reach it.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  web:
+    <<: *hardening
+    build:
+      context: .
+      dockerfile: src/AIEnabledRma.Web/Dockerfile
+    environment:
+      <<: *app-env
+      Operations__ApiKey: ${RMA_OPERATIONS_KEY:?set RMA_OPERATIONS_KEY}
+      OperatorAuth__Authority: ${OIDC_AUTHORITY:?set OIDC_AUTHORITY}
+      OperatorAuth__ClientId: ${OIDC_OPERATOR_CLIENT_ID:?set OIDC_OPERATOR_CLIENT_ID}
+      OperatorAuth__ClientSecret: ${OIDC_OPERATOR_CLIENT_SECRET:?set OIDC_OPERATOR_CLIENT_SECRET}
+      Payments__Provider: stripe
+      Payments__Stripe__SecretKey: ${STRIPE_SECRET_KEY:?set STRIPE_SECRET_KEY}
+      Payments__Stripe__WebhookSecret: ${STRIPE_WEBHOOK_SECRET:?set STRIPE_WEBHOOK_SECRET}
+      Ai__Provider: ${AI_PROVIDER:-example-local}
+      Ai__OpenAiCompatible__BaseUrl: ${AI_BASE_URL:-}
+      Ai__OpenAiCompatible__ApiKey: ${AI_API_KEY:-}
+      Rag__VectorStore__Enabled: ${RAG_VECTOR_STORE:-false}
+      Embeddings__Provider: ${EMBEDDINGS_PROVIDER:-hashing}
+      Embeddings__BaseUrl: ${EMBEDDINGS_BASE_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  mcp:
+    <<: *hardening
+    build:
+      context: .
+      dockerfile: src/AIEnabledRma.Mcp/Dockerfile
+    environment:
+      <<: *app-env
+      Mcp__Transport: http
+      McpHttp__Authority: ${OIDC_AUTHORITY:?set OIDC_AUTHORITY}
+      McpHttp__AllowedClientIds__0: ${MCP_CLIENT_ID:?set MCP_CLIENT_ID}
+      McpHttp__ResourceUrl: https://${RMA_MCP_HOST:?set RMA_MCP_HOST}/mcp
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  rag:
+    <<: *hardening
+    build:
+      context: .
+      dockerfile: src/AIEnabledRma.Rag/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Rag__Security__AdminKey: ${RAG_ADMIN_KEY:?set RAG_ADMIN_KEY}
+      Rag__Security__ReaderKey: ${RAG_READER_KEY:?set RAG_READER_KEY}
+
+volumes:
+  pgdata:
+  caddy-data:
+  caddy-config:

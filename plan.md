@@ -85,6 +85,12 @@ Severity is for a deployment that faces real customers. None of these bite in th
 
 ## 4. Decisions needed from the owner
 
+> Status 2026-11-20: the proposed defaults were built where they needed no owner input (masked MCP data with
+> a support-role unmask tool for D3, an anonymous wizard with expiry and rate limits for D6, provider-neutral
+> OIDC for D2, the offline hashing embedder plus an OpenAI-compatible client for D4, Stripe test mode for
+> D5). Still open and blocking real use: **D1** (CRM tenant and fields), **D2** (which identity provider),
+> **D4** (which embedding model), **D5** (Stripe account). See progress.md.
+
 | # | Decision | Blocks | Proposed default |
 |---|---|---|---|
 | D1 | Which CRM holds the support cases (Dynamics 365/Dataverse assumed, as for Docketglass), and which case fields may be used | P6 | Dynamics incidents: title, description, resolution, notes; synthetic data until the tenant is configured by the owner |

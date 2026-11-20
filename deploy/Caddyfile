@@ -1,0 +1,24 @@
+# TLS front door for docker-compose.prod.yml. Caddy obtains certificates for the hostnames below
+# automatically; set RMA_WEB_HOST and RMA_MCP_HOST in the environment.
+{
+	email {$ACME_EMAIL}
+}
+
+{$RMA_WEB_HOST} {
+	encode gzip
+	reverse_proxy web:8080 {
+		# Readiness, not liveness: a web container that cannot reach the database takes no traffic.
+		health_uri /health/ready
+		health_interval 15s
+	}
+}
+
+{$RMA_MCP_HOST} {
+	reverse_proxy mcp:8080 {
+		health_uri /health
+		health_interval 15s
+	}
+}
+
+# The RAG host is internal only: the web host uses its own in-process index or the vector store,
+# and operators reach the RAG endpoints from inside the network with the admin key.

@@ -344,9 +344,9 @@ public sealed class RagHostSecurityTests
     }
 
     [Fact]
-    public async Task With_no_keys_configured_production_grants_nothing()
+    public async Task With_no_keys_configured_outside_development_nothing_is_granted()
     {
-        await using var factory = new RagFactory("Production", withKeys: false);
+        await using var factory = new RagFactory("Staging", withKeys: false);
         var client = factory.CreateClient();
         var ct = TestContext.Current.CancellationToken;
 

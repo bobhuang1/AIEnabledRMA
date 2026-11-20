@@ -29,7 +29,7 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 | 5 | P7 Retrieval/triage eval | Done | Real-model run is wired (`eval.yml`) but needs a model endpoint and secrets from the owner. |
 | 6 | P9 Real payment gateway | Done except account setup: **blocked on D5** | No Stripe account, keys or Elements card form yet; everything else is tested against a fake Stripe API. |
 | 6 | P10 Operator view | Done | OIDC provider (D2) is configuration; a dev sign-in exists for Development/Testing only. |
-| 6 | P11 Production pack | Not started | |
+| 6 | P11 Production pack | Done | Not deployed anywhere: no host, domain or identity provider yet (owner). |
 
 ## Log
 
@@ -139,3 +139,35 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
   authorisation reuses the key, 3-D Secure cancel, capture/void endpoints, error message, minor units,
   webhook signature valid/tampered/wrong secret/stale/missing, live key refused in Development, forged webhook
   400 on a Stripe-configured host).
+- **P11 landed.** `docker-compose.prod.yml` (Caddy TLS front door from `deploy/Caddyfile`, web, MCP over HTTP,
+  RAG host, pgvector PostgreSQL unpublished; required values via `:?`; read-only root filesystems, tmpfs,
+  `no-new-privileges`, all capabilities dropped), `deploy/prod.env.example`, Dockerfiles with digest-pinned
+  base images and `--locked-mode` restore (new RAG Dockerfile), `ProductionConfiguration` startup checks
+  (default/empty DB password, http model or embedding endpoint, fake gateway opt-in, missing operator OIDC; RAG
+  keys), and the Development-only `Demo:Today` clock for the drifting demo serials. Evidence:
+  `ProductionConfigurationTests` (7) plus the stricter RAG test; `docker compose -f docker-compose.prod.yml
+  --env-file deploy/prod.env.example config` valid; all three images build; the web image runs read-only with
+  dropped capabilities and answers `/health`, `/health/ready` and the wizard; the same image in Production with
+  development defaults refuses to start and lists the problems. Full suite 328 passed, 1 skipped.
+
+## Final state (2026-11-20)
+
+All twelve workstreams are done. Three parts can only finish with the owner's decisions; each is written into
+plan.md as blocked:
+
+| Blocked part | Needs |
+|---|---|
+| P6 real CRM import | D1: CRM tenant URL, app registration (client credentials), agreed field list |
+| P9 taking real payments | D5: Stripe account and keys, webhook registration, Stripe Elements card form |
+| Real identity provider, embedding model and model eval | D2 (Keycloak or Entra ID), D4 (local embedding model), plus `RMA_EVAL_*` secrets for `eval.yml` |
+
+Everything else runs locally on synthetic data. Last full run: `dotnet test` 328 passed, 1 skipped (the
+symlink test, which needs Windows Developer Mode and runs on Linux CI), 0 failed, with
+`RMA_REQUIRE_LIVE_DB=1` against the throwaway pgvector container. CI has not run yet: nothing has been pushed.
+
+Notes for the owner:
+- The next `docker compose up` recreates `aienabledrma-postgres` on the pgvector image (same PG 16, data kept).
+- `aienabledrma-testpg` (port 55432, tmpfs, test data only) was created by this work and can be removed with
+  `docker rm -f aienabledrma-testpg`.
+- On this machine the shared C# compiler server twice served stale Razor output (bogus errors in
+  `Confirm.cshtml`); `dotnet build-server shutdown` clears it.

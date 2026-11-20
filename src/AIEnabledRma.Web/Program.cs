@@ -148,6 +148,24 @@ builder.Services.AddControllersWithViews();
 builder.Services.AddOperatorAuth(builder.Configuration, builder.Environment);
 builder.Services.AddScoped<AIEnabledRma.Domain.Operations.OperatorService>();
 
+// Development only: run the demo on a fixed date. The seeded warranties are anchored on
+// 2026-03-01, so on the wall clock the README's demo serials drift out of their scenarios
+// (Demo:Today=2026-09-29 restores them).
+if (builder.Environment.IsDevelopment()
+    && DateOnly.TryParseExact(builder.Configuration["Demo:Today"], "yyyy-MM-dd", out var demoToday))
+{
+    var demoNow = new DateTimeOffset(demoToday.ToDateTime(new TimeOnly(12, 0)), TimeSpan.Zero);
+    builder.Services.AddSingleton<TimeProvider>(new AIEnabledRma.Web.Security.FixedTimeProvider(demoNow));
+    builder.Services.AddSingleton<IClock>(new AIEnabledRma.Web.Security.FixedClock(demoNow));
+}
+
+// Last, so every other startup rule has had its say: Production refuses default database
+// passwords, plain-http AI endpoints, the fake gateway and an operator area without real sign-in.
+if (builder.Environment.IsProduction())
+{
+    ProductionConfiguration.EnsureSafe(builder.Configuration, checkOperatorSignIn: true);
+}
+
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())

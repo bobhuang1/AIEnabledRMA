@@ -13,6 +13,11 @@ var bootstrap = new ConfigurationBuilder()
 if (McpHttpHost.IsSelected(args, bootstrap))
 {
     var web = WebApplication.CreateBuilder(args);
+    if (web.Environment.IsProduction())
+    {
+        AIEnabledRma.Data.ProductionConfiguration.EnsureSafe(web.Configuration);
+    }
+
     McpHttpHost.Configure(web);
     var app = web.Build();
     McpHttpHost.Map(app);
@@ -21,6 +26,10 @@ if (McpHttpHost.IsSelected(args, bootstrap))
 }
 
 var builder = Host.CreateApplicationBuilder(args);
+if (builder.Environment.IsProduction())
+{
+    AIEnabledRma.Data.ProductionConfiguration.EnsureSafe(builder.Configuration);
+}
 
 // stdout is the JSON-RPC channel. Anything else written there corrupts the stream, so all
 // logging is redirected to stderr. The default console logger writes to stdout, which

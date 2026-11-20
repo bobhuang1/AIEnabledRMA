@@ -5,6 +5,15 @@ using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Production refuses to run the operator endpoints without keys (they would grant nothing,
+// which looks like an outage rather than a misconfiguration).
+if (builder.Environment.IsProduction()
+    && (string.IsNullOrWhiteSpace(builder.Configuration["Rag:Security:AdminKey"])
+        || string.IsNullOrWhiteSpace(builder.Configuration["Rag:Security:ReaderKey"])))
+{
+    throw new InvalidOperationException("Rag:Security:AdminKey and ReaderKey are required in Production.");
+}
+
 builder.Services.AddRag(builder.Configuration);
 builder.Services.AddOptions<RagSecurityOptions>()
     .Bind(builder.Configuration.GetSection(RagSecurityOptions.SectionName));
