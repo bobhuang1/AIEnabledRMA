@@ -2,7 +2,11 @@ name: aienabledrma
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # PostgreSQL 16 with the pgvector extension, for the knowledge store (DbAdmin kb-ingest).
+    # Same major version as the earlier postgres:16-alpine image and the cluster uses locale C, so
+    # an existing ./data/pgdata directory is reused as is. `docker compose up` recreates the
+    # container with this image; the data directory is kept.
+    image: pgvector/pgvector:pg16
     container_name: aienabledrma-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-rmadev}

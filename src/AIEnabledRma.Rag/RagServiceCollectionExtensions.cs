@@ -2,6 +2,7 @@ using AIEnabledRma.Rag;
 using AIEnabledRma.Rag.Knowledge;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 
@@ -73,7 +74,29 @@ public static class RagServiceCollectionExtensions
         // Bridges the retriever seam TriagePipeline depends on. Registered over the holder for
         // the same reason as the index above: a reload must not be shadowed by a captured
         // instance.
-        services.AddSingleton<Domain.Abstractions.IKnowledgeRetriever, KnowledgeIndexRetriever>();
+        services.AddSingleton<KnowledgeIndexRetriever>();
+
+        // Hybrid vector retrieval when configured; otherwise the in-memory lexical index. The
+        // in-memory index also stays registered as the hybrid retriever's fallback.
+        services.AddOptions<Store.VectorStoreOptions>()
+            .Bind(configuration.GetSection(Store.VectorStoreOptions.SectionName));
+        services.AddOptions<Store.ChunkingOptions>()
+            .Bind(configuration.GetSection(Store.ChunkingOptions.SectionName));
+
+        var vectorStore = configuration.GetSection(Store.VectorStoreOptions.SectionName).Get<Store.VectorStoreOptions>();
+        if (vectorStore?.Enabled == true)
+        {
+            services.TryAddSingleton<Domain.Knowledge.IEmbeddingModel>(new Domain.Knowledge.HashingEmbeddingModel());
+            services.TryAddSingleton(sp => Npgsql.NpgsqlDataSource.Create(
+                configuration.GetConnectionString("Rma")
+                ?? throw new InvalidOperationException("Rag:VectorStore:Enabled needs ConnectionStrings:Rma.")));
+            services.AddSingleton<Store.PgVectorKnowledgeStore>();
+            services.AddSingleton<Domain.Abstractions.IKnowledgeRetriever, Store.HybridKnowledgeRetriever>();
+        }
+        else
+        {
+            services.AddSingleton<Domain.Abstractions.IKnowledgeRetriever>(sp => sp.GetRequiredService<KnowledgeIndexRetriever>());
+        }
 
         return services;
     }

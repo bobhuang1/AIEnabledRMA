@@ -19,6 +19,9 @@ builder.Services.AddRmaData(builder.Configuration);
 // The same in-process corpus the RAG service and the MCP tools use, so all three hosts answer
 // a troubleshooting question identically. AddRag also registers the IKnowledgeRetriever that
 // TriagePipeline depends on.
+// The embedding model is registered before AddRag so the hybrid retriever (when
+// Rag:VectorStore:Enabled) embeds queries with the same model that ingestion used.
+builder.Services.AddEmbeddingModel(builder.Configuration);
 builder.Services.AddRag(builder.Configuration);
 
 builder.Services.AddAiProvider(builder.Configuration);

@@ -10,11 +10,23 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.Extensions.Hosting" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\AIEnabledRma.Data\AIEnabledRma.Data.csproj" />
+    <!-- kb-ingest: the loader, chunker and pgvector store, and the embedding model selection. -->
+    <ProjectReference Include="..\..\src\AIEnabledRma.Rag\AIEnabledRma.Rag.csproj" />
+    <ProjectReference Include="..\..\src\AIEnabledRma.Ai\AIEnabledRma.Ai.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\knowledge-base\**\*.md"
+          Link="knowledge-base\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

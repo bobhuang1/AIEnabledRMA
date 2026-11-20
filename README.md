@@ -230,6 +230,37 @@ Payments:
     AcceptAllAmounts: true   # bundled dev gateway: authorise every positive amount
 ```
 
+## Knowledge store (vector search)
+
+By default the assistant retrieves from an in-memory BM25-style index of the reviewed articles. For hybrid
+retrieval (PostgreSQL full-text + pgvector cosine, fused by reciprocal rank) publish the knowledge base to
+the database and switch it on:
+
+```powershell
+dotnet run --project tools\DbAdmin -- kb-ingest            # chunk, embed, publish (idempotent)
+$env:Rag__VectorStore__Enabled = 'true'
+dotnet run --project src\AIEnabledRma.Web
+```
+
+- **Schema:** `kb_documents`, `kb_chunks` (HNSW index on `embedding`, GIN on a generated `tsvector`) and
+  `kb_meta`, created by `kb-ingest` itself rather than the EF migrations, so the application schema still runs
+  on a PostgreSQL without the extension. The compose file uses `pgvector/pgvector:pg16`.
+- **Chunking:** markdown-aware; split on headings with the title and heading path as each chunk's prefix,
+  packed towards 350 and at most 500 estimated tokens, short overlap inside long sections, lists and code
+  blocks never split (`Rag:Chunking`).
+- **Embeddings:** `Embeddings:Provider` is `hashing` (deterministic, offline, the default and what CI uses) or
+  `openai-compatible` with `Embeddings:BaseUrl`/`Model`/`Dimensions` (for example a local Ollama at
+  `http://localhost:11434/v1`). The store records the model and refuses a different one until
+  `kb-ingest --rebuild`.
+- **Publishing:** each run writes a new generation and activates it only when every chunk has a vector;
+  unchanged content is a no-op, unchanged chunks reuse their stored vectors, and a failed embedding leaves the
+  previous generation in service (exit code 2) for a retry.
+- **Scope:** the product-scope rule of the lexical index is applied in SQL before ranking. If the store is
+  unreachable, retrieval falls back to the in-memory index.
+- **Evidence:** on the golden question set (`tests/.../Fixtures/golden-questions.json`) recall@3 is 0.955 for
+  both the lexical index and hybrid retrieval with the hashing embedder; a real embedding model is expected to
+  do better on paraphrases.
+
 ## Why the AI is advisory
 
 A return touches a customer's money, a company's stock, and a warranty obligation. A model

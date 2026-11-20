@@ -12,11 +12,6 @@
         "resolved": "10.0.12",
         "contentHash": "Kd4o2oO1A6dfKxjz5LS16QyLtpCFTUiFWwmBABETAXRsSImBdRdWeKjSgbbRhAMiV3a3/nWr95ZtzClT4uaADQ=="
       },
-      "Npgsql": {
-        "type": "Transitive",
-        "resolved": "10.0.3",
-        "contentHash": "7nb5YzXuvWWJxB0J8DiyL3we+X4FOctZrt0fIBnucOIaIevFEEwGQVZKtiu9olXdlNAK1eNgqSral6r/jlhI4w=="
-      },
       "aienabledrma.ai": {
         "type": "Project",
         "dependencies": {
@@ -39,7 +34,8 @@
       "aienabledrma.rag": {
         "type": "Project",
         "dependencies": {
-          "AIEnabledRma.Domain": "[1.0.0, )"
+          "AIEnabledRma.Domain": "[1.0.0, )",
+          "Npgsql": "[10.0.3, )"
         }
       },
       "EFCore.NamingConventions": {
@@ -70,6 +66,12 @@
         "dependencies": {
           "Microsoft.EntityFrameworkCore": "10.0.12"
         }
+      },
+      "Npgsql": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.3, )",
+        "resolved": "10.0.3",
+        "contentHash": "7nb5YzXuvWWJxB0J8DiyL3we+X4FOctZrt0fIBnucOIaIevFEEwGQVZKtiu9olXdlNAK1eNgqSral6r/jlhI4w=="
       },
       "Npgsql.EntityFrameworkCore.PostgreSQL": {
         "type": "CentralTransitive",

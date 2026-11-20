@@ -2,7 +2,13 @@ using AIEnabledRma.Data;
 using AIEnabledRma.Domain.Catalog;
 using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Rma;
+using AIEnabledRma.Ai;
+using AIEnabledRma.Rag;
+using AIEnabledRma.Rag.Knowledge;
+using AIEnabledRma.Rag.Store;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 // Small operational CLI for the database. Deliberately not part of any web host: schema
 // application and seeding are operator actions, and putting them behind an HTTP endpoint
@@ -14,6 +20,8 @@ using Microsoft.EntityFrameworkCore;
 //   DbAdmin seed                 apply migrations, then insert demo data if the catalog is empty
 //   DbAdmin reset --force        drop every table, then migrate and seed
 //   DbAdmin stats                row counts per table
+//   DbAdmin kb-ingest [--rebuild] [--path <dir>]
+//                                chunk, embed and publish the knowledge base to the pgvector store
 
 // The content root defaults to the current working directory, which would make the tool
 // fail with a bare "ConnectionStrings:Rma is not configured" when it is run as
@@ -27,6 +35,13 @@ var options = new HostApplicationBuilderSettings
 
 var builder = Host.CreateApplicationBuilder(options);
 builder.Services.AddRmaDbContext(builder.Configuration);
+builder.Services.AddEmbeddingModel(builder.Configuration);
+builder.Services.AddSingleton(_ => Npgsql.NpgsqlDataSource.Create(
+    builder.Configuration.GetConnectionString("Rma")
+    ?? throw new InvalidOperationException("ConnectionStrings:Rma is not configured.")));
+builder.Services.AddSingleton<PgVectorKnowledgeStore>();
+builder.Services.AddOptions<ChunkingOptions>().Bind(builder.Configuration.GetSection(ChunkingOptions.SectionName));
+builder.Services.AddOptions<KnowledgeIngestionOptions>().Bind(builder.Configuration.GetSection(KnowledgeIngestionOptions.SectionName));
 
 using var host = builder.Build();
 
@@ -110,8 +125,35 @@ switch (command)
         await PrintStatsAsync(db);
         break;
 
+    case "kb-ingest":
+    {
+        var pathIndex = Array.FindIndex(args, a => a.Equals("--path", StringComparison.OrdinalIgnoreCase));
+        var root = RagServiceCollectionExtensions.ResolveKnowledgeBaseRoot(
+            pathIndex >= 0 && pathIndex + 1 < args.Length ? args[pathIndex + 1] : "knowledge-base");
+
+        // Review is required everywhere except Development, exactly as the RAG host requires it.
+        var ingestion = host.Services.GetRequiredService<IOptions<KnowledgeIngestionOptions>>().Value;
+        ingestion.RequireReviewed |= !isDevelopment;
+
+        var loaded = new KnowledgeBaseLoader(NullLogger<KnowledgeBaseLoader>.Instance).Load(root, ingestion);
+        var documents = ArticleDocuments.From(loaded, host.Services.GetRequiredService<IOptions<ChunkingOptions>>().Value);
+
+        var store = host.Services.GetRequiredService<PgVectorKnowledgeStore>();
+        await store.EnsureSchemaAsync(args.Contains("--rebuild", StringComparer.OrdinalIgnoreCase), CancellationToken.None);
+        var report = await store.IngestAsync(KbKinds.Article, documents, CancellationToken.None);
+
+        Console.WriteLine($"Knowledge base: {root}");
+        Console.WriteLine($"  embedding model: {store.Embedder.Name}");
+        Console.WriteLine(report.Unchanged
+            ? $"  unchanged: generation {report.Generation} already holds these {report.Documents} article(s)."
+            : $"  generation {report.Generation}: {report.Documents} article(s), {report.Chunks} chunk(s), "
+              + $"{report.Embedded} embedded, {report.Reused} reused, {report.Failed} failed, "
+              + (report.Activated ? "activated." : "NOT activated (the previous generation stays in service; re-run to retry)."));
+        return report.Activated ? 0 : 2;
+    }
+
     default:
-        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats>");
+        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats|kb-ingest [--rebuild] [--path <dir>]>");
         return 1;
 }
 

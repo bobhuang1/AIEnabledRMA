@@ -9,6 +9,8 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <!-- Raw ADO.NET for the pgvector knowledge store (Rag/Store). -->
+    <PackageVersion Include="Npgsql" Version="10.0.3" />
     <!-- Applies snake_case to table, column, index, and constraint names, so the schema
          matches PostgreSQL convention and the raw-SQL trigram indexes can be written in
          plain unquoted snake_case. -->

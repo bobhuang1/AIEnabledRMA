@@ -133,4 +133,16 @@ public sealed record RetrievedArticle
     public required double Score { get; init; }
 
     public string? Snippet { get; init; }
+
+    /// <summary><c>article</c> (default) or <c>crm_case</c>.</summary>
+    public string SourceKind { get; init; } = "article";
+
+    /// <summary>The chunk(s) the snippet came from, e.g. <c>kb-0001#2</c>, when retrieval is chunked.</summary>
+    public string? ChunkRef { get; init; }
+
+    /// <summary>
+    /// What a citation shows to a customer. For a CRM case this is "Resolved case (product,
+    /// month)", never a case number.
+    /// </summary>
+    public string? CitationLabel { get; init; }
 }

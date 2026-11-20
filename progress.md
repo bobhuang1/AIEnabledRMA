@@ -24,7 +24,7 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 | 2 | P8 Wizard hardening | Done | Rate limits, link expiry, no contact-detail probing, security headers, fake gateway refused outside Development/Testing, split health endpoints. `/health/details` uses a shared operator key until P10 brings sign-in. |
 | 3 | P4 Secure KB ingestion | Done | API keys (not JWT) on the RAG host; JWT comes with P2's identity provider. Symlink test skips on Windows without Developer Mode, runs in Linux CI. |
 | 3 | P2 Remote MCP + OAuth | Done (provider-neutral) | Streamable HTTP + JWT + RFC 9728 metadata; which identity provider (D2) is still the owner's call and is pure configuration. |
-| 4 | P5 Vector store + chunking | Not started | |
+| 4 | P5 Vector store + chunking | Done (hashing embedder) | Real embedding model is D4 (config only). Token sizes are estimated (4/3 per word), not tokenizer-exact. |
 | 5 | P6 CRM case ingestion | Not started | |
 | 5 | P7 Retrieval/triage eval | Not started | |
 | 6 | P9 Real payment gateway | Not started | |
@@ -92,3 +92,14 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
   calls tools with masked output and an audit row under the client id, support-role reveal vs reader);
   full suite 287 passed, 1 skipped (symlink test, Windows only). Note: a stale VBCSCompiler cache produced
   bogus Razor errors in this session; `dotnet build-server shutdown` cleared it.
+- **P5 landed.** `PgVectorKnowledgeStore` (kb schema created by `DbAdmin kb-ingest`, not EF, so plain
+  PostgreSQL still works), `MarkdownChunker`, `IEmbeddingModel` with `HashingEmbeddingModel` (offline/CI) and
+  `OpenAiCompatibleEmbeddingModel` (batched, retried), `HybridKnowledgeRetriever` (full-text + vector, RRF,
+  scope filter in SQL, lexical fallback), `Rag:VectorStore:Enabled` switch, compose image `pgvector/pgvector:pg16`.
+  Evidence: live `kb-ingest` on the throwaway container published 19 articles / 54 chunks, second run
+  "unchanged"; `VectorStoreTests` (11: chunk boundaries, steps kept whole, overlap, merging, shipped corpus,
+  embedder determinism, idempotent ingest with vector reuse, failed embedding keeps the old generation and
+  retries, scope filtered in SQL, recall@3 hybrid 0.955 >= lexical 0.955 on the 22 answerable golden questions,
+  fallback when the store is unreachable).
+- **Note for the owner:** the next `docker compose up` recreates `aienabledrma-postgres` on the pgvector image
+  (same PG 16, data directory kept). Not done from here: the running container was left alone.
