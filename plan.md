@@ -65,6 +65,7 @@ Severity is for a deployment that faces real customers. None of these bite in th
 | F7 | Low | **Web `/health` shows the knowledge-base filesystem path and the AI provider name** to anonymous callers. It injects `RmaDbContext` and never uses it. The README describes a payments diagnostics endpoint that does not exist. | `Web/Program.cs`, `README.md` |
 | F8 | Low | **`docker-compose.yml` publishes PostgreSQL on all interfaces with default credentials.** Fine for a demo, but it should bind to `127.0.0.1`. | `docker-compose.yml` |
 | F9 | Low | **No CI, no dependency audit, and no lock files.** The live suites skip silently, so a green run can contain 0 database tests. | repo root |
+| F10 | High | *(found 2026-11-20 while building P7)* **The scope guard refused every triage question in the running app.** The web host binds `Triage:ScopeGuard`, but `appsettings.json` had a root `ScopeGuard` section with keys that do not exist, so `TopicVocabularies` was empty, every question scored 0 topic overlap and the model was never called. The wizard still moved on to the next step, so nothing looked broken. Fixed in P7: real vocabularies under `Triage:ScopeGuard` and a startup validation that refuses an empty vocabulary. | `Web/appsettings.json`, `Web/Program.cs` |
 
 ## 3. Goals for "finished"
 

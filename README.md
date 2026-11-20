@@ -285,6 +285,22 @@ dotnet run --project tools\DbAdmin -- kb-cases --file cases.json --publish --rev
 - The leak test (`CaseLeakLiveTests`) ingests a synthetic corpus with planted personal data end to end and checks
   that none of it reaches the store, the logs, the report or retrieval results.
 
+## Evaluation
+
+`TriageEvaluationTests` runs the golden question set (`tests/AIEnabledRma.Tests/Fixtures/golden-questions.json`)
+through the real triage pipeline with the web host's own `appsettings.json` and reports retrieval recall@3,
+MRR, citation validity of the raw model output, the human-review fallback rate, out-of-scope accuracy and the
+prompt-injection pass rate (customer-side injections, plus instruction-carrying articles that must be refused
+at load). CI runs it with the deterministic `example-local` model and gates on the result; the report is
+written to `TestResults/eval-report.json`. `.github/workflows/eval.yml` runs the same evaluation against a real
+OpenAI-compatible model, manually or nightly, when the repository variable `RMA_EVAL_ENABLED` is `true` and
+the `RMA_EVAL_*` secrets are set. Locally:
+
+```powershell
+$env:RMA_EVAL_REPORT = "$PWD\TestResults\eval-report.json"
+dotnet test tests\AIEnabledRma.Tests --filter "FullyQualifiedName~TriageEvaluationTests"
+```
+
 ## Why the AI is advisory
 
 A return touches a customer's money, a company's stock, and a warranty obligation. A model

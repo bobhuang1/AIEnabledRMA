@@ -1,0 +1,50 @@
+name: eval-real-model
+
+# The same golden-set evaluation CI runs with the deterministic example model, run against a real
+# model. Manual or nightly; needs repository secrets RMA_EVAL_BASE_URL (an OpenAI-compatible /v1
+# endpoint), RMA_EVAL_MODEL and optionally RMA_EVAL_API_KEY. Synthetic questions only: no customer
+# data is sent.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ vars.RMA_EVAL_ENABLED == 'true' }}
+    env:
+      DOTNET_NOLOGO: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      RMA_EVAL_PROVIDER: openai-compatible
+      RMA_EVAL_BASE_URL: ${{ secrets.RMA_EVAL_BASE_URL }}
+      RMA_EVAL_MODEL: ${{ secrets.RMA_EVAL_MODEL }}
+      RMA_EVAL_API_KEY: ${{ secrets.RMA_EVAL_API_KEY }}
+      RMA_EVAL_REPORT: ${{ github.workspace }}/TestResults/eval-report.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore (locked)
+        run: dotnet restore AIEnabledRma.slnx --locked-mode
+
+      - name: Evaluate
+        run: >-
+          dotnet test tests/AIEnabledRma.Tests/AIEnabledRma.Tests.csproj -c Release
+          --filter "FullyQualifiedName~TriageEvaluationTests"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: eval-report
+          path: TestResults/eval-report.json

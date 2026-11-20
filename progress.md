@@ -26,7 +26,7 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 | 3 | P2 Remote MCP + OAuth | Done (provider-neutral) | Streamable HTTP + JWT + RFC 9728 metadata; which identity provider (D2) is still the owner's call and is pure configuration. |
 | 4 | P5 Vector store + chunking | Done (hashing embedder) | Real embedding model is D4 (config only). Token sizes are estimated (4/3 per word), not tokenizer-exact. |
 | 5 | P6 CRM case ingestion | Done except real import: **blocked on D1** | Tenant, app registration and field list are the owner's; everything else runs on synthetic data. |
-| 5 | P7 Retrieval/triage eval | Not started | |
+| 5 | P7 Retrieval/triage eval | Done | Real-model run is wired (`eval.yml`) but needs a model endpoint and secrets from the owner. |
 | 6 | P9 Real payment gateway | Not started | |
 | 6 | P10 Operator view | Not started | |
 | 6 | P11 Production pack | Not started | |
@@ -113,3 +113,12 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
   gate ingests 6 synthetic cases with 30 planted values (4 published, 1 not eligible, 1 quarantined) and finds
   zero planted values in kb tables, logs, the report or retrieval results; live `kb-cases` dry run and publish
   on the throwaway database.
+- **P7 landed, and finding F10 fixed.** Building the evaluation showed the scope guard refused every question
+  in the running app (settings under a root `ScopeGuard` key the host never read, so no topic vocabulary).
+  `Triage:ScopeGuard` now carries real vocabularies and deny phrases, and the host refuses to start with an
+  empty vocabulary. `TriageEvaluationTests` computes recall@3, MRR, raw citation validity, human-review
+  fallback rate, out-of-scope accuracy and prompt-injection pass rate over the 24-question golden set with the
+  production configuration; CI gates on it and keeps `eval-report.json`; `eval.yml` runs it against a real
+  model when enabled. Evidence (example-local model, lexical index): recall@3 1.000, MRR 0.955, citation
+  validity 1.000 (84 citations), fallback rate 0.000, out-of-scope accuracy 1.000, injection pass rate 1.000
+  (6 customer-side + 4 article-side).

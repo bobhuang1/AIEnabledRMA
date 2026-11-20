@@ -99,6 +99,12 @@ builder.Services.AddRateLimiter(limiter =>
 // bound options instance. It is stateless and therefore shared.
 builder.Services.AddOptions<ScopeGuardOptions>()
     .Bind(builder.Configuration.GetSection(ScopeGuardOptions.SectionName))
+    // With no vocabulary every question scores zero topic overlap and is refused, so the
+    // assistant silently never runs. That was the shipped state until 2026-11-20 (the settings
+    // sat under a root "ScopeGuard" key this binding never read); refuse to start instead.
+    .Validate(
+        o => o.TopicVocabularies.Any(v => v.Count > 0),
+        "Triage:ScopeGuard:TopicVocabularies is empty, so the scope guard would refuse every question.")
     .ValidateOnStart();
 builder.Services.AddSingleton<IScopeGuard, ScopeGuard>(sp =>
     new ScopeGuard(sp.GetRequiredService<IOptions<ScopeGuardOptions>>().Value));

@@ -42,6 +42,8 @@ jobs:
       RMA_TEST_CONNECTION: "Host=localhost;Port=5432;Database=postgres;Username=rmauser;Password=ci-only-password"
       # Any live-database test that cannot reach the server fails instead of skipping.
       RMA_REQUIRE_LIVE_DB: "1"
+      # Retrieval/triage evaluation report (TriageEvaluationTests), uploaded with the test results.
+      RMA_EVAL_REPORT: ${{ github.workspace }}/TestResults/eval-report.json
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
