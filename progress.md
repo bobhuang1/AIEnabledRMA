@@ -21,7 +21,7 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 | 1 | P0 Baseline and CI | Done (local) | CI workflow written; it has not run on GitHub yet because nothing is pushed. |
 | 2 | P1 MCP data surface | Done | Masked projection, exact-only contact search, `ToolCallGuard` (permission, budgets, audit), `reveal_customer_contact` (support role only). Budgets are in-process memory. |
 | 2 | P3 Redact before model calls | Done (pattern recognisers) | `PiiRedactor` in `Domain/Privacy` (not a separate project). The optional local-model NER pass is not built: it needs a local model choice (D4). |
-| 2 | P8 Wizard hardening | Not started | |
+| 2 | P8 Wizard hardening | Done | Rate limits, link expiry, no contact-detail probing, security headers, fake gateway refused outside Development/Testing, split health endpoints. `/health/details` uses a shared operator key until P10 brings sign-in. |
 | 3 | P4 Secure KB ingestion | Not started | |
 | 3 | P2 Remote MCP + OAuth | Not started | |
 | 4 | P5 Vector store + chunking | Not started | |
@@ -63,3 +63,12 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
   (`pii-in-model-output`, human review). The wizard passes the matched customer's names. Evidence:
   `PiiRedactionTests` (31 cases incl. a 7-statement planted corpus: zero planted values in model requests
   or retrieval queries; serial still present).
+- **P8 landed.** Wizard POSTs rate limited per client and per request id; unconfirmed request links expire
+  after 14 days (410 via `CapabilityExpiryFilter`); a typed email/phone never reaches the chooser, and the full
+  customer name is no longer put in TempData; CSP and other headers on every response; `FakePaymentGateway`
+  only in Development/Testing or with `Payments:AllowFakeGateway`, otherwise startup fails; `/health` is bare,
+  `/health/ready` checks the DB, `/health/details` needs `X-Operator-Key`. Also fixed a regression from the
+  P3 commit that the full suite caught here: the wizard's customer lookup tracked the row and collided with
+  the workflow's load (now `AsNoTracking`). Evidence: new tests in `WebWizardTests` (health split, headers,
+  partial-email probe, rate limit 429, expiry 410) and `WebStartupTests` (Production refuses to start, expiry
+  rule); full suite 258 passed, 0 skipped.

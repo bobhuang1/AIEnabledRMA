@@ -14,8 +14,11 @@ public sealed class CustomerRepository(
     private readonly RmaDbContext _db = db;
     private readonly CustomerLookupOptions _options = options.Value;
 
+    // Read-only and untracked: callers display or redact the customer. A tracked copy would
+    // collide with the workflow's own load of the same row later in the same request.
     public Task<Customer?> GetByIdAsync(Guid id, CancellationToken cancellationToken) =>
         _db.Customers
+            .AsNoTracking()
             .Include(c => c.Addresses)
             .FirstOrDefaultAsync(c => c.Id == id, cancellationToken);
 

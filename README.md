@@ -311,10 +311,25 @@ provider before taking money.
 
 ## Health
 
-`GET /health` reports the two things that fail independently and both look like "the assistant
-is broken" to a customer: the loaded knowledge base (including per-file load errors) and the
-configured AI provider. It does **not** check the database. Do not wire this endpoint into a
-liveness or readiness probe and read a green result as "the app can serve returns".
+- `GET /health` is liveness only and returns `{"status":"ok"}` to anyone. It discloses nothing.
+- `GET /health/ready` checks the database connection (503 when it cannot connect). Use it for readiness probes.
+- `GET /health/details` reports the loaded knowledge base (path, article count, per-file load errors) and the
+  configured AI provider. It needs the `X-Operator-Key` header matching `Operations:ApiKey` (supply the key
+  from the environment, never a file). With no key configured it is served only in Development.
+
+## Wizard hardening
+
+- **Rate limits:** every wizard POST is limited per client address (`WizardSecurity:PostsPerMinutePerClient`,
+  default 30) and per request id (`PostsPerMinutePerRequest`, default 20); excess gets 429.
+- **Link expiry:** a request that is still unconfirmed `WizardSecurity:CapabilityLifetimeDays` (default 14)
+  after it was created refuses every further step with 410 Gone.
+- **No probing by contact detail:** a typed email or phone attaches the customer only on an exact match;
+  anything else continues unattached, the same as an unknown customer. Only a typed name can reach the
+  (masked) chooser.
+- **Headers:** CSP without inline script or style, `frame-ancestors 'none'`, `nosniff`, `no-referrer`.
+- **Payments:** the accept-all `FakePaymentGateway` is registered only in Development and the test host, or
+  when `Payments:AllowFakeGateway=true` is set for a demo that takes no real money. Anywhere else the app
+  refuses to start.
 
 ## License
 

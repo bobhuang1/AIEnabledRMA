@@ -70,10 +70,20 @@ public sealed class RmaWizardController(
         // matched customers. An exact email or phone match (the visitor already knows the
         // contact detail on file) attaches directly; anything weaker is shown only as masked
         // candidates, and the pick is checked against that server-issued list.
+        //
+        // A contact detail (email or phone) never reaches the chooser: a near-miss email would
+        // otherwise list the neighbouring accounts, so a partial value could be used to probe
+        // who is a customer. It either matches exactly and attaches, or the return continues
+        // unattached, and both paths look the same to the visitor.
+        var typedContact = LooksLikeEmail(form.Customer) || LooksLikePhone(form.Customer);
         var exact = customerMatches.Where(c => IsExactContactMatch(form.Customer, c)).ToList();
         if (exact.Count == 1)
         {
             customerMatches = exact;
+        }
+        else if (typedContact)
+        {
+            customerMatches = [];
         }
         else if (customerMatches.Count > 0)
         {
@@ -110,10 +120,6 @@ public sealed class RmaWizardController(
             // Nothing was created. Show the policy's reasons rather than a bare error.
             return View("Outcome", ToViewModel(result));
         }
-
-        TempData["CustomerName"] = customerMatches.Count == 1
-            ? $"{customerMatches[0].FullName}"
-            : null;
 
         return RedirectToAction(nameof(Triage), new { id = result.RmaId });
     }

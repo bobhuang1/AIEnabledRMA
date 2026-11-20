@@ -591,13 +591,126 @@ public sealed class WebWizardTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var client = CreateClient();
 
-        var response = await client.GetAsync("/health", ct);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/health/details");
+        request.Headers.Add("X-Operator-Key", OperatorKey);
+        var response = await client.SendAsync(request, ct);
         var body = await response.Content.ReadAsStringAsync(ct);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains("\"status\":\"ok\"", body, StringComparison.Ordinal);
         Assert.Contains("articleCount", body, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task Anonymous_health_discloses_nothing_and_details_need_the_operator_key()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+
+        var health = await client.GetStringAsync("/health", ct);
+        Assert.Equal("{\"status\":\"ok\"}", health);
+
+        var details = await client.GetAsync("/health/details", ct);
+        Assert.Equal(HttpStatusCode.Unauthorized, details.StatusCode);
+
+        using var wrongKey = new HttpRequestMessage(HttpMethod.Get, "/health/details");
+        wrongKey.Headers.Add("X-Operator-Key", "wrong");
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(wrongKey, ct)).StatusCode);
+
+        var ready = await client.GetAsync("/health/ready", ct);
+        Assert.Equal(HttpStatusCode.OK, ready.StatusCode);
+    }
+
+    [Fact]
+    public async Task Pages_carry_the_security_headers()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var response = await CreateClient().GetAsync("/RmaWizard/Start", ct);
+
+        Assert.Contains("frame-ancestors 'none'", response.Headers.GetValues("Content-Security-Policy").Single(), StringComparison.Ordinal);
+        Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
+        Assert.Equal("no-referrer", response.Headers.GetValues("Referrer-Policy").Single());
+    }
+
+    [Fact]
+    public async Task A_partial_email_continues_unattached_instead_of_listing_candidates()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+        var start = await client.GetAsync("/RmaWizard/Start", ct);
+
+        // A near-miss of a real customer's email. If it reached the chooser, the page would
+        // confirm that a similar account exists.
+        var step = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            TokenOf(await start.Content.ReadAsStringAsync(ct)),
+            [("Customer", "j.smith@example.co"), ("Identifiers", EligibleSerial), ("CurrencyCode", CurrencyCode)],
+            ct);
+
+        Assert.StartsWith("/RmaWizard/Triage/", step.Path, StringComparison.Ordinal);
+
+        await using var db = CreateContext();
+        var id = IdFromPath(step.Path);
+        var created = await db.RmaRequests.SingleAsync(r => r.Id == id, ct);
+        Assert.Null(created.CustomerId);
+    }
+
+    [Fact]
+    public async Task Wizard_posts_are_rate_limited_per_client()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new WizardFactory(
+            _applicationConnectionString,
+            settings: new Dictionary<string, string> { ["WizardSecurity:PostsPerMinutePerClient"] = "2" });
+        var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true, AllowAutoRedirect = false });
+
+        var statuses = new List<HttpStatusCode>();
+        for (var i = 0; i < 3; i++)
+        {
+            var page = await client.GetAsync("/RmaWizard/Start", ct);
+            var posted = await client.PostAsync(
+                "/RmaWizard/Start",
+                new FormUrlEncodedContent(
+                [
+                    new("__RequestVerificationToken", TokenOf(await page.Content.ReadAsStringAsync(ct))),
+                    new("Customer", "nobody@example.com"),
+                    new("Identifiers", IneligibleSerial),
+                    new("CurrencyCode", CurrencyCode),
+                ]),
+                ct);
+            statuses.Add(posted.StatusCode);
+        }
+
+        Assert.NotEqual(HttpStatusCode.TooManyRequests, statuses[0]);
+        Assert.NotEqual(HttpStatusCode.TooManyRequests, statuses[1]);
+        Assert.Equal(HttpStatusCode.TooManyRequests, statuses[2]);
+    }
+
+    [Fact]
+    public async Task An_unconfirmed_request_link_expires()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = CreateClient();
+        var start = await client.GetAsync("/RmaWizard/Start", ct);
+        var step = await PostStepAsync(
+            client,
+            "/RmaWizard/Start",
+            TokenOf(await start.Content.ReadAsStringAsync(ct)),
+            [("Customer", CustomerEmail), ("Identifiers", EligibleSerial), ("CurrencyCode", CurrencyCode)],
+            ct);
+        var rmaId = IdFromPath(step.Path);
+
+        // The same link, fifteen days later (the default lifetime is 14).
+        await using var later = new WizardFactory(_applicationConnectionString, PinnedNow.AddDays(15));
+        var laterClient = later.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var expired = await laterClient.GetAsync($"/RmaWizard/Triage/{rmaId}", ct);
+
+        Assert.Equal(HttpStatusCode.Gone, expired.StatusCode);
+        Assert.Contains("expired", await expired.Content.ReadAsStringAsync(ct), StringComparison.OrdinalIgnoreCase);
+    }
+
 
     private HttpClient CreateClient()
     {
@@ -781,12 +894,27 @@ public sealed class WebWizardTests : IAsyncLifetime
     private sealed class WizardFactory : WebApplicationFactory<global::WebAppAnchor>
     {
         private readonly string _connectionString;
+        private readonly DateTimeOffset _now;
+        private readonly IReadOnlyDictionary<string, string> _settings;
 
-        public WizardFactory(string connectionString) => _connectionString = connectionString;
+        public WizardFactory(
+            string connectionString,
+            DateTimeOffset? now = null,
+            IReadOnlyDictionary<string, string>? settings = null)
+        {
+            _connectionString = connectionString;
+            _now = now ?? PinnedNow;
+            _settings = settings ?? new Dictionary<string, string>();
+        }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseSetting("ConnectionStrings:Rma", _connectionString);
+            builder.UseSetting("Operations:ApiKey", OperatorKey);
+            foreach (var (key, value) in _settings)
+            {
+                builder.UseSetting(key, value);
+            }
 
             // The checked-in configuration carries a placeholder connection string, so without
             // this the host would start and then fail on its first query instead of at startup.
@@ -799,12 +927,15 @@ public sealed class WebWizardTests : IAsyncLifetime
             builder.ConfigureTestServices(services =>
             {
                 services.RemoveAll<TimeProvider>();
-                services.AddSingleton<TimeProvider>(new PinnedTimeProvider(PinnedNow));
+                services.AddSingleton<TimeProvider>(new PinnedTimeProvider(_now));
                 services.RemoveAll<IClock>();
-                services.AddSingleton<IClock>(new PinnedClock(PinnedNow));
+                services.AddSingleton<IClock>(new PinnedClock(_now));
             });
         }
     }
+
+    /// <summary>Synthetic operator key the test host is configured with.</summary>
+    internal const string OperatorKey = "test-operator-key-not-a-secret";
 
     /// <summary>The date the demo scenario serials (see CLAUDE notes) are valid on.</summary>
     internal static readonly DateTimeOffset PinnedNow = new(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);
