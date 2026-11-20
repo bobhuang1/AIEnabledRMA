@@ -8,15 +8,17 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- The Worker SDK would supply Hosting and the implicit usings, but this host also
-         needs to be referenced as a library by the test project, which the Worker SDK's
-         implicit top-level usings and generated Program type make awkward. Explicit
-         references keep it a plain library-with-an-entry-point. -->
-    <PackageReference Include="Microsoft.Extensions.Hosting" />
-    <!-- For AddConsole, which is how logging is redirected to stderr so stdout stays a
-         clean JSON-RPC channel. -->
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <!-- Hosting and console logging (stdio mode logs to stderr so stdout stays a clean
+         JSON-RPC channel) come from the Microsoft.AspNetCore.App framework reference below,
+         which HTTP mode needs anyway. -->
     <PackageReference Include="ModelContextProtocol" />
+    <!-- HTTP mode (McpHttpHost): streamable HTTP transport behind JWT bearer authentication. -->
+    <PackageReference Include="ModelContextProtocol.AspNetCore" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <ItemGroup>

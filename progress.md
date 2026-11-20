@@ -23,7 +23,7 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 | 2 | P3 Redact before model calls | Done (pattern recognisers) | `PiiRedactor` in `Domain/Privacy` (not a separate project). The optional local-model NER pass is not built: it needs a local model choice (D4). |
 | 2 | P8 Wizard hardening | Done | Rate limits, link expiry, no contact-detail probing, security headers, fake gateway refused outside Development/Testing, split health endpoints. `/health/details` uses a shared operator key until P10 brings sign-in. |
 | 3 | P4 Secure KB ingestion | Done | API keys (not JWT) on the RAG host; JWT comes with P2's identity provider. Symlink test skips on Windows without Developer Mode, runs in Linux CI. |
-| 3 | P2 Remote MCP + OAuth | Not started | |
+| 3 | P2 Remote MCP + OAuth | Done (provider-neutral) | Streamable HTTP + JWT + RFC 9728 metadata; which identity provider (D2) is still the owner's call and is pure configuration. |
 | 4 | P5 Vector store + chunking | Not started | |
 | 5 | P6 CRM case ingestion | Not started | |
 | 5 | P7 Retrieval/triage eval | Not started | |
@@ -82,3 +82,13 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
   `KnowledgeIngestionSecurityTests` + `RagHostSecurityTests` (20 tests, including the shipped corpus loading
   with review required and a Production RAG host); full suite 278 passed, 1 skipped (the symlink test: this
   Windows machine cannot create symlinks without Developer Mode; it runs on Linux CI).
+- **P2 landed.** `--http` / `Mcp:Transport=http` runs the MCP server over stateless streamable HTTP
+  (`McpHttpHost`): Origin allow-list, JWT bearer (issuer, audience `aienabledrma-mcp`, lifetime), policy
+  requiring scope `rma:read` and an allowed client id, `/.well-known/oauth-protected-resource`; the caller's
+  client id flows into `ToolCallGuard` (audit, budgets, support role). Startup refuses an empty client list or
+  a non-https authority outside Development. MCP container now on the aspnet runtime image; `docs/mcp.md`
+  runbook. Evidence: `McpHttpTransportTests` (9: no token 401 + metadata pointer, metadata content, wrong
+  audience 401, wrong issuer 401, missing scope 403, unknown client 403, bad Origin 403, valid token lists and
+  calls tools with masked output and an audit row under the client id, support-role reveal vs reader);
+  full suite 287 passed, 1 skipped (symlink test, Windows only). Note: a stale VBCSCompiler cache produced
+  bogus Razor errors in this session; `dotnet build-server shutdown` cleared it.

@@ -1,5 +1,24 @@
 using AIEnabledRma.Mcp;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Logging;
+
+// Two transports over the same tools and the same ToolCallGuard:
+//   stdio (default) for a developer's local agent, the caller being whoever launched the process;
+//   HTTP (--http or Mcp:Transport=http) for remote agents, behind OAuth bearer tokens.
+var bootstrap = new ConfigurationBuilder()
+    .AddEnvironmentVariables()
+    .AddCommandLine(args)
+    .Build();
+
+if (McpHttpHost.IsSelected(args, bootstrap))
+{
+    var web = WebApplication.CreateBuilder(args);
+    McpHttpHost.Configure(web);
+    var app = web.Build();
+    McpHttpHost.Map(app);
+    await app.RunAsync();
+    return;
+}
 
 var builder = Host.CreateApplicationBuilder(args);
 

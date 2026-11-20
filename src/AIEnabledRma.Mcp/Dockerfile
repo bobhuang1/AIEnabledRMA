@@ -17,7 +17,8 @@ RUN dotnet restore src/AIEnabledRma.Mcp/AIEnabledRma.Mcp.csproj
 COPY . .
 RUN dotnet publish src/AIEnabledRma.Mcp -c Release -o /app --no-restore
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
+# aspnet, not runtime: HTTP mode (McpHttpHost) needs the ASP.NET Core shared framework.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app ./
 
