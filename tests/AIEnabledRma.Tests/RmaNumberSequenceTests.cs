@@ -41,7 +41,7 @@ public sealed class RmaNumberSequenceTests : IAsyncLifetime
             // A developer without the docker-compose database running should not see a red
             // build for a behaviour that is exercised correctly elsewhere. Set
             // RMA_TEST_CONNECTION to point at a real server to run these.
-            Assert.Skip($"PostgreSQL is not reachable: {ex.GetType().Name}: {ex.Message}");
+            LiveDatabase.Unavailable(ex);
         }
 
         _databaseName = $"rma_seq_test_{Guid.NewGuid():N}";
@@ -54,6 +54,7 @@ public sealed class RmaNumberSequenceTests : IAsyncLifetime
             // The name is generated above from a GUID, so there is nothing to inject.
             await using var command = create.CreateCommand();
             command.CommandText = $"CREATE DATABASE \"{_databaseName}\"";
+            command.CommandTimeout = LiveDatabase.DdlTimeoutSeconds;
             await command.ExecuteNonQueryAsync();
         }
     }
@@ -75,6 +76,7 @@ public sealed class RmaNumberSequenceTests : IAsyncLifetime
 
             await using var command = drop.CreateCommand();
             command.CommandText = $"DROP DATABASE IF EXISTS \"{_databaseName}\" WITH (FORCE)";
+            command.CommandTimeout = LiveDatabase.DdlTimeoutSeconds;
             await command.ExecuteNonQueryAsync();
         }
         catch (Exception)

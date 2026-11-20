@@ -6,6 +6,9 @@ using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Domain.Rules;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
@@ -80,7 +83,7 @@ public sealed class WebWizardTests : IAsyncLifetime
         }
         catch (Exception ex)
         {
-            Assert.Skip($"PostgreSQL is not reachable: {ex.GetType().Name}: {ex.Message}");
+            LiveDatabase.Unavailable(ex);
         }
 
         _databaseName = $"rma_web_test_{Guid.NewGuid():N}";
@@ -96,6 +99,7 @@ public sealed class WebWizardTests : IAsyncLifetime
             // The name comes from a GUID above, so there is nothing to inject here.
             await using var command = create.CreateCommand();
             command.CommandText = $"CREATE DATABASE \"{_databaseName}\"";
+            command.CommandTimeout = LiveDatabase.DdlTimeoutSeconds;
             await command.ExecuteNonQueryAsync();
         }
 
@@ -132,6 +136,7 @@ public sealed class WebWizardTests : IAsyncLifetime
 
             await using var command = drop.CreateCommand();
             command.CommandText = $"DROP DATABASE IF EXISTS \"{_databaseName}\" WITH (FORCE)";
+            command.CommandTimeout = LiveDatabase.DdlTimeoutSeconds;
             await command.ExecuteNonQueryAsync();
         }
         catch (NpgsqlException)
@@ -509,9 +514,14 @@ public sealed class WebWizardTests : IAsyncLifetime
 
         // Both candidates survive the redirect onto the chooser, so the posted choice is
         // genuinely informed and no return has been created for either account yet.
-        var chooserHtml = await startStep.Page.Content.ReadAsStringAsync(ct);
-        Assert.Contains("j.smith@example.com", chooserHtml, StringComparison.Ordinal);
-        Assert.Contains("am.obrien@example.com", chooserHtml, StringComparison.Ordinal);
+        // The wizard is anonymous, so the candidates are shown masked: enough for the customer to
+        // recognise their own account, never another customer's full contact details.
+        var chooserRaw = await startStep.Page.Content.ReadAsStringAsync(ct);
+        var chooserHtml = System.Net.WebUtility.HtmlDecode(chooserRaw);
+        Assert.DoesNotContain("j.smith@example.com", chooserHtml, StringComparison.Ordinal);
+        Assert.DoesNotContain("am.obrien@example.com", chooserHtml, StringComparison.Ordinal);
+        Assert.Contains("j•••@e•••.com", chooserHtml, StringComparison.Ordinal);
+        Assert.Contains("a•••@e•••.com", chooserHtml, StringComparison.Ordinal);
         Assert.Contains(EligibleSerial, chooserHtml, StringComparison.Ordinal);
 
         await using var db = CreateContext();
@@ -521,7 +531,7 @@ public sealed class WebWizardTests : IAsyncLifetime
         var chosenStep = await PostStepAsync(
             client,
             "/RmaWizard/ChooseCustomer",
-            TokenOf(chooserHtml),
+            TokenOf(chooserRaw),
             [
                 ("CustomerId", chosen.Id.ToString()),
                 ("Identifiers", EligibleSerial),
@@ -781,6 +791,33 @@ public sealed class WebWizardTests : IAsyncLifetime
             // The checked-in configuration carries a placeholder connection string, so without
             // this the host would start and then fail on its first query instead of at startup.
             builder.UseEnvironment("Testing");
+
+            // The seeded warranties and ship dates are fixed around 2026-03-01, so the policy
+            // outcome of each demo serial depends on the date. The host is pinned to a date the
+            // scenario serials were designed for; on the wall clock they age out of the return
+            // window and the paid-repair walk turns into a refusal.
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<TimeProvider>();
+                services.AddSingleton<TimeProvider>(new PinnedTimeProvider(PinnedNow));
+                services.RemoveAll<IClock>();
+                services.AddSingleton<IClock>(new PinnedClock(PinnedNow));
+            });
         }
+    }
+
+    /// <summary>The date the demo scenario serials (see CLAUDE notes) are valid on.</summary>
+    internal static readonly DateTimeOffset PinnedNow = new(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);
+
+    internal sealed class PinnedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    internal sealed class PinnedClock(DateTimeOffset now) : IClock
+    {
+        public DateTimeOffset UtcNow => now;
+
+        public DateOnly Today => DateOnly.FromDateTime(now.UtcDateTime);
     }
 }

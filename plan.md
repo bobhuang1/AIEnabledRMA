@@ -1,9 +1,21 @@
 # AIEnabledRMA — plan to finish the project
 
-Written 2026-11-14 from a code review of `main` (`e96156b`).
+Written 2026-11-14 from a code review of `main` (`e96156b`). Re-checked 2026-11-19 against `0fa065c`;
+progress against this plan is tracked in [progress.md](progress.md).
 
-**Baseline:** `dotnet test` gives 190 passed and 9 skipped. The 9 live-PostgreSQL tests skip when
+**Baseline (2026-11-14):** `dotnet test` gave 190 passed and 9 skipped. The 9 live-PostgreSQL tests skip when
 `RMA_TEST_CONNECTION` is unset.
+
+**Re-check (2026-11-19), three things the plan did not know:**
+- The build failed on the .NET 11 SDK (the only current SDK on the dev machine besides 9): the SDK adds a
+  Blazor hot-reload JS module to Debug web builds and this MVC app has no endpoint for it. Fixed in P0.
+- With a database, 9 live tests failed rather than skipped: `CREATE DATABASE` on the shared Docker
+  PostgreSQL takes about two minutes (cluster checkpoint on a slow volume), past Npgsql's 30 s timeout. Fixed
+  in P0 with a DDL timeout; local runs use a throwaway tmpfs container (see progress.md).
+- Two wizard tests had gone stale: one still expected unmasked emails on the chooser (masking landed in
+  `e96156b`), and the demo serials are fixed around 2026-03-01, so on the wall clock the paid-repair serial
+  has aged out of the 730-day window. The test host now runs on a pinned date. The live demo has the same
+  drift: see "Demo data ages" under §5 P11.
 
 ## 1. Where the project stands
 
@@ -247,6 +259,10 @@ about a week.
   no default DB password, an AI base URL over HTTPS).
 - Images pinned by digest, read-only root filesystem, healthchecks with a DB readiness probe separate from
   `/health`.
+- **Demo data ages** (added 2026-11-19): the seeder anchors every warranty on 2026-03-01, so the README's demo
+  serials change outcome as the wall clock moves (`AX2-0001-0005` is outside the window from about
+  2026-11-01). Add a `Demo:Today` override (development only) that the wizard and MCP read through
+  `IClock`/`TimeProvider`, or move the anchor relative to the seed date.
 
 ## 6. Order of work
 

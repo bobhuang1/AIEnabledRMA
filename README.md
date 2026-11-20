@@ -163,6 +163,12 @@ with no environment still goes green. The two live suites exist because concurre
 (sequence allocation) and persistence (every wizard step reads what it wrote through a real
 host) cannot be faked.
 
+Set `RMA_REQUIRE_LIVE_DB=1` to turn those skips into failures. CI does, and also fails the run if
+the test report shows any skipped test, so a green CI run always includes the database suites
+(`.github/workflows/ci.yml`). NuGet lock files (`packages.lock.json`) are committed and CI restores
+with `--locked-mode`; after changing a package version run `dotnet restore` locally and commit the
+lock-file diff.
+
 `WebWizardTests` boots the real web host against a throwaway database and walks the wizard
 end to end, including the paid-repair path that lands on the payment step and bills the
 per-product price.
@@ -289,8 +295,8 @@ and the sequence can never disagree.
 
 The bundled gateway (`FakePaymentGateway`) holds authorisations in memory, honours the
 immediate-versus-manual-capture split, and **accepts every positive amount** — the point is to
-exercise the payment plumbing, not simulate who gets approved. Resulting authorisations are
-exposed on the diagnostics endpoint. Replace the `IPaymentGateway` registration with a real
+exercise the payment plumbing, not simulate who gets approved. Its authorisations live only in
+process memory; there is no endpoint that lists them. Replace the `IPaymentGateway` registration with a real
 provider before taking money.
 
 ## Health

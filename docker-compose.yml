@@ -11,7 +11,9 @@ services:
       # Deterministic collation so trigram similarity is stable across machines.
       POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Loopback only: the default credentials are for local development and must not be
+      # reachable from the network.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - ./data/pgdata:/var/lib/postgresql/data
     healthcheck:

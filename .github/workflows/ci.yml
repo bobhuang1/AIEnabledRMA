@@ -1,0 +1,89 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege: the workflow only reads the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      # pgvector image so the vector-store suites run against the same extension as production.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: rmauser
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: rmadev
+          POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rmauser -d rmadev"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DOTNET_NOLOGO: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      RMA_TEST_CONNECTION: "Host=localhost;Port=5432;Database=postgres;Username=rmauser;Password=ci-only-password"
+      # Any live-database test that cannot reach the server fails instead of skipping.
+      RMA_REQUIRE_LIVE_DB: "1"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore (locked)
+        run: dotnet restore AIEnabledRma.slnx --locked-mode
+
+      - name: Vulnerable package audit
+        run: |
+          dotnet list AIEnabledRma.slnx package --vulnerable --include-transitive 2>&1 | tee vulnerable.txt
+          if grep -q -E "has the following vulnerable packages" vulnerable.txt; then
+            echo "::error::Vulnerable packages found"
+            exit 1
+          fi
+
+      - name: Build
+        run: dotnet build AIEnabledRma.slnx --no-restore -c Release
+
+      - name: Test
+        run: >-
+          dotnet test tests/AIEnabledRma.Tests/AIEnabledRma.Tests.csproj --no-build -c Release
+          --logger "trx;LogFileName=results.trx" --results-directory TestResults
+
+      - name: Fail on skipped tests
+        shell: bash
+        run: |
+          skipped=$(grep -o 'notExecuted="[0-9]*"' TestResults/results.trx | head -1 | grep -o '[0-9]*')
+          echo "Skipped tests: ${skipped:-0}"
+          if [ "${skipped:-0}" != "0" ]; then
+            echo "::error::${skipped} test(s) were skipped. CI must run every test."
+            exit 1
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results
+          path: TestResults

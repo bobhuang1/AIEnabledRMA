@@ -4,6 +4,10 @@
     <RootNamespace>AIEnabledRma.Web</RootNamespace>
     <AssemblyName>AIEnabledRma.Web</AssemblyName>
     <UserSecretsId>aienabledrma-web</UserSecretsId>
+    <!-- The .NET 11 SDK adds a Blazor hot-reload JS module to every Debug web build. This MVC app has
+         no endpoint for it, so the build fails with "scoped css bundles do not have matching endpoints".
+         The site does not use browser hot reload, so it is switched off. -->
+    <EnableHotReloadInRuntimeConfigDevFile>false</EnableHotReloadInRuntimeConfigDevFile>
   </PropertyGroup>
 
   <ItemGroup>
