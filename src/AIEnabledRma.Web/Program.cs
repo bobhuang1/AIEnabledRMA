@@ -40,7 +40,32 @@ builder.Services.AddSingleton(TimeProvider.System);
 // host) or when a demo deployment opts in explicitly. Anywhere else startup fails rather than
 // "authorising" real customers' payments against nothing (F6).
 var paymentOptions = builder.Configuration.GetSection(PaymentOptions.SectionName).Get<PaymentOptions>() ?? new PaymentOptions();
-if (builder.Environment.IsDevelopment()
+var useStripe = string.Equals(paymentOptions.Provider, "stripe", StringComparison.OrdinalIgnoreCase);
+if (useStripe)
+{
+    // Stripe (P9). A live key is accepted only in Production; everywhere else test-mode keys
+    // only, so a developer machine or a staging site can never move real money.
+    var stripe = builder.Configuration.GetSection(StripeOptions.SectionName).Get<StripeOptions>() ?? new StripeOptions();
+    if (string.IsNullOrWhiteSpace(stripe.SecretKey) || string.IsNullOrWhiteSpace(stripe.WebhookSecret))
+    {
+        throw new InvalidOperationException(
+            "Payments:Provider is 'stripe' but Payments:Stripe:SecretKey or WebhookSecret is missing. Supply them from the environment.");
+    }
+
+    if (!builder.Environment.IsProduction() && !stripe.SecretKey.StartsWith("sk_test_", StringComparison.Ordinal))
+    {
+        throw new InvalidOperationException(
+            $"Only Stripe test-mode keys (sk_test_...) are allowed in the '{builder.Environment.EnvironmentName}' environment.");
+    }
+
+    builder.Services.AddOptions<StripeOptions>().Bind(builder.Configuration.GetSection(StripeOptions.SectionName));
+    builder.Services.AddHttpClient<IPaymentGateway, StripePaymentGateway>(client =>
+    {
+        client.BaseAddress = new Uri(stripe.BaseUrl);
+        client.Timeout = TimeSpan.FromSeconds(30);
+    });
+}
+else if (builder.Environment.IsDevelopment()
     || builder.Environment.IsEnvironment("Testing")
     || paymentOptions.AllowFakeGateway)
 {
@@ -140,6 +165,53 @@ app.UseAuthorization();
 app.UseAntiforgery();
 
 app.MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}");
+
+// Stripe webhook: signature-verified, then a payment the customer abandoned or that failed after
+// the wizard is filed for human review. Registered only when Stripe is the provider.
+if (useStripe)
+{
+    app.MapPost("/payments/stripe/webhook", async (
+        HttpContext context,
+        IOptions<StripeOptions> stripe,
+        AIEnabledRma.Domain.Operations.IReviewQueue reviews,
+        TimeProvider time,
+        ILogger<StripeOptions> log) =>
+    {
+        using var reader = new StreamReader(context.Request.Body);
+        var payload = await reader.ReadToEndAsync(context.RequestAborted);
+        if (payload.Length > 512 * 1024
+            || !StripeWebhookSignature.IsValid(
+                payload,
+                context.Request.Headers["Stripe-Signature"],
+                stripe.Value.WebhookSecret!,
+                time.GetUtcNow(),
+                stripe.Value.WebhookToleranceSeconds))
+        {
+            return Results.BadRequest();
+        }
+
+        using var json = System.Text.Json.JsonDocument.Parse(payload);
+        var type = json.RootElement.GetProperty("type").GetString();
+        if (type is "payment_intent.payment_failed" or "payment_intent.canceled")
+        {
+            var intent = json.RootElement.GetProperty("data").GetProperty("object");
+            var rma = intent.TryGetProperty("metadata", out var meta) && meta.TryGetProperty("rma_number", out var n) ? n.GetString() : null;
+            await reviews.AddAsync(
+                new AIEnabledRma.Domain.Operations.ReviewItem
+                {
+                    Id = Guid.NewGuid(),
+                    CreatedAtUtc = time.GetUtcNow(),
+                    Source = AIEnabledRma.Domain.Operations.ReviewSources.PaymentFailed,
+                    Reason = "Stripe:" + type,
+                    Explanation = $"PaymentIntent {intent.GetProperty("id").GetString()} for {rma ?? "an unknown return"}.",
+                },
+                context.RequestAborted);
+        }
+
+        log.LogInformation("Stripe webhook {Type} accepted.", type);
+        return Results.Ok();
+    });
+}
 
 // Liveness: says only that the process answers. Nothing about the deployment is disclosed to an
 // anonymous caller (F7).

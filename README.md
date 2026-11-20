@@ -390,6 +390,23 @@ concurrency: two requests read the same maximum and one collides. `RmaNumberSequ
 allocation, migration of an existing database, and post-seed realignment so seeded demo rows
 and the sequence can never disagree.
 
+## Payments (Stripe)
+
+`Payments:Provider=stripe` switches to `StripePaymentGateway` (PaymentIntents over the REST API):
+
+- repair fees are authorised with `capture_method=manual` and captured by an operator after inspection
+  (`/Operator`), or voided; immediate charges use automatic capture;
+- every call carries an idempotency key derived from the RMA and the operation, so a retry never charges twice;
+- a payment that needs 3-D Secure is cancelled and sent to human review (the wizard has no Stripe.js step yet);
+- `/payments/stripe/webhook` verifies the `Stripe-Signature` HMAC with a five-minute replay window and files
+  failed or cancelled intents as review items;
+- `Payments:Stripe:SecretKey` and `WebhookSecret` come from the environment. Outside Production only test-mode
+  keys (`sk_test_...`) are accepted.
+
+The payment page still takes a PaymentMethod id in a text field (for Stripe test mode, `pm_card_visa`).
+Collecting card details with Stripe Elements needs the owner's Stripe account (decision D5) and a CSP change
+for `js.stripe.com`.
+
 ## Payments (development)
 
 The bundled gateway (`FakePaymentGateway`) holds authorisations in memory, honours the

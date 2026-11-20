@@ -35,6 +35,9 @@ public sealed class PaymentOptions
 {
     public const string SectionName = "Payments";
 
+    /// <summary><c>fake</c> (default) or <c>stripe</c> (plan D5).</summary>
+    public string Provider { get; set; } = "fake";
+
     /// <summary>
     /// Allows the accept-all fake gateway outside Development and Testing. Only for a demo
     /// deployment that is understood to take no real money.

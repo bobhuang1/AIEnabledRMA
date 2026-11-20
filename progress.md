@@ -27,7 +27,7 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 | 4 | P5 Vector store + chunking | Done (hashing embedder) | Real embedding model is D4 (config only). Token sizes are estimated (4/3 per word), not tokenizer-exact. |
 | 5 | P6 CRM case ingestion | Done except real import: **blocked on D1** | Tenant, app registration and field list are the owner's; everything else runs on synthetic data. |
 | 5 | P7 Retrieval/triage eval | Done | Real-model run is wired (`eval.yml`) but needs a model endpoint and secrets from the owner. |
-| 6 | P9 Real payment gateway | Not started | |
+| 6 | P9 Real payment gateway | Done except account setup: **blocked on D5** | No Stripe account, keys or Elements card form yet; everything else is tested against a fake Stripe API. |
 | 6 | P10 Operator view | Done | OIDC provider (D2) is configuration; a dev sign-in exists for Development/Testing only. |
 | 6 | P11 Production pack | Not started | |
 
@@ -131,3 +131,11 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
   sign-in; receive + capture with a refused early capture, three audit rows, status InRepair, fake-gateway
   capture; a duplicate-serial start filed as a review item, shown on the dashboard and resolved) and
   `WebStartupTests` (dev sign-in refused in Production); full suite 309 passed, 1 skipped (symlink, Windows).
+- **P9 landed.** `StripePaymentGateway` (PaymentIntents via REST: manual capture for repair fees, idempotency
+  keys per RMA and operation, 3-D Secure cancelled and sent to human review, zero-decimal currencies),
+  `StripeWebhookSignature` and `/payments/stripe/webhook` (HMAC + replay window; failed/cancelled intents become
+  review items), `Payments:Provider` switch with test-keys-only outside Production. Capture/void are driven
+  from the P10 operator view. Evidence: `StripePaymentGatewayTests` (11: form fields and idempotency key, repeat
+  authorisation reuses the key, 3-D Secure cancel, capture/void endpoints, error message, minor units,
+  webhook signature valid/tampered/wrong secret/stale/missing, live key refused in Development, forged webhook
+  400 on a Stripe-configured host).

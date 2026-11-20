@@ -245,6 +245,10 @@ about a week.
 
 ### P9. Real payment gateway (M) — D5
 
+> Status 2026-11-20: gateway, idempotency, manual capture, signed webhook and operator capture/void are done
+> and tested against a fake Stripe API. **Blocked on D5** for anything real: the owner's Stripe account, test
+> keys, the webhook endpoint registration, and the Stripe Elements card form on the payment page.
+
 - A Stripe `IPaymentGateway`:
   - manual capture to match "authorised now, captured on inspection";
   - idempotency keys per request;
