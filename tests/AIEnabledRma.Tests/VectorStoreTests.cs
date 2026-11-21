@@ -4,6 +4,7 @@ using AIEnabledRma.Domain.Knowledge;
 using AIEnabledRma.Rag;
 using AIEnabledRma.Rag.Knowledge;
 using AIEnabledRma.Rag.Store;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -265,6 +266,76 @@ public sealed class VectorStoreLiveTests : IAsyncLifetime
             Ct);
 
         Assert.Contains(result.Articles, a => a.Id == "kb-0004");
+    }
+
+    [Fact]
+    public async Task An_unreachable_embedding_model_is_named_when_retrieval_falls_back()
+    {
+        // The store is built and filled by the same model the retriever is given, so the only failure
+        // this test can produce is the embedding call itself: the one an operator gets when the server
+        // is down or the model was never pulled.
+        var model = new HashingEmbeddingModel();
+        await (await StoreAsync(model)).IngestAsync(
+            KbKinds.Article, ArticleDocuments.From(ShippedArticles()), Ct);
+
+        var offline = new PgVectorKnowledgeStore(_dataSource!, new OfflineEmbeddingModel(model));
+        var ragOptions = Options.Create(new RagOptions());
+        var loaded = ShippedArticles();
+        var lexical = new KnowledgeIndexRetriever(new KnowledgeIndexHolder
+        {
+            Current = new KnowledgeIndex(loaded, Options.Create(new RagRetrievalOptions()), ragOptions),
+        });
+        var logs = new RecordingLogger<HybridKnowledgeRetriever>();
+        var hybrid = new HybridKnowledgeRetriever(
+            offline,
+            lexical,
+            Options.Create(new VectorStoreOptions()),
+            ragOptions,
+            logs);
+
+        var result = await hybrid.RetrieveAsync(
+            new KnowledgeRetrievalQuery { Query = "screen stays black", ScopeTokens = new HashSet<string>(), TopK = 3 },
+            Ct);
+
+        // The fallback still answers, and it says which model was missing and what it did.
+        Assert.Contains(result.Articles, a => a.Id == "kb-0004");
+        var warning = Assert.Single(logs.Warnings);
+        Assert.Contains("fell back to the lexical index", warning, StringComparison.Ordinal);
+        Assert.Contains(model.Name, warning, StringComparison.Ordinal);
+        Assert.Contains("docker compose --profile ollama", warning, StringComparison.Ordinal);
+    }
+
+    /// <summary>Answers like the real model (same name and dimensions) but is never reachable.</summary>
+    private sealed class OfflineEmbeddingModel(IEmbeddingModel inner) : IEmbeddingModel
+    {
+        public string Name => inner.Name;
+
+        public int Dimensions => inner.Dimensions;
+
+        public Task<IReadOnlyList<float[]>> EmbedAsync(IReadOnlyList<string> texts, CancellationToken cancellationToken) =>
+            throw new HttpRequestException("Connection refused (localhost:11434)");
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Warnings { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+            {
+                Warnings.Add(formatter(state, exception));
+            }
+        }
     }
 
     private async Task<int> ScalarAsync(string sql)

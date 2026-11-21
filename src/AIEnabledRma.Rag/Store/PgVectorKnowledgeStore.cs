@@ -402,7 +402,19 @@ public sealed partial class PgVectorKnowledgeStore(NpgsqlDataSource dataSource, 
         // A query vector from another model would be compared with stored vectors it has nothing in
         // common with (or of another size): refuse instead of returning confident nonsense.
         await VerifyModelAsync(connection, cancellationToken);
-        var vector = (await embedder.EmbedAsync([query], cancellationToken))[0];
+
+        // The model is the one the store was built with, so a model mismatch has already been
+        // refused above; a failure here is the server itself, and it gets its own type so the
+        // retriever can name it when it falls back instead of reporting "the store failed".
+        float[] vector;
+        try
+        {
+            vector = (await embedder.EmbedAsync([query], cancellationToken))[0];
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new EmbeddingUnavailableException(embedder.Name, ex);
+        }
 
         const string scoped = """
             FROM kb_chunks c

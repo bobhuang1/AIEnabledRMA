@@ -63,6 +63,32 @@ services:
       retries: 40
     restart: unless-stopped
 
+  # The local embedding model (D4). Behind a profile because the lexical demo and the suite do not
+  # need it: `docker compose up` stays database and identity provider. It publishes the default
+  # Embeddings:BaseUrl (http://localhost:11434), and the model is pulled once into the volume:
+  #
+  #   docker compose --profile ollama up -d ollama
+  #   docker compose exec ollama ollama pull nomic-embed-text
+  #
+  # The same image and digest as the production pack, so a vector made here is made by the model the
+  # deployment runs.
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:0.12.3@sha256:c622a7adec67cf5bd7fe1802b7e26aa583a955a54e91d132889301f50c3e0bd0
+    container_name: aienabledrma-ollama
+    ports:
+      # Loopback only: an embedding server with no authentication is a local development tool.
+      - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      # `ollama list` answers once the server does; the image has no curl.
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
   # The remote transport, under a profile so `docker compose up` still brings up only the database
   # and the identity provider. Built from the same Dockerfile as the stdio server; the image is the
   # ASP.NET runtime because this mode listens.
@@ -99,3 +125,7 @@ services:
     ports:
       - "127.0.0.1:${MCP_HTTP_PORT:-5080}:8080"
     restart: unless-stopped
+
+volumes:
+  # The pulled embedding model, kept across `docker compose down`.
+  ollama:

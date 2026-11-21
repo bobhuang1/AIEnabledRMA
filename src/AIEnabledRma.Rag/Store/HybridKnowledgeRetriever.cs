@@ -58,6 +58,17 @@ public sealed class HybridKnowledgeRetriever(
         {
             hits = await store.SearchAsync(query.Query, allowed, options.Value.ChunkCandidates, cancellationToken);
         }
+        catch (EmbeddingUnavailableException ex)
+        {
+            // An outage with a name and a next step. An operator who enabled hybrid retrieval and
+            // never started the embedding server otherwise sees answers that look hybrid and are
+            // lexical, with nothing to explain the difference.
+            logger.LogWarning(
+                ex,
+                "The embedding model {Model} is unreachable, so retrieval fell back to the lexical index; answers are lexical-only until it answers. Start it with `docker compose --profile ollama up -d ollama` and pull the model with `docker compose exec ollama ollama pull nomic-embed-text`, or set Embeddings:Provider=hashing for an offline run.",
+                ex.ModelName);
+            return await fallback.RetrieveAsync(query, cancellationToken);
+        }
         catch (EmbeddingModelMismatchException ex)
         {
             // Configuration error, not an outage: the store was built with another model.

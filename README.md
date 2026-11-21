@@ -343,6 +343,20 @@ The default is a **local Ollama model**, so article and case text never leave th
 ollama pull nomic-embed-text      # once; or: ollama pull bge-m3
 ```
 
+On a machine that uses the development compose file, the same server runs in a container behind the
+`ollama` profile instead of on the host. `docker compose up` still starts only the database and the
+identity provider; the profile publishes the server on `http://localhost:11434`, which is where the
+default `Embeddings:BaseUrl` already points:
+
+```bash
+docker compose --profile ollama up -d ollama
+docker compose exec ollama ollama pull nomic-embed-text   # once per volume
+```
+
+When hybrid retrieval is on (`Rag:VectorStore:Enabled=true`) and that server does not answer, each
+query logs a warning naming the model and saying retrieval fell back to the lexical index — the answer
+is lexical-only until the server answers, rather than failing or pretending the store was consulted.
+
 | Setting | Ollama (default) | Hosted / OpenAI-compatible | Offline tests |
 | --- | --- | --- | --- |
 | `Embeddings:Provider` | `ollama` | `openai-compatible` | `hashing` |
