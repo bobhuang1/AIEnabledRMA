@@ -84,17 +84,18 @@ public sealed class ProductionConfigurationTests
     }
 
     /// <summary>
-    /// The tool server's check is registered with the services both transports share, so this
-    /// registers those services in a host and starts it. Calling the check directly would prove it
-    /// works and say nothing about whether anything runs it on the stdio transport.
+    /// The production rule lives in the registration both transports call, so this asserts it
+    /// there: registering the shared services in a Production host throws, before either transport
+    /// exists. That is the property a hosted service could not give — it would move the same
+    /// decision to StartAsync, where a transport that never starts would never check.
     /// </summary>
     [Fact]
-    public async Task The_tool_server_refuses_a_development_password_in_production()
+    public void The_tool_server_refuses_a_development_password_in_production()
     {
-        using var host = ToolServerHost("Production");
+        var builder = ToolServerBuilder("Production");
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => host.StartAsync(TestContext.Current.CancellationToken));
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => builder.Services.AddRmaMcpServices(builder.Configuration, builder.Environment));
 
         Assert.Contains("unsafe configuration", exception.Message, StringComparison.Ordinal);
         Assert.Contains("password", exception.Message, StringComparison.Ordinal);
@@ -102,16 +103,20 @@ public sealed class ProductionConfigurationTests
 
     /// <summary>
     /// The same credentials in a Testing host are accepted: the rule is about the environment the
-    /// process runs in, not about the password on its own, and a check that ignored the environment
+    /// process runs in, not about the password on its own, and a rule that ignored the environment
     /// would break every test host in this repository.
     /// </summary>
     [Fact]
-    public async Task The_tool_server_accepts_a_development_password_in_testing()
+    public void The_tool_server_accepts_a_development_password_in_testing()
     {
-        using var host = ToolServerHost("Testing");
+        var builder = ToolServerBuilder("Testing");
 
-        await host.StartAsync(TestContext.Current.CancellationToken);
-        await host.StopAsync(TestContext.Current.CancellationToken);
+        builder.Services.AddRmaMcpServices(builder.Configuration, builder.Environment);
+
+        // Registered, not merely unrefused: the host both transports build is still constructible.
+        using var host = builder.Build();
+
+        Assert.NotNull(host);
     }
 
     /// <summary>
@@ -144,8 +149,8 @@ public sealed class ProductionConfigurationTests
         Assert.True(response.IsSuccessStatusCode);
     }
 
-    /// <summary>A tool-server host built from the shared services and started, as both transports start it.</summary>
-    private static IHost ToolServerHost(string environment)
+    /// <summary>A tool-server builder with the environment under test and the development connection string.</summary>
+    private static HostApplicationBuilder ToolServerBuilder(string environment)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
         {
@@ -160,9 +165,7 @@ public sealed class ProductionConfigurationTests
             ["ConnectionStrings:Rma"] = DevelopmentConnection,
         });
 
-        builder.Services.AddRmaMcpServices(builder.Configuration);
-
-        return builder.Build();
+        return builder;
     }
 
     /// <summary>

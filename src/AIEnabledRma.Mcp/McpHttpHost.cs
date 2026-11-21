@@ -35,7 +35,7 @@ public static class McpHttpHost
         http.EnsureUsable(builder.Environment.IsDevelopment());
 
         builder.Services.AddSingleton(http);
-        builder.Services.AddRmaMcpServices(builder.Configuration);
+        builder.Services.AddRmaMcpServices(builder.Configuration, builder.Environment);
         builder.Services.AddMcpServer()
             .WithHttpTransport()
             .WithToolsFromAssembly();

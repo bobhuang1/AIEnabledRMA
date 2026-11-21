@@ -15,7 +15,7 @@ else
     // makes an MCP host fail to parse the first response frame.
     builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 
-    builder.Services.AddRmaMcpServices(builder.Configuration);
+    builder.Services.AddRmaMcpServices(builder.Configuration, builder.Environment);
     builder.Services.AddMcpServer()
         .WithStdioServerTransport()
         .WithToolsFromAssembly();

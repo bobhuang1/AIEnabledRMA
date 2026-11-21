@@ -14,18 +14,32 @@ namespace AIEnabledRma.Mcp;
 /// </summary>
 public static class McpServices
 {
+    /// <remarks>
+    /// The Production configuration rule runs here, at registration, and takes the environment as a
+    /// parameter for the same reason the tools are registered here: the stdio entry point and the HTTP
+    /// host each build their own Program, and a check added to one of them is a check the other does
+    /// not have. A host left on a development database password refuses to be constructed at all,
+    /// rather than starting and failing at its first query.
+    /// </remarks>
     public static IServiceCollection AddRmaMcpServices(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IHostEnvironment environment)
     {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(environment);
+
+        // The callers know the environment before the services exist, so the refusal happens while
+        // the host is being composed and cannot be skipped by a transport that forgets to start a
+        // hosted service.
+        if (environment.IsProduction())
+        {
+            ProductionConfiguration.EnsureSafe(configuration);
+        }
+
         services.AddRmaDbContext(configuration);
         services.AddRmaData(configuration);
-
-        // The Production check is part of the shared services for the same reason the tools are: the
-        // stdio host and the HTTP host each build their own Program, and a check added to one of them
-        // is a check the other does not have. A hosted service, so it runs when the host starts rather
-        // than only when someone remembers to call it.
-        services.AddHostedService<ProductionConfigurationStartupCheck>();
 
         // Every tool call is audited and counted against the caller's per-minute budget at one
         // choke point (the tools/call filter), so a tool added later is covered without being
