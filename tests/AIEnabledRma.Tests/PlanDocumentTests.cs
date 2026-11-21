@@ -32,6 +32,15 @@ public sealed class PlanDocumentTests
         return directory!.FullName;
     }
 
+    private static bool Exists(string root, string pointer)
+    {
+        var path = Path.Combine(
+            root,
+            pointer.Replace('/', Path.DirectorySeparatorChar).TrimEnd(Path.DirectorySeparatorChar));
+
+        return File.Exists(path) || Directory.Exists(path);
+    }
+
     [Fact]
     public void Every_file_the_decision_index_points_at_exists()
     {
@@ -61,8 +70,9 @@ public sealed class PlanDocumentTests
 
         Assert.NotEmpty(pointers);
 
+        // A pointer may name a directory (`knowledge-base/`), so existence is either kind of entry.
         var missing = pointers
-            .Where(pointer => !File.Exists(Path.Combine(root, pointer.Replace('/', Path.DirectorySeparatorChar))))
+            .Where(pointer => !Exists(root, pointer))
             .ToList();
 
         Assert.True(
