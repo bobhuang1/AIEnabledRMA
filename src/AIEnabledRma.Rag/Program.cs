@@ -1,8 +1,41 @@
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Configuration;
 using AIEnabledRma.Rag;
 using AIEnabledRma.Rag.Knowledge;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// The same rule the web and tool-server hosts apply: a Production deployment left on a development
+// database password starts cleanly and fails at the first query, so it refuses to start instead.
+// Checked only when a database is configured - a lexical-only RAG host never opens the store, which
+// is how the production compose file runs it, and demanding a credential it does not use would turn
+// a valid deployment into a crash loop.
+if (builder.Environment.IsProduction())
+{
+    var connection = builder.Configuration.GetConnectionString("Rma");
+
+    if (!string.IsNullOrWhiteSpace(connection))
+    {
+        NpgsqlConnectionStringBuilder parsed;
+
+        try
+        {
+            parsed = new NpgsqlConnectionStringBuilder(connection);
+        }
+        catch (ArgumentException)
+        {
+            throw ProductionConfigurationGuard.Refusal(
+                ProductionDatabaseCredentials.MalformedConnectionProblem);
+        }
+
+        if (ProductionDatabaseCredentials.IsKnownDefault(parsed.Password))
+        {
+            throw ProductionConfigurationGuard.Refusal(
+                ProductionDatabaseCredentials.DefaultPasswordProblem);
+        }
+    }
+}
 
 builder.Services.AddRag(builder.Configuration);
 

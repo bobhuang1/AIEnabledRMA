@@ -1,3 +1,4 @@
+using AIEnabledRma.Domain.Configuration;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 
@@ -10,16 +11,6 @@ namespace AIEnabledRma.Data;
 /// </summary>
 public static class ProductionConfiguration
 {
-    /// <summary>
-    /// Real passwords that appear in this repository's development and CI settings. The checked-in
-    /// <c>placeholder</c> is not one: it never authenticates, so a host left on it fails at its first
-    /// query, and the owner's Production boot tests start on it deliberately.
-    /// </summary>
-    private static readonly HashSet<string> KnownDefaultPasswords = new(StringComparer.Ordinal)
-    {
-        "rmapassword", "postgres", "password", "ci-only-password", "testonly", "changeme",
-    };
-
     public static IReadOnlyList<string> Problems(IConfiguration configuration, bool checkOperatorSignIn = false)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -35,14 +26,16 @@ public static class ProductionConfiguration
             try
             {
                 var builder = new NpgsqlConnectionStringBuilder(connection);
-                if (KnownDefaultPasswords.Contains(builder.Password ?? string.Empty))
+                // The list is shared with the tool server and the RAG host, which apply the same
+                // rule from the same place instead of carrying their own copy of it.
+                if (ProductionDatabaseCredentials.IsKnownDefault(builder.Password))
                 {
-                    problems.Add("ConnectionStrings:Rma uses a default or empty password.");
+                    problems.Add(ProductionDatabaseCredentials.DefaultPasswordProblem);
                 }
             }
             catch (ArgumentException)
             {
-                problems.Add("ConnectionStrings:Rma is not a valid PostgreSQL connection string.");
+                problems.Add(ProductionDatabaseCredentials.MalformedConnectionProblem);
             }
         }
 
@@ -65,8 +58,7 @@ public static class ProductionConfiguration
         var problems = Problems(configuration, checkOperatorSignIn);
         if (problems.Count > 0)
         {
-            throw new InvalidOperationException(
-                "Refusing to start in Production with an unsafe configuration:\n  - " + string.Join("\n  - ", problems));
+            throw ProductionConfigurationGuard.Refusal(problems.ToArray());
         }
     }
 

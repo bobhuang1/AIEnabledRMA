@@ -49,6 +49,11 @@ public sealed class McpHttpTransportTests
     {
         List<string> settings =
         [
+            // The direct host builder starts in Production, where the shared startup check would
+            // refuse the committed development password before a single request reached the
+            // transport. The production rule is asserted in ProductionConfigurationTests; what these
+            // cases measure is the pipeline, so the host runs where a developer runs it.
+            "--environment=Development",
             $"--{McpHttpOptions.SectionName}:Issuer={Issuer}",
             $"--{McpHttpOptions.SectionName}:Audience={Audience}",
             $"--{McpHttpOptions.SectionName}:RequiredScope={ReadScope}",

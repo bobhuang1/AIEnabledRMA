@@ -1,7 +1,10 @@
 using AIEnabledRma.Data;
+using AIEnabledRma.Mcp;
+using AIEnabledRma.Rag;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 
 namespace AIEnabledRma.Tests;
 
@@ -12,6 +15,8 @@ public sealed class ProductionConfigurationTests
         new ConfigurationBuilder().AddInMemoryCollection(values.Select(v => new KeyValuePair<string, string?>(v.Key, v.Value))).Build();
 
     private const string SafeConnection = "Host=db;Database=rmaprod;Username=rma_app;Password=Very-Long-Synthetic-Password-123";
+
+    private const string DevelopmentConnection = "Host=localhost;Database=rmadev;Username=rmauser;Password=rmapassword";
 
     [Fact]
     public void A_safe_configuration_has_no_problems()
@@ -76,6 +81,118 @@ public sealed class ProductionConfigurationTests
 
         Assert.Contains("unsafe configuration", ex.ToString(), StringComparison.Ordinal);
         Assert.Contains("password", ex.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The tool server's check is registered with the services both transports share, so this
+    /// registers those services in a host and starts it. Calling the check directly would prove it
+    /// works and say nothing about whether anything runs it on the stdio transport.
+    /// </summary>
+    [Fact]
+    public async Task The_tool_server_refuses_a_development_password_in_production()
+    {
+        using var host = ToolServerHost("Production");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => host.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("unsafe configuration", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("password", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The same credentials in a Testing host are accepted: the rule is about the environment the
+    /// process runs in, not about the password on its own, and a check that ignored the environment
+    /// would break every test host in this repository.
+    /// </summary>
+    [Fact]
+    public async Task The_tool_server_accepts_a_development_password_in_testing()
+    {
+        using var host = ToolServerHost("Testing");
+
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await host.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// The RAG host applies the same rule from its entry point. It boots the real host rather than a
+    /// test double, because the check sits in the top-level statements where a direct test cannot
+    /// reach it.
+    /// </summary>
+    [Fact]
+    public void The_rag_host_refuses_a_development_password_in_production()
+    {
+        using var factory = new RagHostFactory("Production");
+
+        var exception = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        Assert.Contains("unsafe configuration", exception.ToString(), StringComparison.Ordinal);
+        Assert.Contains("password", exception.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_rag_host_accepts_a_development_password_in_testing()
+    {
+        using var factory = new RagHostFactory("Testing");
+        using var client = factory.CreateClient();
+
+        using var response = await client.GetAsync(
+            "/health",
+            TestContext.Current.CancellationToken);
+
+        // A host that came up answers its liveness probe; a refused configuration never listens.
+        Assert.True(response.IsSuccessStatusCode);
+    }
+
+    /// <summary>A tool-server host built from the shared services and started, as both transports start it.</summary>
+    private static IHost ToolServerHost(string environment)
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            EnvironmentName = environment,
+            ContentRootPath = AppContext.BaseDirectory,
+        });
+
+        // Added after the host's own sources, so the committed appsettings cannot mask the value the
+        // case is about.
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:Rma"] = DevelopmentConnection,
+        });
+
+        builder.Services.AddRmaMcpServices(builder.Configuration);
+
+        return builder.Build();
+    }
+
+    /// <summary>
+    /// The real RAG entry point on the corpus the checkout ships, configured with the development
+    /// connection string: what the case is about is what the host does with it.
+    /// </summary>
+    private sealed class RagHostFactory(string environment) : WebApplicationFactory<global::RagAppAnchor>
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment(environment);
+            builder.UseSetting("ConnectionStrings:Rma", DevelopmentConnection);
+            builder.UseSetting(RagAdminGate.ApiKeyConfigurationKey, "production-config-test-key");
+            builder.UseSetting("Rag:KnowledgeBasePath", KnowledgeBasePath());
+        }
+
+        private static string KnowledgeBasePath()
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+            while (directory is not null
+                   && !Directory.Exists(Path.Combine(directory.FullName, "knowledge-base")))
+            {
+                directory = directory.Parent;
+            }
+
+            return Path.Combine(
+                directory?.FullName ?? Directory.GetCurrentDirectory(),
+                "knowledge-base");
+        }
     }
 
     private sealed class Factory<T>(string environment, params (string Key, string Value)[] settings) : WebApplicationFactory<T>

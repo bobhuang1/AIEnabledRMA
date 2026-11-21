@@ -21,6 +21,12 @@ public static class McpServices
         services.AddRmaDbContext(configuration);
         services.AddRmaData(configuration);
 
+        // The Production check is part of the shared services for the same reason the tools are: the
+        // stdio host and the HTTP host each build their own Program, and a check added to one of them
+        // is a check the other does not have. A hosted service, so it runs when the host starts rather
+        // than only when someone remembers to call it.
+        services.AddHostedService<ProductionConfigurationStartupCheck>();
+
         // Every tool call is audited and counted against the caller's per-minute budget at one
         // choke point (the tools/call filter), so a tool added later is covered without being
         // wrapped. The customer tools additionally cap customer lookups per caller per day.
