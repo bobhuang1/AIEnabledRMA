@@ -26,6 +26,20 @@
             "access.token.claim": "true",
             "introspection.token.claim": "true"
           }
+        },
+        {
+          "name": "preferred_username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "username",
+            "claim.name": "preferred_username",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
         }
       ]
     },
@@ -76,6 +90,31 @@
       ]
     },
     {
+      "name": "operator-roles",
+      "description": "Flattens realm roles into the flat 'roles' claim the operator host reads. Keycloak's own role claim is nested under realm_access, so without this a correct sign-in is denied every page.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm roles as roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "roles",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
       "name": "audience-wrong",
       "description": "Adds an audience the tool server does not serve, so the gate can present a correctly signed token that was minted for something else.",
       "protocol": "openid-connect",
@@ -99,7 +138,40 @@
       ]
     }
   ],
+  "roles": {
+    "realm": [
+      {
+        "name": "rma:operator",
+        "description": "May use the operator back office: human review, receive/inspect/capture, knowledge-base review. Granted to a person, never to a client.",
+        "composite": false,
+        "clientRole": false
+      }
+    ]
+  },
   "clients": [
+    {
+      "clientId": "rma-operator",
+      "name": "RMA operator back office (confidential)",
+      "description": "The web host's OperatorAuth client. Direct grants let scripts/verify-auth.sh assert the role claim; browsers use the code flow. Loopback-only realm, so the secret is committed.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "rma-operator-secret",
+      "serviceAccountsEnabled": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": [
+        "http://localhost:5000/Operator/signin-oidc"
+      ],
+      "webOrigins": [
+        "http://localhost:5000"
+      ],
+      "defaultClientScopes": [
+        "basic",
+        "operator-roles"
+      ]
+    },
     {
       "clientId": "mcp-agent",
       "name": "MCP agent (service account)",
@@ -167,6 +239,24 @@
     }
   ],
   "users": [
+    {
+      "username": "operator-demo",
+      "enabled": true,
+      "email": "operator-demo@example.com",
+      "emailVerified": true,
+      "firstName": "Operator",
+      "lastName": "Demo",
+      "realmRoles": [
+        "rma:operator"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "operator-demo",
+          "temporary": false
+        }
+      ]
+    },
     {
       "username": "browser-demo",
       "enabled": true,

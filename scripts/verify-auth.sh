@@ -264,6 +264,7 @@ admin_get() {
 admin_get clients > "$WORK/clients.json"
 admin_get client-scopes > "$WORK/scopes.json"
 admin_get 'users?username=browser-demo&exact=true' > "$WORK/users.json"
+admin_get 'users?username=operator-demo&exact=true' > "$WORK/operator.json"
 
 BROWSER_USER_ID=$("$PY" -c '
 import json, sys
@@ -277,20 +278,33 @@ else
     printf '[]' > "$WORK/credentials.json"
 fi
 
+# The operator's realm-role mapping, read from the admin API rather than from the realm file: this is
+# what the import actually produced, which is the only thing the token claim can follow.
+OPERATOR_USER_ID=$("$PY" -c 'import json,sys; users=json.load(open(sys.argv[1], encoding="utf-8")); print(users[0]["id"] if users else "")' "$WORK/operator.json" | tr -d '\r')
+
+if [ -n "$OPERATOR_USER_ID" ]; then
+    admin_get "users/$OPERATOR_USER_ID/role-mappings/realm" > "$WORK/operator-roles.json"
+else
+    printf '[]' > "$WORK/operator-roles.json"
+fi
+
 # Each row is name, expected and actual, so one table drives the same `check` the rest of the file
 # uses. Reading it through process substitution keeps the failure counter in this shell.
 realm_shape() {
-    "$PY" - "$WORK/clients.json" "$WORK/scopes.json" "$WORK/users.json" "$WORK/credentials.json" <<'PYTHON'
+    "$PY" - "$WORK/clients.json" "$WORK/scopes.json" "$WORK/users.json" "$WORK/credentials.json" \
+        "$WORK/operator.json" "$WORK/operator-roles.json" <<'PYTHON'
 import json, sys
 
 # LF on every platform: a table read by bash must not carry a carriage return into the comparison.
 sys.stdout.reconfigure(newline=chr(10))
 
-clients_path, scopes_path, users_path, credentials_path = sys.argv[1:5]
+clients_path, scopes_path, users_path, credentials_path, operator_path, operator_roles_path = sys.argv[1:7]
 clients = {c["clientId"]: c for c in json.load(open(clients_path, encoding="utf-8"))}
 scopes = {s["name"]: s for s in json.load(open(scopes_path, encoding="utf-8"))}
 users = json.load(open(users_path, encoding="utf-8"))
 credentials = json.load(open(credentials_path, encoding="utf-8"))
+operator = (json.load(open(operator_path, encoding="utf-8")) or [{}])[0]
+operator_roles = json.load(open(operator_roles_path, encoding="utf-8"))
 
 
 def row(name, expected, actual):
@@ -331,12 +345,46 @@ row(
 basic_scope = scopes.get("basic", {})
 row("basic adds the subject", "oidc-sub-mapper", mapper("basic", "oidc-sub-mapper").get("protocolMapper", ""))
 row("basic is not a token scope", "false", basic_scope.get("attributes", {}).get("include.in.token.scope", ""))
+row(
+    "basic adds the user name",
+    "oidc-usermodel-property-mapper",
+    mapper("basic", "oidc-usermodel-property-mapper").get("protocolMapper", ""),
+)
 
 demo = users[0] if users else {}
 row("browser-demo is present", "yes", "yes" if demo.get("username") == "browser-demo" else "no")
 row("browser-demo is enabled", "yes", "yes" if demo.get("enabled") else "no")
 row("browser-demo has no required actions", "", ", ".join(demo.get("requiredActions") or []))
 row("browser-demo has a password", "password", ", ".join(c.get("type", "") for c in credentials))
+
+# The operator back office (P10). The host's policy reads a flat 'roles' claim, and Keycloak's
+# default role claim is nested under realm_access, so the client scope's mapper is as much a part
+# of this gate as the client and the user are: without it a correct sign-in is denied every page.
+operator_client = clients.get("rma-operator", {})
+row("rma-operator is present", "yes", "yes" if operator_client else "no")
+row("rma-operator is confidential", "yes", "yes" if operator_client and not operator_client.get("publicClient") else "no")
+row(
+    "rma-operator runs the authorization-code flow",
+    "yes",
+    "yes" if operator_client.get("standardFlowEnabled") else "no",
+)
+row("rma-operator redirect", "http://localhost:5000/Operator/signin-oidc", ", ".join(operator_client.get("redirectUris", [])))
+row(
+    "rma-operator default scopes",
+    "basic, operator-roles",
+    ", ".join(sorted(operator_client.get("defaultClientScopes", []))),
+)
+row(
+    "operator-roles flattens realm roles into the roles claim",
+    "roles",
+    mapper("operator-roles", "oidc-usermodel-realm-role-mapper").get("config", {}).get("claim.name", ""),
+)
+row("operator-demo is present", "yes", "yes" if operator.get("username") == "operator-demo" else "no")
+row(
+    "operator-demo has the rma:operator realm role",
+    "rma:operator",
+    ", ".join(sorted(role.get("name", "") for role in operator_roles if role.get("name") == "rma:operator")),
+)
 PYTHON
 }
 
@@ -345,7 +393,7 @@ realm_shape > "$WORK/shape.tsv"
 # The row count is a check of its own. A python error writes nothing to the table, and a loop over an
 # empty table is a run with no failures — the gate would report success for having checked nothing.
 ROWS=$(wc -l < "$WORK/shape.tsv" | tr -d ' ')
-check "realm shape rows produced" 19 "$ROWS"
+check "realm shape rows produced" 28 "$ROWS"
 
 # The table is written by python, which on Windows ends its lines with CRLF; the escape is stripped
 # so a passing value does not compare unequal to itself.
@@ -453,6 +501,56 @@ check "a fresh short-lived token is accepted" 200 "$(initialize_with "$EXPIRING"
 echo "note  waiting 65s so the one-second token outlives the transport's one-minute clock skew"
 sleep 65
 check "the same token is refused once expired" 401 "$(initialize_with "$EXPIRING")"
+
+echo
+echo "== operator sign-in (rma-operator)"
+
+# The operator back office (P10) is the one authenticated surface in the product, and until now no
+# gate minted a token for it: the realm had no operator client, no rma:operator role and no mapper
+# that would produce the claim the host's policy reads. This drives the password grant the committed
+# realm enables for the gate, and asserts the claim, not just the sign-in.
+OPERATOR_RESPONSE=$(kc_token \
+    -d 'grant_type=password' \
+    -d 'client_id=rma-operator' \
+    -d 'client_secret=rma-operator-secret' \
+    -d 'username=operator-demo' \
+    -d 'password=operator-demo' \
+    -d 'scope=openid')
+
+check "operator token endpoint answers" 200 "$(status_of "$OPERATOR_RESPONSE")"
+
+OPERATOR_TOKEN=$(body_of "$OPERATOR_RESPONSE" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("access_token",""))')
+
+if [ -z "$OPERATOR_TOKEN" ]; then
+    fail "operator access token present" "the token response has no access_token: $(body_of "$OPERATOR_RESPONSE")"
+else
+    pass "operator access token present"
+
+    # Both the subject and the name: the sub is what the audit trail must never fall back to when a
+    # username is available, and an imported realm has no built-in profile scope, so the name comes
+    # from the mapper this realm declares on 'basic'.
+    check_nonempty "operator access token names its subject" "$(claim "$OPERATOR_TOKEN" sub)"
+    check "operator access token names the operator" "operator-demo" "$(claim "$OPERATOR_TOKEN" preferred_username)"
+    check_contains "operator token carries rma:operator in a flat roles claim" "rma:operator" "$(claim "$OPERATOR_TOKEN" roles)"
+fi
+
+# The role has to come from the person, not from the client: a second sign-in through the same
+# client as a user without the role must not produce it.
+NON_OPERATOR_RESPONSE=$(kc_token \
+    -d 'grant_type=password' \
+    -d 'client_id=rma-operator' \
+    -d 'client_secret=rma-operator-secret' \
+    -d 'username=browser-demo' \
+    -d 'password=browser-demo' \
+    -d 'scope=openid')
+
+NON_OPERATOR_TOKEN=$(body_of "$NON_OPERATOR_RESPONSE" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("access_token",""))')
+
+if printf '%s' "$(claim "$NON_OPERATOR_TOKEN" roles)" | grep -qw 'rma:operator'; then
+    fail "a user without the role gets no rma:operator" "the browser-demo token carries the operator role"
+else
+    pass "a user without the role gets no rma:operator"
+fi
 
 echo
 echo "== preflight"
