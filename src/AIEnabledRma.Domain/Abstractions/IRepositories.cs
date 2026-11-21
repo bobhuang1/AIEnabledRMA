@@ -21,13 +21,50 @@ public interface IDeviceRepository
         DeviceSearchQuery query,
         CancellationToken cancellationToken);
 
-    /// <summary>Device plus the warranty that governs today, in one round trip.</summary>
+    /// <summary>
+    /// Device plus the warranty that governs today, in one round trip. Falls back to fuzzy
+    /// matching, so a truncated, mistyped, or product-name-shaped identifier can still resolve.
+    /// </summary>
+    /// <remarks>
+    /// Agent and operator paths use this. The customer-facing wizard must not: see
+    /// <see cref="LookupExactAsync"/>.
+    /// </remarks>
     Task<DeviceLookupResult> LookupAsync(
         string identifier,
         DateOnly today,
         CancellationToken cancellationToken);
 
-    Task<bool> HasOpenRequestAsync(Guid deviceId, CancellationToken cancellationToken);
+    /// <summary>
+    /// Device plus the warranty that governs today, matched only on an exact serial or an exact
+    /// alternate identifier (MAC, IMEI, host serial). Never fuzzy, never a catalog scan.
+    /// </summary>
+    /// <remarks>
+    /// Intake uses this because fuzzy matching there was an enumeration oracle: an anonymous
+    /// visitor could walk the catalog a serial prefix at a time, and every hit opened a return
+    /// against the real unit, which then blocked its owner as a duplicate. Tools that serve an
+    /// operator who already holds partial information keep <see cref="LookupAsync"/>.
+    /// </remarks>
+    Task<DeviceLookupResult> LookupExactAsync(
+        string identifier,
+        DateOnly today,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Whether another return for this unit has reached the point where the unit is expected
+    /// back — AwaitingShipment through Repaired — ignoring <paramref name="excludingRequestId"/>.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately narrower than "not cancelled, closed or rejected". A return in Draft,
+    /// PendingPayment, Approved or NeedsReview is still being filled in, and the wizard is
+    /// anonymous, so counting those let any visitor hold a unit by starting a return and walking
+    /// away from it: the owner then met the duplicate rule instead. Intake asks this with nothing
+    /// excluded, and confirmation asks it again with its own id excluded, because that is the
+    /// moment the request joins the set.
+    /// </remarks>
+    Task<bool> HasReturnInProgressAsync(
+        Guid deviceId,
+        Guid? excludingRequestId,
+        CancellationToken cancellationToken);
 }
 
 public sealed record DeviceSearchQuery
@@ -55,6 +92,13 @@ public sealed record DeviceLookupResult
 
     public bool IsInWarranty { get; init; }
 
+    /// <summary>
+    /// The identifier the caller supplied, trimmed, as typed. Carried on a miss as well as a
+    /// hit, because a refusal can only tell the customer to check their typing if it can name
+    /// what they typed.
+    /// </summary>
+    public string? Identifier { get; init; }
+
     public string? MatchedOn { get; init; }
 
     public double MatchScore { get; init; }
@@ -63,6 +107,17 @@ public sealed record DeviceLookupResult
 public interface ICustomerRepository
 {
     Task<Customer?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The customer's name alone, projected so no entity is tracked.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="GetByIdAsync"/> returns a tracked graph, and attaching a second copy of the
+    /// same customer later in the same request throws "already being tracked". A caller that
+    /// only wants to know what to redact must not drag the entity into the change tracker to
+    /// find out.
+    /// </remarks>
+    Task<CustomerName?> GetNameAsync(Guid id, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<Customer>> SearchAsync(
         CustomerSearchQuery query,
@@ -82,6 +137,8 @@ public interface ICustomerRepository
         string? freeTextAddress,
         CancellationToken cancellationToken);
 }
+
+public sealed record CustomerName(string FirstName, string LastName);
 
 /// <summary>Outcome of resolving a shipping address, including how confident the match was.</summary>
 public sealed record AddressResolution
@@ -112,8 +169,6 @@ public sealed record CustomerSearchQuery
 
     public string? PhoneNumber { get; init; }
 
-    public string? ExternalCustomerId { get; init; }
-
     public int Take { get; init; } = 25;
 }
 
@@ -121,6 +176,11 @@ public sealed record CustomerSearchQuery
 /// Persistence for RMA requests. Kept behind an interface so the workflow can be unit-tested
 /// without a database and so a deployment can swap in its own store.
 /// </summary>
+/// <remarks>
+/// There is no update call: a loaded aggregate is tracked by the caller's unit of work, so a step
+/// changes it in place and commits with <see cref="IUnitOfWork.SaveChangesAsync"/>. A re-attach
+/// API invites the caller to hand back a graph whose neighbouring rows it never meant to write.
+/// </remarks>
 public interface IRmaRepository
 {
     Task AddAsync(RmaRequest request, CancellationToken cancellationToken);
@@ -128,8 +188,6 @@ public interface IRmaRepository
     Task<RmaRequest?> GetByNumberAsync(string rmaNumber, CancellationToken cancellationToken);
 
     Task<RmaRequest?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
-
-    Task UpdateAsync(RmaRequest request, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<RmaRequest>> GetForCustomerAsync(Guid customerId, CancellationToken cancellationToken);
 
@@ -151,10 +209,4 @@ public interface IUnitOfWork
 public interface IEligibilityService
 {
     RmaEligibilityDecision Evaluate(RmaPolicyRequest request);
-}
-
-/// <summary>Writes the MCP tool-call audit trail. Must never throw into the tool call it records.</summary>
-public interface IToolAuditSink
-{
-    Task RecordAsync(AIEnabledRma.Domain.Audit.McpToolCall call, CancellationToken cancellationToken);
 }

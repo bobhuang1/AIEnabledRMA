@@ -14,6 +14,7 @@
     <ProjectReference Include="..\AIEnabledRma.Domain\AIEnabledRma.Domain.csproj" />
     <ProjectReference Include="..\AIEnabledRma.Data\AIEnabledRma.Data.csproj" />
     <ProjectReference Include="..\AIEnabledRma.Ai\AIEnabledRma.Ai.csproj" />
+    <ProjectReference Include="..\AIEnabledRma.Privacy\AIEnabledRma.Privacy.csproj" />
     <ProjectReference Include="..\AIEnabledRma.Rag\AIEnabledRma.Rag.csproj" />
   </ItemGroup>
 
@@ -27,6 +28,12 @@
   <ItemGroup>
     <None Include="..\..\knowledge-base\**\*.md"
           Link="knowledge-base\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <!-- The reviewed hashes travel with the articles they pin: the Web host registers the same
+         RAG services, and a Production host refuses a corpus with no manifest. -->
+    <None Include="..\..\knowledge-base\REVIEWED.sha256"
+          Link="knowledge-base\REVIEWED.sha256"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>

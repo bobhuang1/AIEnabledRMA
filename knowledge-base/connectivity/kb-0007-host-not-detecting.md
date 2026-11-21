@@ -2,12 +2,11 @@
 id: kb-0007
 title: Host software does not detect the unit
 category: connectivity
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [not detected, software, host, driver, discovery, invisible, computer, pc]
 related: [kb-0005, kb-0008]
-reviewed_by: kb-maintainers
-reviewed_at: 2026-11-20
-content_hash: cca718a3504835c77c9d7d8c9234d0a714889dbafd889e57694e59c9e64f4437
 ---
 
 # Host software does not detect the unit

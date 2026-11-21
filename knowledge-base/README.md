@@ -27,11 +27,30 @@ Body in Markdown.
 | `title` | yes | Shown to the customer and used in relevance scoring. |
 | `category` | yes | Business grouping. A `category` with no matching article for a session's product family is a corpus-scope signal. |
 | `product_scope` | yes | `["*"]` means the article applies to every product family. Otherwise it lists the exact tokens that must match. |
-| `keywords` | no | Extra terms for lexical scoring, for concepts the body does not literally contain. |
+| `keywords` | no | Terms for lexical scoring, for concepts the body does not literally contain. These are also the triage scope guard's topic vocabulary, one vocabulary per category with English function words stripped, so the words an author lists here are the words a customer can ask with: a phrasing no keyword covers can be refused as off-topic before the model is called. |
 | `related` | no | Sibling article ids, used to expand a strong match with its neighbours. A sibling is still re-checked against the session's scope, so a cross-family link is followed for universal siblings only and never leaks another family's article. |
 
 `id` must be unique. The loader fails closed on duplicates rather than silently dropping one,
 because a duplicate makes citation verification ambiguous.
+
+### Reviewed hashes
+
+`REVIEWED.sha256` records, for every article, the SHA-256 of the file the reviewer read. The
+loader refuses an article whose bytes no longer match its line, so "reviewed" describes the file
+in front of you rather than a hash taken while loading. The check runs wherever provenance is
+required, which is every environment except Development, and an article with no line is refused
+for the same reason: nothing has recorded what a reviewer read.
+
+The format is `sha256sum` output with paths relative to this directory and forward slashes:
+
+```sh
+cd knowledge-base
+sha256sum power/kb-0001-charge-indicator.md
+```
+
+Add that line in the same commit as the article, and replace it whenever the text changes after a
+re-review. `.gitattributes` pins these files to LF, so the bytes — and therefore the hashes — are
+identical on a Windows checkout and on the Linux host that serves them.
 
 ## Scoping
 
@@ -66,7 +85,9 @@ serve; the opt-in list decides *whether that product is being answered about at 
    ordered steps with recorded outcomes are what confirm a genuine fault.
 4. Set `product_scope` deliberately. `["*"]` for genuinely universal articles; a token list
    for anything specific to one product family.
-5. Restart the RAG server, or call `POST /rag/reload` in development.
+5. Restart the RAG server, or send `POST /rag/reload` to it. The operational endpoints
+   (`/diagnostics`, `/retrieve`, `/rag/reload`) are gated: loopback only when
+   `Rag:Admin:ApiKey` is unset, otherwise the `X-Rag-Admin-Key` header on every call.
 
 ## Test data
 
@@ -74,24 +95,3 @@ Every article here is fictional. The products, models, part references, and symp
 describe generic hardware and generic faults, and no article refers to a real vendor,
 a real product line, or a real support policy. Replace this directory with your own content
 before using the system for a real returns process.
-
-## Review and provenance
-
-Every article carries three provenance fields in its front matter:
-
-| Field | Purpose |
-| --- | --- |
-| `reviewed_by` | Who reviewed the article (a person or a team alias). |
-| `reviewed_at` | Review date, `yyyy-MM-dd`. |
-| `content_hash` | SHA-256 of the body (everything after the closing `---`, trimmed, line endings as `\n`). An edit made after review no longer matches and the article is refused. |
-
-Outside Development the loader refuses any article without `reviewed_by` and `reviewed_at`, and a reload
-that hits a refused article is not published. To get the hash for a reviewed article, run the loader in
-Development and read `contentHash` from `GET /diagnostics` with the admin key, or compute it with any
-SHA-256 tool over the normalised body.
-
-The loader also refuses: files over 64 KB, front matter over 4 KB, more than 500 articles, invalid UTF-8,
-symbolic links (files or directories), and any article containing instruction-like text (for example "ignore
-previous instructions", "you are now", role markers such as `system:`). HTML, comments, link targets and bare
-URLs are stripped from the body before it is indexed, and angle brackets are replaced so an article can never
-close the delimiters it is wrapped in inside the prompt.

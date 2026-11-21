@@ -1,31 +1,33 @@
 using AIEnabledRma.Domain.Abstractions;
-using AIEnabledRma.Domain.Audit;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
+using AIEnabledRma.Domain.Operations;
+using Microsoft.EntityFrameworkCore;
 
 namespace AIEnabledRma.Data;
 
 /// <summary>
-/// Writes each MCP tool call to <c>mcp_tool_calls</c> through its own short-lived context, so
-/// the audit write never shares change tracking with the tool's own queries.
+/// Writes the audit row for an agent call.
 /// </summary>
-public sealed class EfToolAuditSink(IServiceScopeFactory scopes, ILogger<EfToolAuditSink> logger) : IToolAuditSink
+/// <remarks>
+/// A failed audit write must not fail the tool call: the answer has already been computed and
+/// withholding it would not undo the disclosure. The failure is left to the caller's logging,
+/// where an operator can see that the trail has a hole.
+/// </remarks>
+public sealed class EfToolAuditSink(RmaDbContext db) : IToolAuditSink
 {
-    public async Task RecordAsync(McpToolCall call, CancellationToken cancellationToken)
+    public async Task RecordAsync(ToolCallRecord record, CancellationToken cancellationToken)
     {
-        try
+        db.McpToolCalls.Add(new McpToolCall
         {
-            await using var scope = scopes.CreateAsyncScope();
-            var db = scope.ServiceProvider.GetRequiredService<RmaDbContext>();
-            db.McpToolCalls.Add(call);
-            await db.SaveChangesAsync(cancellationToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // An audit failure is logged loudly but does not turn an answered call into an error:
-            // the caller already has the result. The tool name and outcome are safe to log;
-            // argument hashes are not needed to diagnose a failed insert.
-            logger.LogError(ex, "Could not write the audit row for MCP tool {Tool} ({Outcome}).", call.Tool, call.Outcome);
-        }
+            Id = Guid.NewGuid(),
+            Tool = record.Tool,
+            Caller = record.Caller,
+            ArgumentHashes = string.Join(',', record.ArgumentHashes),
+            ResultCount = record.ResultCount,
+            LatencyMs = record.LatencyMs,
+            Refused = record.Refused,
+            AtUtc = record.AtUtc,
+        });
+
+        await db.SaveChangesAsync(cancellationToken);
     }
 }

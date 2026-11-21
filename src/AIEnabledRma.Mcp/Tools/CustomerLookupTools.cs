@@ -7,164 +7,123 @@ namespace AIEnabledRma.Mcp.Tools;
 
 /// <summary>
 /// Customer lookup tools exposed over MCP.
-///
-/// Every result is masked (see <see cref="CustomerMasking"/>): an agent sees "Jane S.", a masked
-/// email and phone, and a city with a postal-code prefix, never a street line, a full contact
-/// detail or the external CRM id. Contact search is exact-only, so a partial email or phone
-/// cannot be used to enumerate customers; only a name search is fuzzy, and its output is masked.
-/// Full contact details are available only through <c>reveal_customer_contact</c>, which the
-/// tool-call guard restricts to an authenticated support role and audits.
 /// </summary>
+/// <remarks>
+/// Everything here goes through <see cref="CustomerProjection"/>, the same masking the customer
+/// wizard uses. These tools used to return the entity's fields — full name, email, phone, external
+/// id, street address — which put a customer's contact details into whatever model transcript the
+/// agent was talking to. There is no caller identity on stdio, so the projection is the control
+/// that holds whatever the session is.
+///
+/// Name searches stay fuzzy, because a name is not an identifier: "josephin smyth" is a person
+/// typing their own name badly. Email and phone must match exactly. A partial contact lookup is an
+/// enumeration oracle — the match count answers "does this address exist?" one character at a time
+/// — and masking the output does not help when the question is the count.
+///
+/// Audit rows and the per-minute budget are not here: they belong to
+/// <see cref="ToolCallGuard"/>, which every tool passes through. What stays here is the cap on
+/// customer lookups per session, because that one is about what a call is for.
+/// </remarks>
 [McpServerToolType]
-public sealed class CustomerLookupTools(ICustomerRepository customers, IRmaRepository rmas)
+public sealed class CustomerLookupTools(
+    ICustomerRepository customers,
+    IRmaRepository rmas,
+    CallBudget budget)
 {
-    /// <summary>Shortest name search accepted, in non-space characters.</summary>
-    public const int MinimumNameLength = 3;
-
-    /// <summary>Shortest justification accepted by <c>reveal_customer_contact</c>.</summary>
-    public const int MinimumRevealReasonLength = 10;
+    /// <summary>
+    /// Shortest term these tools accept. Below this, a term is a prefix of many records, which is
+    /// exactly the shape of a scan.
+    /// </summary>
+    private const int MinimumQueryLength = 3;
 
     [McpServerTool(
         Name = "find_customer",
-        Title = "Find a customer by name, email, or phone")]
+        Title = "Find a masked customer by name, or by exact email or phone")]
     [Description(
-        "Find a customer. Email and phone must be the customer's exact contact detail (no partial "
-        + "matches); a name (at least 3 characters) is fuzzy-matched. Results are masked: confirm "
-        + "the match with the customer, who knows their own details, before acting on it.")]
+        "Find a customer by full or partial name, or confirm one by their complete email address "
+        + "or phone number. Names are fuzzy-matched; email and phone must be complete and match "
+        + "exactly, because a partial contact search is an enumeration oracle. Every field in the "
+        + "response is masked. Confirm the match with the customer before using any address from "
+        + "the result.")]
     public async Task<CustomerSearchResponse> FindCustomerAsync(
-        [Description("Customer's name, at least 3 characters. Fuzzy-matched.")]
+        [Description("Customer's full or partial name.")]
         string? name = null,
-        [Description("Customer's exact email address.")]
+        [Description("The customer's complete email address. Partial values match nothing.")]
         string? email = null,
-        [Description("Customer's full phone number, with or without punctuation.")]
+        [Description("The customer's complete phone number, with or without punctuation.")]
         string? phoneNumber = null,
-        [Description("Your own CRM or ERP identifier for the customer. Exact match only.")]
-        string? externalCustomerId = null,
-        [Description("Maximum matches to return. Capped at 10.")]
+        [Description("Maximum matches to return. Capped at 25.")]
         int take = 5,
         CancellationToken cancellationToken = default)
     {
-        name = Normalize(name);
-        email = Normalize(email);
-        phoneNumber = Normalize(phoneNumber);
-        externalCustomerId = Normalize(externalCustomerId);
-        take = Math.Clamp(take, 1, 10);
+        var nameQuery = Normalize(name);
+        var emailQuery = Normalize(email);
+        var phoneQuery = Normalize(phoneNumber);
 
-        if (name is null && email is null && phoneNumber is null && externalCustomerId is null)
+        if (nameQuery is null && emailQuery is null && phoneQuery is null)
         {
-            return Refused(
-                "Supply at least one of name, email, phoneNumber, or externalCustomerId. "
-                + "An unfiltered customer search is not permitted.");
+            return RefusedSearch(
+                "Supply at least one of name, email, or phoneNumber. An unfiltered customer "
+                + "search is not permitted.");
         }
 
-        if (name is not null && name.Count(c => !char.IsWhiteSpace(c)) < MinimumNameLength)
+        if (Shortest(nameQuery, emailQuery, phoneQuery) is { } tooShort)
         {
-            return Refused($"A name search needs at least {MinimumNameLength} characters.");
+            return RefusedSearch(
+                $"Search terms must be at least {MinimumQueryLength} characters, and '{tooShort}' "
+                + "is shorter. A shorter term matches a prefix of the customer table.");
         }
 
-        var found = new Dictionary<Guid, Customer>();
+        var budgetDecision = await budget.TryConsumeCustomerLookupAsync(cancellationToken);
 
-        void Add(IEnumerable<Customer> hits)
+        if (!budgetDecision.Allowed)
         {
-            foreach (var hit in hits)
-            {
-                found.TryAdd(hit.Id, hit);
-            }
+            return RefusedSearch(budgetDecision.Refusal!);
         }
 
-        if (externalCustomerId is not null)
-        {
-            Add(await customers.SearchAsync(
-                new CustomerSearchQuery { ExternalCustomerId = externalCustomerId, Take = take },
-                cancellationToken));
-        }
-
-        // Contact details are matched exactly. The repository's search is fuzzy, so its hits are
-        // only candidates; anything that is not the exact email or the same phone digits is
-        // dropped, so a partial value returns nothing rather than a list of near neighbours.
-        if (email is not null)
-        {
-            var hits = await customers.SearchAsync(
-                new CustomerSearchQuery { Email = email, Take = 25 }, cancellationToken);
-            Add(hits.Where(c => CustomerMasking.IsExactEmailMatch(email, c)));
-        }
-
-        if (phoneNumber is not null)
-        {
-            var hits = await customers.SearchAsync(
-                new CustomerSearchQuery { PhoneNumber = phoneNumber, Take = 25 }, cancellationToken);
-            Add(hits.Where(c => CustomerMasking.IsExactPhoneMatch(phoneNumber, c)));
-        }
-
-        // A name is only searched on its own. Combined with an exact contact detail it would
-        // widen an exact lookup back into a fuzzy one.
-        if (name is not null && email is null && phoneNumber is null && externalCustomerId is null)
-        {
-            Add(await customers.SearchAsync(
-                new CustomerSearchQuery { Name = name, Take = take }, cancellationToken));
-        }
-
-        var matches = found.Values.Take(take).ToList();
+        var matches = (await customers.SearchAsync(
+                new CustomerSearchQuery
+                {
+                    Name = nameQuery,
+                    Email = emailQuery,
+                    PhoneNumber = phoneQuery,
+                    Take = Math.Clamp(take, 1, 25),
+                },
+                cancellationToken))
+            // The repository is fuzzy on every field; the caller is not allowed to be.
+            .Where(c => CustomerProjection.MatchesExactContact(c, emailQuery, phoneQuery))
+            .ToList();
 
         return new CustomerSearchResponse
         {
             MatchCount = matches.Count,
-            // Ambiguity is the dangerous case in a returns flow, not a low match count: two
-            // customers on the same account is normal. The caller is told to disambiguate.
+            // Ambiguity is the dangerous case in a returns flow, not a low match count:
+            // two customers on the same account is normal. The caller is told to
+            // disambiguate.
             RequiresConfirmation = matches.Count > 1,
-            Customers = matches.Select(ToSummary).ToList(),
-        };
-    }
-
-    [McpServerTool(
-        Name = "reveal_customer_contact",
-        Title = "Reveal a customer's full contact details (support role only)")]
-    [Description(
-        "Return a customer's full name, email and phone. Only an authenticated caller with the "
-        + "support role may use this; every call is audited. Use it only when you must contact "
-        + "the customer and they cannot give you the details themselves.")]
-    public async Task<CustomerContactResponse> RevealCustomerContactAsync(
-        [Description("The customer id, as returned by find_customer.")]
-        Guid customerId,
-        [Description("Why the full details are needed, at least 10 characters.")]
-        string reason,
-        CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(reason) || reason.Trim().Length < MinimumRevealReasonLength)
-        {
-            return new CustomerContactResponse
-            {
-                CustomerId = customerId,
-                RefusalReason = $"Give a reason of at least {MinimumRevealReasonLength} characters.",
-            };
-        }
-
-        var customer = await customers.GetByIdAsync(customerId, cancellationToken);
-        if (customer is null)
-        {
-            return new CustomerContactResponse { CustomerId = customerId, NotFound = true };
-        }
-
-        return new CustomerContactResponse
-        {
-            CustomerId = customerId,
-            FullName = customer.FullName,
-            Email = customer.Email,
-            PhoneNumber = customer.PhoneNumber,
+            Customers = matches.Select(CustomerProjection.From).ToList(),
         };
     }
 
     [McpServerTool(
         Name = "get_customer_addresses",
-        Title = "List a customer's addresses")]
+        Title = "List a customer's masked addresses")]
     [Description(
-        "List the saved addresses for a customer (masked: city and postal-code prefix) so the "
-        + "customer can say which one to ship to. Read-only. Refer to an address by its id.")]
+        "List the saved addresses for a customer so a return can be shipped to the right one. Each "
+        + "address is masked to its label, a partial postcode and the country: enough for the "
+        + "customer to recognise by position, not enough to learn it. Read-only.")]
     public async Task<AddressListResponse> GetCustomerAddressesAsync(
         [Description("The customer id, as returned by find_customer.")]
         Guid customerId,
         CancellationToken cancellationToken = default)
     {
+        var budgetDecision = await budget.TryConsumeCustomerLookupAsync(cancellationToken);
+
+        if (!budgetDecision.Allowed)
+        {
+            return RefusedAddresses(customerId, budgetDecision.Refusal!);
+        }
+
         var customer = await customers.GetByIdAsync(customerId, cancellationToken);
 
         if (customer is null)
@@ -178,15 +137,17 @@ public sealed class CustomerLookupTools(ICustomerRepository customers, IRmaRepos
             };
         }
 
+        var addresses = customer.Addresses
+            .OrderByDescending(a => a.IsDefault)
+            .ThenBy(a => a.Label, StringComparer.OrdinalIgnoreCase)
+            .Select(ToMaskedAddress)
+            .ToList();
+
         return new AddressListResponse
         {
             CustomerId = customerId,
-            Count = customer.Addresses.Count,
-            Addresses = customer.Addresses
-                .OrderByDescending(a => a.IsDefault)
-                .ThenBy(a => a.Label, StringComparer.OrdinalIgnoreCase)
-                .Select(ToAddressSummary)
-                .ToList(),
+            Count = addresses.Count,
+            Addresses = addresses,
         };
     }
 
@@ -195,7 +156,7 @@ public sealed class CustomerLookupTools(ICustomerRepository customers, IRmaRepos
         Title = "List a customer's returns")]
     [Description(
         "List every return on a customer's record, newest first, so an agent can see the "
-        + "history before creating another. Read-only.")]
+        + "history before creating another. Read-only. Contains no contact details.")]
     public async Task<CustomerReturnsResponse> GetCustomerReturnsAsync(
         [Description("The customer id, as returned by find_customer.")]
         Guid customerId,
@@ -203,6 +164,13 @@ public sealed class CustomerLookupTools(ICustomerRepository customers, IRmaRepos
         int take = 20,
         CancellationToken cancellationToken = default)
     {
+        var budgetDecision = await budget.TryConsumeCustomerLookupAsync(cancellationToken);
+
+        if (!budgetDecision.Allowed)
+        {
+            return RefusedReturns(customerId, budgetDecision.Refusal!);
+        }
+
         var all = await rmas.GetForCustomerAsync(customerId, cancellationToken);
 
         var page = all
@@ -231,11 +199,11 @@ public sealed class CustomerLookupTools(ICustomerRepository customers, IRmaRepos
         Name = "resolve_shipping_address",
         Title = "Resolve a typed address against saved addresses")]
     [Description(
-        "Match a free-text address the customer typed against their saved addresses. Returns "
-        + "the best match (masked) with its actual match score. When nothing scores at or above "
-        + "minimumScore, the customer's default address is returned with resolved=false and "
-        + "isFallback=true: ask the customer to confirm the address rather than assuming "
-        + "they meant their default.")]
+        "Match a free-text address the customer typed against their saved addresses. Returns the "
+        + "best match with its actual match score, masked to label, partial postcode and country. "
+        + "When nothing scores at or above minimumScore, the customer's default address is returned "
+        + "with resolved=false and isFallback=true: ask the customer to confirm the address rather "
+        + "than assuming they meant their default.")]
     public async Task<AddressResolutionResponse> ResolveShippingAddressAsync(
         [Description("The customer id, as returned by find_customer.")]
         Guid customerId,
@@ -246,6 +214,13 @@ public sealed class CustomerLookupTools(ICustomerRepository customers, IRmaRepos
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(freeTextAddress);
+
+        var budgetDecision = await budget.TryConsumeCustomerLookupAsync(cancellationToken);
+
+        if (!budgetDecision.Allowed)
+        {
+            return RefusedResolution(customerId, budgetDecision.Refusal!);
+        }
 
         var resolution = await customers.ResolveAddressAsync(
             customerId,
@@ -265,8 +240,7 @@ public sealed class CustomerLookupTools(ICustomerRepository customers, IRmaRepos
         }
 
         // Report the score the matcher actually achieved. Returning the caller's own
-        // threshold here would report a weak match as a perfect one, and an agent would
-        // read that as the address being confidently identified.
+        // threshold here would report a weak match as a perfect one.
         var accepted = !resolution.IsFallback && resolution.Score >= minimumScore;
 
         return new AddressResolutionResponse
@@ -275,7 +249,7 @@ public sealed class CustomerLookupTools(ICustomerRepository customers, IRmaRepos
             Resolved = accepted,
             MatchScore = resolution.Score,
             IsFallback = resolution.IsFallback,
-            Address = ToAddressSummary(resolution.Address),
+            Address = ToMaskedAddress(resolution.Address),
             Reason = accepted
                 ? null
                 : "Nothing scored at or above the minimum, so the default address is shown "
@@ -283,50 +257,43 @@ public sealed class CustomerLookupTools(ICustomerRepository customers, IRmaRepos
         };
     }
 
-    private static CustomerSearchResponse Refused(string reason) => new()
-    {
-        MatchCount = 0,
-        RefusalReason = reason,
-        Customers = [],
-    };
-
-    private static string? Normalize(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    internal static CustomerSummary ToSummary(Customer customer) => new()
-    {
-        Id = customer.Id,
-        MaskedName = CustomerMasking.MaskName(customer.FirstName, customer.LastName),
-        CompanyName = customer.CompanyName,
-        MaskedEmail = CustomerMasking.MaskEmail(customer.Email),
-        MaskedPhone = CustomerMasking.MaskPhone(customer.PhoneNumber),
-        PreferredLanguage = customer.PreferredLanguage,
-        DefaultAddress = customer.Addresses
-            .Where(a => a.IsDefault)
-            .Select(ToAddressSummary)
-            .FirstOrDefault()
-            ?? customer.Addresses
-                .OrderBy(a => a.Id)
-                .Select(ToAddressSummary)
-                .FirstOrDefault(),
-        AddressCount = customer.Addresses.Count,
-    };
-
-    /// <summary>
-    /// Street lines and the full postal code stay on the server. The city and a postal-code
-    /// prefix are enough for the customer to recognise which saved address is meant, and the
-    /// address id is what the rest of the flow uses.
-    /// </summary>
-    internal static AddressSummary ToAddressSummary(Address address) => new()
+    private static MaskedAddressSummary ToMaskedAddress(Address address) => new()
     {
         Id = address.Id,
         Label = address.Label,
-        City = address.City,
-        StateOrProvince = address.StateOrProvince,
-        PostalCodePrefix = CustomerMasking.MaskPostalCode(address.PostalCode),
-        CountryCode = address.CountryCode,
+        Masked = CustomerProjection.MaskAddress(address),
         IsDefault = address.IsDefault,
     };
+
+    private static CustomerSearchResponse RefusedSearch(string reason) =>
+        new() { MatchCount = 0, RefusalReason = reason, Customers = [] };
+
+    private static AddressListResponse RefusedAddresses(Guid customerId, string reason) =>
+        new() { CustomerId = customerId, Count = 0, Addresses = [], RefusalReason = reason };
+
+    private static CustomerReturnsResponse RefusedReturns(Guid customerId, string reason) =>
+        new()
+        {
+            CustomerId = customerId,
+            Count = 0,
+            TotalCount = 0,
+            RefusalReason = reason,
+            Returns = [],
+        };
+
+    private static AddressResolutionResponse RefusedResolution(Guid customerId, string reason) =>
+        new()
+        {
+            CustomerId = customerId,
+            Resolved = false,
+            RefusalReason = reason,
+        };
+
+    private static string? Shortest(params string?[] values) =>
+        values.FirstOrDefault(v => v is { Length: < MinimumQueryLength });
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
 public sealed record CustomerSearchResponse
@@ -341,43 +308,7 @@ public sealed record CustomerSearchResponse
 
     public string? RefusalReason { get; init; }
 
-    public required IReadOnlyList<CustomerSummary> Customers { get; init; }
-}
-
-/// <summary>A masked customer. No full contact detail and no external CRM id.</summary>
-public sealed record CustomerSummary
-{
-    public required Guid Id { get; init; }
-
-    /// <summary>First name and last-name initial.</summary>
-    public required string MaskedName { get; init; }
-
-    public string? CompanyName { get; init; }
-
-    public string? MaskedEmail { get; init; }
-
-    public string? MaskedPhone { get; init; }
-
-    public string? PreferredLanguage { get; init; }
-
-    public AddressSummary? DefaultAddress { get; init; }
-
-    public required int AddressCount { get; init; }
-}
-
-public sealed record CustomerContactResponse
-{
-    public required Guid CustomerId { get; init; }
-
-    public string? FullName { get; init; }
-
-    public string? Email { get; init; }
-
-    public string? PhoneNumber { get; init; }
-
-    public bool NotFound { get; init; }
-
-    public string? RefusalReason { get; init; }
+    public required IReadOnlyList<CustomerProjection> Customers { get; init; }
 }
 
 public sealed record AddressListResponse
@@ -386,26 +317,20 @@ public sealed record AddressListResponse
 
     public required int Count { get; init; }
 
-    public required IReadOnlyList<AddressSummary> Addresses { get; init; }
+    public required IReadOnlyList<MaskedAddressSummary> Addresses { get; init; }
 
     public bool NotFound { get; init; }
+
+    public string? RefusalReason { get; init; }
 }
 
-/// <summary>A masked address: city, region, postal-code prefix and country only.</summary>
-public sealed record AddressSummary
+public sealed record MaskedAddressSummary
 {
     public required Guid Id { get; init; }
 
     public string? Label { get; init; }
 
-    public required string City { get; init; }
-
-    public string? StateOrProvince { get; init; }
-
-    /// <summary>The first two characters of the postal code, the rest masked.</summary>
-    public required string PostalCodePrefix { get; init; }
-
-    public required string CountryCode { get; init; }
+    public required string Masked { get; init; }
 
     public required bool IsDefault { get; init; }
 }
@@ -418,13 +343,16 @@ public sealed record AddressResolutionResponse
 
     public string? Reason { get; init; }
 
+    /// <summary>Set when the call was refused rather than answered.</summary>
+    public string? RefusalReason { get; init; }
+
     /// <summary>The score the matcher actually achieved, not the caller's threshold.</summary>
     public double MatchScore { get; init; }
 
     /// <summary>True when the default address was substituted because nothing matched.</summary>
     public bool IsFallback { get; init; }
 
-    public AddressSummary? Address { get; init; }
+    public MaskedAddressSummary? Address { get; init; }
 }
 
 public sealed record CustomerReturnsResponse
@@ -434,6 +362,8 @@ public sealed record CustomerReturnsResponse
     public required int Count { get; init; }
 
     public required int TotalCount { get; init; }
+
+    public string? RefusalReason { get; init; }
 
     public required IReadOnlyList<CustomerReturnSummary> Returns { get; init; }
 }
@@ -448,7 +378,7 @@ public sealed record CustomerReturnSummary
 
     public required string Kind { get; init; }
 
-    public required DateTimeOffset CreatedAtUtc { get; init; }
+    public DateTimeOffset CreatedAtUtc { get; init; }
 
-    public required int LineCount { get; init; }
+    public int LineCount { get; init; }
 }

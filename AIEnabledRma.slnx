@@ -10,6 +10,7 @@
     <Project Path="src/AIEnabledRma.Domain/AIEnabledRma.Domain.csproj" />
     <Project Path="src/AIEnabledRma.Data/AIEnabledRma.Data.csproj" />
     <Project Path="src/AIEnabledRma.Ai/AIEnabledRma.Ai.csproj" />
+    <Project Path="src/AIEnabledRma.Privacy/AIEnabledRma.Privacy.csproj" />
     <Project Path="src/AIEnabledRma.Rag/AIEnabledRma.Rag.csproj" />
     <Project Path="src/AIEnabledRma.Mcp/AIEnabledRma.Mcp.csproj" />
     <Project Path="src/AIEnabledRma.Web/AIEnabledRma.Web.csproj" />

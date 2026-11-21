@@ -5,6 +5,8 @@ using System.Text;
 using System.Text.Json;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Common;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -253,5 +255,51 @@ public static class StripeWebhookSignature
     {
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
         return Convert.ToHexStringLower(hmac.ComputeHash(Encoding.UTF8.GetBytes($"{timestamp.ToString(CultureInfo.InvariantCulture)}.{payload}")));
+    }
+}
+
+public static class PaymentGatewayServiceCollectionExtensions
+{
+    /// <summary>The value of <c>Payments:Provider</c> that selects Stripe.</summary>
+    public const string StripeProvider = "stripe";
+
+    public static bool UsesStripe(IConfiguration configuration) =>
+        string.Equals(configuration["Payments:Provider"], StripeProvider, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Stripe when <c>Payments:Provider=stripe</c> (D5), otherwise the bundled fake gateway under its
+    /// own Development-only rule. A Stripe live key is accepted only in Production; everywhere else
+    /// test-mode keys only, so a developer machine or a staging site can never move real money.
+    /// </summary>
+    public static IServiceCollection AddPaymentGateway(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        bool isDevelopment,
+        bool isProduction)
+    {
+        if (!UsesStripe(configuration))
+        {
+            return services.AddFakePaymentGateway(configuration, isDevelopment);
+        }
+
+        var stripe = configuration.GetSection(StripeOptions.SectionName).Get<StripeOptions>() ?? new StripeOptions();
+        if (string.IsNullOrWhiteSpace(stripe.SecretKey) || string.IsNullOrWhiteSpace(stripe.WebhookSecret))
+        {
+            throw new InvalidOperationException(
+                "Payments:Provider is 'stripe' but Payments:Stripe:SecretKey or WebhookSecret is missing. Supply them from the environment.");
+        }
+
+        if (!isProduction && !stripe.SecretKey.StartsWith("sk_test_", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Only Stripe test-mode keys (sk_test_...) are allowed outside Production.");
+        }
+
+        services.AddOptions<StripeOptions>().Bind(configuration.GetSection(StripeOptions.SectionName));
+        services.AddHttpClient<IPaymentGateway, StripePaymentGateway>(client =>
+        {
+            client.BaseAddress = new Uri(stripe.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(30);
+        });
+        return services;
     }
 }

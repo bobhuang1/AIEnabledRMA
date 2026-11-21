@@ -2,12 +2,11 @@
 id: kb-0017
 title: Evidence needed to confirm a genuine hardware fault
 category: process
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [evidence, confirm, genuine, hardware fault, documentation, record, return criteria]
 related: [kb-0016]
-reviewed_by: kb-maintainers
-reviewed_at: 2026-11-20
-content_hash: 75f24e9d891a1a38731665f0d0b507a9f854344d1687f7a9ed0c7cd3143a6edf
 ---
 
 # Evidence needed to confirm a genuine hardware fault

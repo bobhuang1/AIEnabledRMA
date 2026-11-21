@@ -22,6 +22,12 @@ public sealed class VectorStoreOptions
 
     /// <summary>Most chunks of one document joined into its snippet.</summary>
     public int ChunksPerDocument { get; set; } = 2;
+
+    /// <summary>
+    /// Weight of a lexical rank against one store list when a redacted case competes with articles
+    /// (a case at the top of both store lists scores 2/61; the top article scores LexicalWeight/61).
+    /// </summary>
+    public double LexicalWeight { get; set; } = 1;
 }
 
 /// <summary>
@@ -33,11 +39,14 @@ public sealed class VectorStoreOptions
 /// </summary>
 public sealed class HybridKnowledgeRetriever(
     PgVectorKnowledgeStore store,
-    KnowledgeIndexRetriever fallback,
+    IKnowledgeRetriever fallback,
     IOptions<VectorStoreOptions> options,
     IOptions<RagOptions> ragOptions,
     ILogger<HybridKnowledgeRetriever> logger) : IKnowledgeRetriever
 {
+    /// <summary>Scales an article only the store found, so it ranks below every lexical article.</summary>
+    private const double StoreOnlyArticleWeight = 0.25;
+
     public async Task<KnowledgeRetrievalResult> RetrieveAsync(KnowledgeRetrievalQuery query, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(query);
@@ -48,14 +57,6 @@ public sealed class HybridKnowledgeRetriever(
         try
         {
             hits = await store.SearchAsync(query.Query, allowed, options.Value.ChunkCandidates, cancellationToken);
-            if (hits.Count == 0)
-            {
-                return new KnowledgeRetrievalResult
-                {
-                    Articles = [],
-                    CorpusOutOfScope = await store.CountInScopeAsync(allowed, cancellationToken) == 0,
-                };
-            }
         }
         catch (EmbeddingModelMismatchException ex)
         {
@@ -69,40 +70,81 @@ public sealed class HybridKnowledgeRetriever(
             return await fallback.RetrieveAsync(query, cancellationToken);
         }
 
-        var hints = query.CategoryHints.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // The in-memory lexical retriever (synonym expansion, category boost, curated related
+        // articles) is the third ranked list. Its ranking of reviewed articles is the measured
+        // baseline, so fusing it in means the store adds recall (redacted cases, chunk-level
+        // matches) without demoting what the lexical index already gets right.
+        var lexical = await fallback.RetrieveAsync(
+            query with { TopK = Math.Max(query.TopK * 3, 10) },
+            cancellationToken);
 
-        var documents = hits
-            .GroupBy(h => (h.Kind, h.SourceId))
-            .Select(g =>
+        if (hits.Count == 0 && lexical.Articles.Count == 0)
+        {
+            return new KnowledgeRetrievalResult
             {
-                var best = g.OrderByDescending(h => h.Score).Take(Math.Max(1, options.Value.ChunksPerDocument)).ToList();
+                Articles = [],
+                CorpusOutOfScope = lexical.CorpusOutOfScope && await store.CountInScopeAsync(allowed, cancellationToken) == 0,
+            };
+        }
 
-                // A small nudge for the device's own category, the same idea as the lexical
-                // index's category boost: enough to break ties, not to outrank a better match.
-                var boost = hints.Contains(best[0].Category) ? 0.25d / (PgVectorKnowledgeStore.RrfK + 1) : 0d;
-                return (Best: best, Score: best[0].Score + boost);
-            })
-            .OrderByDescending(d => d.Score)
-            .ThenBy(d => d.Best[0].SourceId, StringComparer.Ordinal)
-            .Take(query.TopK)
-            .ToList();
+        var hints = query.CategoryHints.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var fused = new Dictionary<(string Kind, string Id), (RetrievedArticle Article, double Score)>();
+        var storeDocuments = new Dictionary<(string Kind, string Id), (RetrievedArticle Article, double Score)>();
+
+        foreach (var group in hits.GroupBy(h => (h.Kind, h.SourceId)))
+        {
+            var best = group.OrderByDescending(h => h.Score).Take(Math.Max(1, options.Value.ChunksPerDocument)).ToList();
+
+            // A small nudge for the device's own category, the same idea as the lexical index's
+            // category boost: enough to break ties, not to outrank a better match.
+            var boost = hints.Contains(best[0].Category) ? 0.25d / (PgVectorKnowledgeStore.RrfK + 1) : 0d;
+            storeDocuments[group.Key] = (new RetrievedArticle
+            {
+                Id = best[0].SourceId,
+                Title = best[0].Title,
+                Category = best[0].Category,
+                Score = 0,
+                Snippet = string.Join("\n\n", best.OrderBy(h => h.Ordinal).Select(h => h.HeadingPath + "\n" + h.Text)),
+                SourceKind = best[0].Kind,
+                ChunkRef = string.Join(",", best.OrderBy(h => h.Ordinal).Select(h => $"{h.SourceId}#{h.Ordinal}")),
+                CitationLabel = best[0].CitationLabel,
+            }, best[0].Score + boost);
+        }
+
+        // Articles keep the lexical ranking: it is reviewed, tuned and measured on the golden set,
+        // and the store must not demote what it gets right. Where the store matched the same
+        // article, its best chunks replace the whole-article snippet.
+        for (var rank = 0; rank < lexical.Articles.Count; rank++)
+        {
+            var article = lexical.Articles[rank];
+            var key = (article.SourceKind, article.Id);
+            var score = options.Value.LexicalWeight / (PgVectorKnowledgeStore.RrfK + rank + 1);
+            fused[key] = storeDocuments.TryGetValue(key, out var chunked)
+                ? (article with { Snippet = chunked.Article.Snippet, ChunkRef = chunked.Article.ChunkRef }, score)
+                : (article, score);
+        }
+
+        // The store adds what the lexical index cannot see. Redacted CRM cases compete on their own
+        // fused score; an article only the store found is appended after the lexical ones.
+        foreach (var (key, document) in storeDocuments)
+        {
+            if (fused.ContainsKey(key))
+            {
+                continue;
+            }
+
+            fused[key] = key.Kind == KbKinds.Article
+                ? (document.Article, document.Score * StoreOnlyArticleWeight)
+                : document;
+        }
 
         return new KnowledgeRetrievalResult
         {
-            Articles = documents
-                .Select(d => new RetrievedArticle
-                {
-                    Id = d.Best[0].SourceId,
-                    Title = d.Best[0].Title,
-                    Category = d.Best[0].Category,
-                    Score = Math.Round(d.Score, 6),
-                    Snippet = string.Join(
-                        "\n\n",
-                        d.Best.OrderBy(h => h.Ordinal).Select(h => h.HeadingPath + "\n" + h.Text)),
-                    SourceKind = d.Best[0].Kind,
-                    ChunkRef = string.Join(",", d.Best.OrderBy(h => h.Ordinal).Select(h => $"{h.SourceId}#{h.Ordinal}")),
-                    CitationLabel = d.Best[0].CitationLabel,
-                })
+            Articles = fused.Values
+                .OrderByDescending(d => d.Score)
+                .ThenBy(d => d.Article.Id, StringComparer.Ordinal)
+                .Take(query.TopK)
+                .Select(d => d.Article with { Score = Math.Round(d.Score, 6) })
                 .ToList(),
         };
     }

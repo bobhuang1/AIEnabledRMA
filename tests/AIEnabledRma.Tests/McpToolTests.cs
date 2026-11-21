@@ -2,6 +2,7 @@ using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Catalog;
 using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Rules;
+using AIEnabledRma.Mcp;
 using AIEnabledRma.Mcp.Tools;
 using Microsoft.Extensions.Options;
 
@@ -80,7 +81,7 @@ public sealed class McpPolicyToolTests
         var clean = TestData.Device(serial: "CLEAN", end: Today.AddMonths(3));
         var busy = TestData.Device(serial: "BUSY", end: Today.AddMonths(3));
         devices.Devices.AddRange([clean, busy]);
-        devices.OpenRequestByDevice[busy.Id] = true;
+        devices.ReturnInProgressByDevice[busy.Id] = true;
 
         devices.LookupResult = new DeviceLookupResult { Device = clean };
         var cleanResponse = await tools.CheckCoverageAsync("CLEAN", "2026-09-29", cancellationToken: TestContext.Current.CancellationToken);
@@ -243,7 +244,12 @@ public sealed class McpAddressResolutionTests
     private static (CustomerLookupTools Tools, FakeCustomerRepository Customers) Build()
     {
         var customers = new FakeCustomerRepository();
-        return (new CustomerLookupTools(customers, new FakeRmaRepository()), customers);
+        var budget = new CallBudget(
+            new InMemoryCallMeter(),
+            Microsoft.Extensions.Options.Options.Create(new McpBudgetOptions()),
+            TimeProvider.System,
+            new StdioCallerIdentity());
+        return (new CustomerLookupTools(customers, new FakeRmaRepository(), budget), customers);
     }
 
     private static AddressResolution Resolution(
@@ -267,7 +273,9 @@ public sealed class McpAddressResolutionTests
         Assert.False(response.IsFallback);
         Assert.Equal(0.83, response.MatchScore, 3);
         Assert.NotNull(response.Address);
-        Assert.Equal("Oakland", response.Address.City);
+        // The address comes back masked now: the label and a postcode prefix, not the street.
+        Assert.DoesNotContain("Harrison", response.Address.Masked, StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith("•••", response.Address.Masked);
     }
 
     [Fact]

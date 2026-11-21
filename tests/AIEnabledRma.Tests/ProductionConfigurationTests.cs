@@ -28,8 +28,8 @@ public sealed class ProductionConfigurationTests
 
     [Theory]
     [InlineData("rmapassword")]
-    [InlineData("placeholder")]
-    [InlineData("")]
+    [InlineData("postgres")]
+    [InlineData("testonly")]
     public void A_default_database_password_is_refused(string password)
     {
         var config = Config(("ConnectionStrings:Rma", $"Host=db;Database=x;Username=u;Password={password}"));
@@ -54,37 +54,28 @@ public sealed class ProductionConfigurationTests
     }
 
     [Fact]
-    public void The_fake_gateway_opt_in_and_a_missing_operator_sign_in_are_refused()
+    public void A_missing_operator_sign_in_is_refused_when_asked_for()
     {
-        var config = Config(("ConnectionStrings:Rma", SafeConnection), ("Payments:AllowFakeGateway", "true"));
+        var problems = ProductionConfiguration.Problems(Config(("ConnectionStrings:Rma", SafeConnection)), checkOperatorSignIn: true);
 
-        var problems = ProductionConfiguration.Problems(config, checkOperatorSignIn: true);
-
-        Assert.Contains(problems, p => p.Contains("AllowFakeGateway", StringComparison.Ordinal));
         Assert.Contains(problems, p => p.Contains("OperatorAuth", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void The_web_host_refuses_production_with_development_defaults()
+    public void The_web_host_refuses_production_with_a_development_password_and_a_plain_http_model()
     {
         using var factory = new Factory<global::WebAppAnchor>(
             "Production",
             ("ConnectionStrings:Rma", "Host=localhost;Database=rmadev;Username=rmauser;Password=rmapassword"),
-            ("Payments:AllowFakeGateway", "true"));
+            ("Ai:Provider", "openai-compatible"),
+            ("Ai:OpenAiCompatible:BaseUrl", "http://llm.example.com/v1"),
+            ("Payments:Fake:AllowInProduction", "true"),
+            ("Rag:Admin:ApiKey", "production-config-test-key"));
 
         var ex = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
 
         Assert.Contains("unsafe configuration", ex.ToString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void The_rag_host_refuses_production_without_keys()
-    {
-        using var factory = new Factory<global::RagAppAnchor>("Production");
-
-        var ex = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
-
-        Assert.Contains("AdminKey", ex.ToString(), StringComparison.Ordinal);
+        Assert.Contains("password", ex.ToString(), StringComparison.Ordinal);
     }
 
     private sealed class Factory<T>(string environment, params (string Key, string Value)[] settings) : WebApplicationFactory<T>

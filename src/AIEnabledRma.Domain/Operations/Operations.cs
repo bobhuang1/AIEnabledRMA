@@ -42,6 +42,7 @@ public sealed class ReviewItem
 public static class ReviewSources
 {
     public const string StartRefused = "start-human-review";
+    public const string PolicyHumanReview = "policy-human-review";
     public const string TriageLowConfidence = "triage-low-confidence";
     public const string PaymentFailed = "payment-failed";
 }
@@ -227,8 +228,8 @@ public sealed class OperatorService(
         var result = await apply(request);
         if (result.Succeeded)
         {
+            // The repository loads the aggregate tracked, so the save below writes it.
             request.UpdatedAtUtc = clock.UtcNow;
-            await requests.UpdateAsync(request, cancellationToken);
         }
 
         operations.AddAction(Action(operatorName, action, request.RmaNumber, detail, result.Succeeded));

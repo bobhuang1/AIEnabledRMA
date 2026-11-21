@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace AIEnabledRma.Rag;
 
@@ -30,18 +31,42 @@ public static class RagServiceCollectionExtensions
             .Bind(configuration.GetSection(RagOptions.SectionName))
             .ValidateOnStart();
 
+        // The reload audit is registered here so the Web host, which also calls AddRag, cannot end
+        // up with a corpus that can be swapped without a record; only the RAG host maps the
+        // endpoint, and a deployment can replace the sink without touching the endpoint.
+        services.AddSingleton<IRagReloadAudit, LoggingRagReloadAudit>();
+
+        // Every host that serves answers loads this corpus, so every one of them states at startup
+        // how many articles it loaded and whether they are the reviewed ones. Registered here rather
+        // than in each Program because a host that forgot the call is the failure being guarded
+        // against.
+        services.AddHostedService<KnowledgeBaseStartupCheck>();
+
         services.AddOptions<RagRetrievalOptions>()
             .Bind(configuration.GetSection(RagRetrievalOptions.SectionName))
             .Validate(o => o.MaxRelatedExpansions >= 0, "MaxRelatedExpansions cannot be negative.")
             .ValidateOnStart();
 
-        services.AddOptions<KnowledgeIngestionOptions>()
-            .Bind(configuration.GetSection(KnowledgeIngestionOptions.SectionName))
-            .Validate(o => o.MaxFileBytes > 0 && o.MaxArticles > 0 && o.MaxFrontMatterBytes > 0,
-                "Rag:Ingestion limits must be positive.")
-            .ValidateOnStart();
+        // Limits and provenance come from configuration, with one rule the deployment cannot
+        // forget: Production always requires review. An unreviewed article is an unreviewed
+        // policy answer, and the environment is a fact about the host, not a preference.
+        services.AddSingleton(sp =>
+        {
+            var options = new KnowledgeBaseOptions();
+            configuration.GetSection(KnowledgeBaseOptions.SectionName).Bind(options);
 
-        services.AddSingleton<KnowledgeBaseLoader>();
+            if (sp.GetService<IHostEnvironment>()?.IsProduction() == true)
+            {
+                options.RequireReview = true;
+            }
+
+            return options;
+        });
+
+        services.AddSingleton(sp => new KnowledgeBaseLoader(
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<KnowledgeBaseLoader>>(),
+            Microsoft.Extensions.Options.Options.Create(
+                sp.GetRequiredService<KnowledgeBaseOptions>())));
 
         // Resolved once per process. A reload is a deliberate operation (see ReloadAsync), not
         // a file watcher, so a half-written article can never be picked up mid-save.
@@ -51,7 +76,7 @@ public static class RagServiceCollectionExtensions
             var loader = sp.GetRequiredService<KnowledgeBaseLoader>();
             var root = ResolveKnowledgeBaseRoot(options.KnowledgeBasePath);
 
-            return loader.Load(root, EffectiveIngestion(sp));
+            return loader.Load(root);
         });
 
         // The holder owns the mutable reference. KnowledgeIndex is registered as a factory
@@ -73,31 +98,44 @@ public static class RagServiceCollectionExtensions
 
         // Bridges the retriever seam TriagePipeline depends on. Registered over the holder for
         // the same reason as the index above: a reload must not be shadowed by a captured
-        // instance.
-        services.AddSingleton<KnowledgeIndexRetriever>();
+        // instance. Which implementation answers is a configuration decision, so the seam is a
+        // swap in one registration rather than a rewrite of the pipeline that consumes it.
+        static Domain.Abstractions.IKnowledgeRetriever Lexical(IServiceProvider sp)
+        {
+            var holder = sp.GetRequiredService<KnowledgeIndexHolder>();
 
-        // Hybrid vector retrieval when configured; otherwise the in-memory lexical index. The
-        // in-memory index also stays registered as the hybrid retriever's fallback.
+            return sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<RagRetrievalOptions>>()
+                .Value.SynonymExpansion
+                ? new SynonymExpandingRetriever(holder)
+                : new KnowledgeIndexRetriever(holder);
+        }
+
+        // Hybrid retrieval over the pgvector store (P5) when Rag:VectorStore:Enabled; the lexical
+        // retriever above stays its fallback and one of its ranked lists.
         services.AddOptions<Store.VectorStoreOptions>()
             .Bind(configuration.GetSection(Store.VectorStoreOptions.SectionName));
         services.AddOptions<Store.ChunkingOptions>()
             .Bind(configuration.GetSection(Store.ChunkingOptions.SectionName));
 
-        var vectorStore = configuration.GetSection(Store.VectorStoreOptions.SectionName).Get<Store.VectorStoreOptions>();
-        if (vectorStore?.Enabled == true)
+        if (configuration.GetSection(Store.VectorStoreOptions.SectionName).Get<Store.VectorStoreOptions>()?.Enabled == true)
         {
-            // Hosts register the configured model first (AddEmbeddingModel, default Ollama); this
-            // fallback only serves a host that enables the store without choosing a model.
+            // Hosts register the configured embedding model first (AddEmbeddingModel, default
+            // Ollama); this fallback only serves a host that enables the store without choosing one.
             services.TryAddSingleton<Domain.Knowledge.IEmbeddingModel>(new Domain.Knowledge.HashingEmbeddingModel());
             services.TryAddSingleton(sp => Npgsql.NpgsqlDataSource.Create(
                 configuration.GetConnectionString("Rma")
                 ?? throw new InvalidOperationException("Rag:VectorStore:Enabled needs ConnectionStrings:Rma.")));
             services.AddSingleton<Store.PgVectorKnowledgeStore>();
-            services.AddSingleton<Domain.Abstractions.IKnowledgeRetriever, Store.HybridKnowledgeRetriever>();
+            services.AddSingleton<Domain.Abstractions.IKnowledgeRetriever>(sp => new Store.HybridKnowledgeRetriever(
+                sp.GetRequiredService<Store.PgVectorKnowledgeStore>(),
+                Lexical(sp),
+                sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Store.VectorStoreOptions>>(),
+                sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<RagOptions>>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<Store.HybridKnowledgeRetriever>>()));
         }
         else
         {
-            services.AddSingleton<Domain.Abstractions.IKnowledgeRetriever>(sp => sp.GetRequiredService<KnowledgeIndexRetriever>());
+            services.AddSingleton<Domain.Abstractions.IKnowledgeRetriever>(Lexical);
         }
 
         return services;
@@ -120,7 +158,7 @@ public static class RagServiceCollectionExtensions
             .Value;
 
         var result = await Task.Run(
-            () => loader.Load(ResolveKnowledgeBaseRoot(options.KnowledgeBasePath), EffectiveIngestion(services)),
+            () => loader.Load(ResolveKnowledgeBaseRoot(options.KnowledgeBasePath)),
             cancellationToken);
 
         if (result.Errors.Count > 0)
@@ -137,27 +175,6 @@ public static class RagServiceCollectionExtensions
             services.GetRequiredService<Microsoft.Extensions.Options.IOptions<RagOptions>>());
 
         return true;
-    }
-
-    /// <summary>
-    /// The configured ingestion rules, with review required everywhere except Development: only
-    /// reviewed articles may reach a real customer, whatever the configuration says.
-    /// </summary>
-    internal static KnowledgeIngestionOptions EffectiveIngestion(IServiceProvider services)
-    {
-        var configured = services
-            .GetRequiredService<Microsoft.Extensions.Options.IOptions<KnowledgeIngestionOptions>>()
-            .Value;
-        var environment = services.GetService<IHostEnvironment>();
-
-        return new KnowledgeIngestionOptions
-        {
-            MaxFileBytes = configured.MaxFileBytes,
-            MaxArticles = configured.MaxArticles,
-            MaxFrontMatterBytes = configured.MaxFrontMatterBytes,
-            RequireReviewed = configured.RequireReviewed
-                || (environment is not null && !environment.IsDevelopment()),
-        };
     }
 
     /// <summary>

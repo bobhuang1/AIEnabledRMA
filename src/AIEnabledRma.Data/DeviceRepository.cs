@@ -34,9 +34,11 @@ public sealed class DeviceRepository(
     {
         var normalized = identifier.Trim().ToUpperInvariant();
 
-        // A MAC may arrive with or without separators, and in any case, so both the
-        // normalized and unpunctuated forms are compared.
-        var mac = identifier.Trim().Replace(":", string.Empty).Replace("-", string.Empty);
+        // A MAC may arrive with or without separators, and in any case, so both the normalized and
+        // unpunctuated forms are compared. Upper-cased like every other form below: the column is
+        // compared with ToUpper(), so a lower-case MAC would otherwise never match.
+        var mac = identifier.Trim().Replace(":", string.Empty).Replace("-", string.Empty)
+            .ToUpperInvariant();
 
         var byIdentifier = _db.Devices
             .Include(d => d.Product)
@@ -123,7 +125,7 @@ public sealed class DeviceRepository(
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<DeviceLookupResult> LookupAsync(
+    public async Task<DeviceLookupResult> LookupExactAsync(
         string identifier,
         DateOnly today,
         CancellationToken cancellationToken)
@@ -134,25 +136,36 @@ public sealed class DeviceRepository(
         var device = await GetBySerialAsync(trimmed, cancellationToken);
         if (device is not null)
         {
-            return BuildResult(device, today, "serial", 1d);
+            return BuildResult(device, today, trimmed, "serial", 1d);
         }
 
         // Then exact alternate-identifier match (MAC, IMEI, host serial).
         var alternates = await FindByIdentifierAsync(trimmed, cancellationToken);
         if (alternates.Count > 0)
         {
-            return BuildResult(alternates[0], today, "alternate-identifier", 0.98d);
+            return BuildResult(alternates[0], today, trimmed, "alternate-identifier", 0.98d);
         }
 
-        // Finally fuzzy. Trigram similarity is computed in the database; the in-memory
-        // scorer then re-ranks the shortlist so a coincidental trigram hit cannot win.
-        if (!_options.AllowFuzzyMatch)
+        return new DeviceLookupResult { MatchScore = 0d, Identifier = trimmed };
+    }
+
+    public async Task<DeviceLookupResult> LookupAsync(
+        string identifier,
+        DateOnly today,
+        CancellationToken cancellationToken)
+    {
+        var exact = await LookupExactAsync(identifier, today, cancellationToken);
+        if (exact.Device is not null)
         {
-            return new DeviceLookupResult { MatchScore = 0d };
+            return exact;
         }
 
+        // Fuzzy from here on. Trigram similarity is computed in the database; the in-memory
+        // scorer then re-ranks the shortlist so a coincidental trigram hit cannot win.
+        var trimmed = identifier.Trim();
         var needle = trimmed.ToUpperInvariant();
-        var unpunctuated = trimmed.Replace(":", string.Empty).Replace("-", string.Empty);
+        var unpunctuated = trimmed.Replace(":", string.Empty).Replace("-", string.Empty)
+            .ToUpperInvariant();
 
         var candidates = await _db.Devices
             .Include(d => d.Product)
@@ -193,20 +206,36 @@ public sealed class DeviceRepository(
 
         if (best.Device is null || best.Score < _options.MinimumMatchScore)
         {
-            return new DeviceLookupResult { MatchScore = best.Score };
+            return new DeviceLookupResult { MatchScore = best.Score, Identifier = trimmed };
         }
 
-        return BuildResult(best.Device, today, "fuzzy", best.Score);
+        return BuildResult(best.Device, today, trimmed, "fuzzy", best.Score);
     }
 
-    public async Task<bool> HasOpenRequestAsync(Guid deviceId, CancellationToken cancellationToken) =>
-        await _db.RmaLines
-            .AnyAsync(
-                l => l.DeviceId == deviceId
-                     && l.RmaRequest!.Status != RmaRequestStatus.Cancelled
-                     && l.RmaRequest.Status != RmaRequestStatus.Closed
-                     && l.RmaRequest.Status != RmaRequestStatus.Rejected,
-                cancellationToken);
+    public async Task<bool> HasReturnInProgressAsync(
+        Guid deviceId,
+        Guid? excludingRequestId,
+        CancellationToken cancellationToken)
+    {
+        // Only the statuses where the unit is on its way to us or already here. Earlier ones are
+        // returns somebody is still filling in, and counting those would let an anonymous visitor
+        // hold any unit whose serial they know by starting a return they never finish.
+        var lines = _db.RmaLines.Where(
+            l => l.DeviceId == deviceId
+                 && (l.RmaRequest!.Status == RmaRequestStatus.AwaitingShipment
+                     || l.RmaRequest.Status == RmaRequestStatus.Received
+                     || l.RmaRequest.Status == RmaRequestStatus.InRepair
+                     || l.RmaRequest.Status == RmaRequestStatus.Repaired));
+
+        // Written as a separate filter rather than `!=` against a nullable id, because an equality
+        // against NULL in SQL matches nothing and would turn every answer into "no" at intake.
+        if (excludingRequestId is { } excluded)
+        {
+            lines = lines.Where(l => l.RmaRequestId != excluded);
+        }
+
+        return await lines.AnyAsync(cancellationToken);
+    }
 
     private static double ScoreDevice(string query, Device device)
     {
@@ -221,6 +250,7 @@ public sealed class DeviceRepository(
     private static DeviceLookupResult BuildResult(
         Device device,
         DateOnly today,
+        string identifier,
         string matchedOn,
         double score)
     {
@@ -234,6 +264,7 @@ public sealed class DeviceRepository(
         return new DeviceLookupResult
         {
             Device = device,
+            Identifier = identifier,
             GoverningWarranty = governing,
             IsInWarranty = governing is not null,
             MatchedOn = matchedOn,
@@ -246,7 +277,9 @@ public sealed class DeviceLookupOptions
 {
     public const string SectionName = "DeviceLookup";
 
-    public bool AllowFuzzyMatch { get; set; } = true;
+    // Whether fuzzy matching happens is a choice of method - LookupExactAsync or LookupAsync -
+    // not a setting. A flag here could only turn LookupAsync into LookupExactAsync at runtime,
+    // which silently degrades every agent tool while leaving the code that calls it unchanged.
 
     /// <summary>Minimum in-memory score for a fuzzy hit to be accepted.</summary>
     public double MinimumMatchScore { get; set; } = 0.72;

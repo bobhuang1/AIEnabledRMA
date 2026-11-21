@@ -1,0 +1,186 @@
+{
+  "realm": "aienabledrma",
+  "enabled": true,
+  "displayName": "AIEnabledRMA (local development)",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "clientScopes": [
+    {
+      "name": "basic",
+      "description": "Supplies the subject. Keycloak's built-in client scopes are not created for an imported realm, so without this an access token has no sub at all and the tool server's audit row reads unknown-subject for every caller.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "rma:read",
+      "description": "Read-only access to the RMA MCP tools. Carries the audience the tool server requires, so a client granted this scope mints tokens it can present.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "aienabledrma-mcp audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "aienabledrma-mcp",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "audience-aienabledrma-mcp",
+      "description": "Adds the tool server's audience and nothing else. scripts/verify-auth.sh mints a token with this alone to prove that the right audience is not sufficient without the read scope.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "aienabledrma-mcp audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "aienabledrma-mcp",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "audience-wrong",
+      "description": "Adds an audience the tool server does not serve, so the gate can present a correctly signed token that was minted for something else.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "aienabledrma-not-mcp audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "aienabledrma-not-mcp",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "mcp-agent",
+      "name": "MCP agent (service account)",
+      "description": "A machine client. It holds one scope, and its secret is in the committed realm because this realm exists to be run on a developer's own machine.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "mcp-agent-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": [
+        "rma:read",
+        "basic"
+      ]
+    },
+    {
+      "clientId": "mcp-browser",
+      "name": "MCP browser client (public, PKCE)",
+      "description": "A public client for the runbook's browser flow. It has no secret to leak, requires PKCE with S256, and accepts only a loopback redirect; the authorization-code flow is the only grant it can run.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost:5173/*"
+      ],
+      "webOrigins": [
+        "http://localhost:5173"
+      ],
+      "defaultClientScopes": [
+        "rma:read",
+        "basic"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    },
+    {
+      "clientId": "mcp-negative",
+      "name": "MCP negative-path client (gate only)",
+      "description": "Gate-only client: lets scripts/verify-auth.sh mint tokens the transport must refuse (wrong audience, no rma:read, expired). One-second lifespan keeps the expiry check quick; the secret is committed because this realm is loopback-only.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "mcp-negative-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": [
+        "basic"
+      ],
+      "optionalClientScopes": [
+        "rma:read",
+        "audience-aienabledrma-mcp",
+        "audience-wrong"
+      ],
+      "attributes": {
+        "access.token.lifespan": "1"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "browser-demo",
+      "enabled": true,
+      "email": "browser-demo@example.com",
+      "emailVerified": true,
+      "firstName": "Browser",
+      "lastName": "Demo",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "browser-demo",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

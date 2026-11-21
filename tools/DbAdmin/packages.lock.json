@@ -194,10 +194,17 @@
       "aienabledrma.domain": {
         "type": "Project"
       },
+      "aienabledrma.privacy": {
+        "type": "Project",
+        "dependencies": {
+          "AIEnabledRma.Domain": "[1.0.0, )"
+        }
+      },
       "aienabledrma.rag": {
         "type": "Project",
         "dependencies": {
           "AIEnabledRma.Domain": "[1.0.0, )",
+          "AIEnabledRma.Privacy": "[1.0.0, )",
           "Npgsql": "[10.0.3, )"
         }
       },

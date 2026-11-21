@@ -26,7 +26,7 @@ public sealed class DeviceLookupTools(IDeviceRepository devices, IRmaRepository 
     public async Task<DeviceLookupResponse> FindDeviceAsync(
         [Description("The serial number, MAC address, IMEI, or asset tag the customer provided.")]
         string identifier,
-        [Description("Whether to include units that already have an open return. Defaults to false.")]
+        [Description("Whether to include units whose return is already in progress. Defaults to false.")]
         bool includeUnitsWithOpenReturns = false,
         CancellationToken cancellationToken = default)
     {
@@ -42,7 +42,8 @@ public sealed class DeviceLookupTools(IDeviceRepository devices, IRmaRepository 
             return DeviceLookupResponse.NotFound(identifier);
         }
 
-        var hasOpen = await devices.HasOpenRequestAsync(result.Device.Id, cancellationToken);
+        var hasOpen = await devices.HasReturnInProgressAsync(
+            result.Device.Id, excludingRequestId: null, cancellationToken);
 
         if (hasOpen && !includeUnitsWithOpenReturns)
         {
@@ -194,6 +195,7 @@ public sealed record DeviceLookupResponse
 
     public bool IsInWarranty { get; init; }
 
+    /// <summary>True when a return for this unit has reached AwaitingShipment or later.</summary>
     public bool HasOpenReturn { get; init; }
 
     public string? MatchedOn { get; init; }

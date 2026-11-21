@@ -1,91 +1,185 @@
 name: ci
 
+# Every hour of hosted-runner time is billed, and this job builds nine projects and starts a
+# PostgreSQL for the live suites. The rules that keep it cheap:
+#
+#   * every push to main, every pull request, and manual runs. Exempting main looked cheaper, but a
+#     merge is only pre-tested if the PR actually ran: this repository went from one failed run to no
+#     runs at all on main, and twenty commits reached origin without CI ever seeing them. The gate
+#     that matters is the one on the branch that ships, so main is checked on push too.
+#   * documentation-only changes do not start a run at all: root-level markdown (README, plan,
+#     licence) and docs/ are ignored. knowledge-base/ is deliberately not ignored — its markdown
+#     is data the retrieval tests read, so a change there can change what the suite sees.
+#   * a newer pull-request push cancels the older run, so a fixup commit does not pay for its
+#     predecessor as well. Main is never cancelled: cancelling the run for one commit is how this
+#     repository ended up with a single recorded run on main, a red one, and no green run after it.
+#   * a hard timeout, because a hung test otherwise bills until the runner gives up.
+#   * the NuGet cache is keyed on the lock files, which are checked in.
+#
+# If this check is ever made required for merging, note that a skipped path filter leaves the
+# check absent rather than green: the filter is then the wrong tool, and the run should start and
+# exit early instead. Do not add a matrix or a second operating system without saying, in the PR,
+# what the extra minutes buy.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
   pull_request:
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+  # No path filter here: a manual run is a person asking for the full gate on purpose.
   workflow_dispatch:
 
-# Least privilege: the workflow only reads the repository.
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # A pull request is superseded by its next push, and the superseded run is a run nobody wants to
+  # read. A commit on main is different: its run is the only evidence that commit has, so cancelling
+  # it leaves a red or absent run where a second push would have produced a green one. Both main
+  # runs report.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build-test:
+  build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
 
     services:
-      # pgvector image so the vector-store suites run against the same extension as production.
       postgres:
+        # PostgreSQL 16 with the pgvector extension, which the knowledge-store suites need (P5).
         image: pgvector/pgvector:pg16
         env:
+          POSTGRES_DB: rmaci
           POSTGRES_USER: rmauser
-          POSTGRES_PASSWORD: ci-only-password
-          POSTGRES_DB: rmadev
-          POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+          POSTGRES_PASSWORD: rmapassword
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U rmauser -d rmadev"
+          --health-cmd "pg_isready -U rmauser -d rmaci"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
 
     env:
-      DOTNET_NOLOGO: "1"
-      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
-      RMA_TEST_CONNECTION: "Host=localhost;Port=5432;Database=postgres;Username=rmauser;Password=ci-only-password"
-      # Any live-database test that cannot reach the server fails instead of skipping.
-      RMA_REQUIRE_LIVE_DB: "1"
-      # Retrieval/triage evaluation report (TriageEvaluationTests), uploaded with the test results.
-      RMA_EVAL_REPORT: ${{ github.workspace }}/TestResults/eval-report.json
+      # The live fixtures create and drop a database per test, so they connect as the cluster's
+      # admin user to the maintenance database, not to rmaci.
+      RMA_TEST_CONNECTION: "Host=localhost;Port=5432;Database=postgres;Username=rmauser;Password=rmapassword"
+      DOTNET_NOLOGO: "true"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "true"
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: "10.0.x"
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
 
-      - name: Restore (locked)
+      # --locked-mode turns a dependency change that was not committed into a build failure,
+      # which is the point of checking the lock files in.
+      - name: Restore
         run: dotnet restore AIEnabledRma.slnx --locked-mode
 
-      - name: Vulnerable package audit
-        run: |
-          dotnet list AIEnabledRma.slnx package --vulnerable --include-transitive 2>&1 | tee vulnerable.txt
-          if grep -q -E "has the following vulnerable packages" vulnerable.txt; then
-            echo "::error::Vulnerable packages found"
-            exit 1
-          fi
-
+      # A failing build has to say why without an authenticated log request. The first two runs on
+      # main both failed at this step and all the API answered was "Process completed with exit code
+      # 1": the compiler's message lives in the step log, which needs a token, so an SDK mismatch and
+      # a real compile error looked identical from outside. So the output is captured, the compiler's
+      # own lines are replayed as annotations — which the API serves to anyone — and a binlog stays
+      # next to them for whoever opens the run with a token.
       - name: Build
-        run: dotnet build AIEnabledRma.slnx --no-restore -c Release
+        run: |
+          set +e
+          dotnet build AIEnabledRma.slnx --no-restore -warnaserror -bl:build.binlog 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "::error::dotnet build failed with exit code $status; the diagnostics follow."
+            grep -E '(: error |: warning |^Build FAILED)' build.log | sort -u | head -40 |
+              while IFS= read -r line; do
+                echo "::error::$(printf '%s' "$line" | cut -c1-400)"
+              done
+          fi
+          exit "$status"
+
+      # A property renamed or a column widened without its migration still compiles and still
+      # passes every test that does not open a database. The live suites do notice it, but only as
+      # EF's PendingModelChangesWarning thrown out of Migrate(), and not at all on a machine with
+      # no database to point them at. So this runs the comparison the EF tooling already
+      # implements, before the suite and by its own name, and it needs none of the database
+      # service: only the assembly the build step produced.
+      - name: Model and migrations agree
+        run: |
+          set -euo pipefail
+          dotnet tool restore
+          dotnet ef migrations has-pending-model-changes \
+            --project src/AIEnabledRma.Data \
+            --no-build \
+            --configuration Debug
 
       - name: Test
-        run: >-
-          dotnet test tests/AIEnabledRma.Tests/AIEnabledRma.Tests.csproj --no-build -c Release
-          --logger "trx;LogFileName=results.trx" --results-directory TestResults
-
-      - name: Fail on skipped tests
-        shell: bash
         run: |
-          skipped=$(grep -o 'notExecuted="[0-9]*"' TestResults/results.trx | head -1 | grep -o '[0-9]*')
-          echo "Skipped tests: ${skipped:-0}"
-          if [ "${skipped:-0}" != "0" ]; then
-            echo "::error::${skipped} test(s) were skipped. CI must run every test."
+          set -o pipefail
+          dotnet test AIEnabledRma.slnx --no-build --logger "console;verbosity=normal" | tee test.log
+
+      - name: Fail when any test was skipped
+        run: |
+          set -euo pipefail
+          if grep -Eq "Skipped:[[:space:]]+[1-9]" test.log; then
+            echo "::error::Tests were skipped. The live suites must run against the service database."
+            grep -E "Skipped:[[:space:]]+[1-9]" test.log
+            exit 1
+          fi
+          if ! grep -Eq "Total tests:[[:space:]]+[1-9]" test.log; then
+            echo "::error::No tests ran."
             exit 1
           fi
 
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: test-results
-          path: TestResults
+      - name: Audit dependencies
+        run: |
+          set -euo pipefail
+          dotnet list AIEnabledRma.slnx package --vulnerable --include-transitive | tee vulnerable.log
+          if grep -q "has the following vulnerable packages" vulnerable.log; then
+            echo "::error::A dependency has a known vulnerability."
+            exit 1
+          fi
+
+  auth-flows:
+    # The realm import and both token flows were verified by hand, in a terminal, and the realm has
+    # already failed to import once on a field Keycloak rejects. This boots the committed realm and
+    # the mcp-http profile and drives the client-credentials and PKCE flows with the same script
+    # docs/mcp.md points at, so an edit that breaks the import or a check fails here instead of in a
+    # runbook nobody re-ran. It builds the tool server's image, which is why it is a separate job.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Verify the realm import and both auth flows
+        run: ./scripts/verify-auth.sh
+
+  runtime-images:
+    # The publish-side tests prove that `dotnet publish` carries the corpus; this proves that the
+    # images do. The Docker build sees only what .dockerignore admits and restores from a hand-written
+    # COPY list, so it can differ from publish in both directions, and it has: the tool server's
+    # publish carried no corpus items at all, and the Web image could not be built because a
+    # referenced manifest was missing from its COPY list. Neither is visible from a checkout.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Check both runtime images carry what their host reads
+        # The tool server's image is built by auth-flows as well, on another machine, so the layers
+        # cannot be handed over — but the buildx cache keyed on the image name means a rerun of either
+        # job reuses what the other already compiled, and a Dockerfile change invalidates only its
+        # own scope. Unset locally, where there is no Actions cache to talk to.
+        env:
+          RMA_IMAGE_CACHE: "1"
+        run: ./scripts/verify-images.sh

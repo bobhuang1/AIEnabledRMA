@@ -10,6 +10,12 @@
       },
       "aienabledrma.domain": {
         "type": "Project"
+      },
+      "aienabledrma.privacy": {
+        "type": "Project",
+        "dependencies": {
+          "AIEnabledRma.Domain": "[1.0.0, )"
+        }
       }
     }
   }

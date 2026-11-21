@@ -11,24 +11,74 @@ namespace AIEnabledRma.Data;
 /// </summary>
 public static class DemoDataSeeder
 {
-    public static Task SeedAsync(RmaDbContext db, CancellationToken cancellationToken) =>
-        DemoDataSeederCore.SeedAsync(db, cancellationToken);
-
-    public static Task SeedAsync(RmaDbContext db) => SeedAsync(db, CancellationToken.None);
+    /// <summary>
+    /// Seeds the demo catalogue.
+    /// </summary>
+    /// <param name="anchor">
+    /// The date every warranty and shipping window is measured from; null means today, which is
+    /// what a deployment wants. A test passes a fixed date and pins the host clock to the same
+    /// one, so its fixture never drifts with the calendar.
+    /// </param>
+    public static Task SeedAsync(
+        RmaDbContext db,
+        CancellationToken cancellationToken,
+        DateOnly? anchor = null) =>
+        DemoDataSeederCore.SeedAsync(db, cancellationToken, anchor);
 }
 
 internal static class DemoDataSeederCore
 {
     /// <summary>
-    /// Reference date for the seed. Warranty windows are expressed relative to this so the
-    /// fixture has a mix of in-warranty, grace-period, and expired devices without the data
-    /// going stale on a particular day.
+    /// Clearance kept between a seeded window and the policy edge it demonstrates.
     /// </summary>
-    private static readonly DateOnly Anchor = new(2026, 3, 1);
+    /// <remarks>
+    /// The offsets are chosen against the shipped policy (<c>RmaPolicy:GracePeriodDays</c> = 30,
+    /// <c>RmaPolicy:ReturnWindowDays</c> = 730) and sit a week or more away from every edge, on
+    /// both sides. A value on the edge is a demo that changes its meaning overnight: a warranty
+    /// ending exactly 30 days before the anchor reads "inside the grace period" on the day it is
+    /// seeded and "outside" the next, and the catalogue then contradicts its own description.
+    /// These margins keep each scenario meaning the same thing for at least a week of drift, and
+    /// most for a month or more; a fixture that must never drift passes an explicit anchor.
+    /// </remarks>
+    private const int WarrantyDaysLeft = 45;
+    private const int GraceDaysPastEnd = 10;
+    private const int DaysPastGrace = 60;
 
-    public static async Task SeedAsync(RmaDbContext db, CancellationToken cancellationToken)
+    /// <summary>
+    /// How long ago the paid-repair unit shipped. The return window is 730 days from here, so this
+    /// leaves a year of headroom for a seeded database that sits unused before the demo runs.
+    /// </summary>
+    private const int PaidRepairDaysSinceShip = 365;
+
+    /// <summary>
+    /// How long the paid-repair unit's warranty has been over: past the 30-day grace period, so it
+    /// is a paid repair rather than a covered return, and later than the ship date above.
+    /// </summary>
+    private const int PaidRepairDaysSinceWarrantyEnd = 90;
+
+    /// <summary>
+    /// Seeds every window in the fixture as an offset from <paramref name="anchor"/>, or from
+    /// today when the caller passes null.
+    /// </summary>
+    /// <remarks>
+    /// Anchoring on the day the seed runs is what keeps the documented outcomes true, because the
+    /// policy evaluates warranty, grace and return windows against the date the wizard actually
+    /// runs on. A hard-coded reference date ages instead: every day the calendar advances is a day
+    /// the fixture's ship dates recede, until the paid-repair unit is outside the return window
+    /// while its warranty still reads as expired.
+    ///
+    /// A database seeded once and left for months drifts the same way, because these are stored
+    /// dates, not rules: re-run the seeder (`DbAdmin reset`) when the demo has been sitting. A
+    /// caller that wants a fixture which never drifts — the live wizard tests — passes a fixed
+    /// anchor and pins the host clock to it.
+    /// </remarks>
+    public static async Task SeedAsync(
+        RmaDbContext db,
+        CancellationToken cancellationToken,
+        DateOnly? anchor)
     {
-        var now = new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero);
+        var reference = anchor ?? DateOnly.FromDateTime(DateTime.UtcNow);
+        var now = new DateTimeOffset(reference.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
 
         var products = BuildProducts(now);
         var devices = BuildDevices(products, now);
@@ -37,7 +87,7 @@ internal static class DemoDataSeederCore
 
         db.Products.AddRange(products);
         db.Devices.AddRange(devices);
-        db.Warranties.AddRange(BuildWarranties(devices));
+        db.Warranties.AddRange(BuildWarranties(devices, reference));
         db.Customers.AddRange(customers);
         db.Addresses.AddRange(addresses);
 
@@ -202,13 +252,17 @@ internal static class DemoDataSeederCore
         // In warranty, and already carries an open RMA from the seed. Used to demonstrate
         // the duplicate-request rule.
         Add(ax200, "AX2-0001-0002", "A4C1F2E30002", "356938035643810", null, 90, "3.2.1", "C2");
-        // In warranty, just inside the boundary.
+        // In warranty with six weeks of coverage left, not "just inside": a warranty ending within
+        // days would expire mid-demo, so the closest-to-expiry covered unit still has
+        // WarrantyDaysLeft days to run at the anchor.
         Add(ax200, "AX2-0001-0003", "A4C1F2E30003", "356938035643811", null, 200, "3.1.8", "C1");
-        // Warranty expired, inside the grace period.
+        // Warranty expired, inside the grace period: GraceDaysPastEnd days past the end, leaving
+        // 20 of the 30 grace days (13 after a week), so it is past the end date yet never within a
+        // week of either edge of the window.
         Add(ax200, "AX2-0001-0004", "A4C1F2E30004", "356938035643812", null, 380, "3.1.8", "C1");
         // Warranty expired well beyond the grace period, but still inside the return window,
         // so the wizard offers a paid repair rather than refusing it.
-        Add(ax200, "AX2-0001-0005", "A4C1F2E30005", "356938035643813", null, 500, "3.0.4", "C1");
+        Add(ax200, "AX2-0001-0005", "A4C1F2E30005", "356938035643813", null, PaidRepairDaysSinceShip, "3.0.4", "C1");
         // Extended-tier coverage still running.
         Add(ax400, "AX4-0002-0001", "B7D2A1C00001", "356938035643820", "HOST-88431", 400, "5.0.2", "D4");
         Add(ax400, "AX4-0002-0002", "B7D2A1C00002", "356938035643821", null, 60, "5.0.2", "D4");
@@ -217,16 +271,19 @@ internal static class DemoDataSeederCore
         // Kiosk, warranty long expired.
         Add(bx100, "BX1-0003-0001", "C1E5B7D00001", "356938035643830", null, 1200, "2.4.0", "B1");
         Add(bx100, "BX1-0003-0002", "C1E5B7D00002", "356938035643831", null, 45, "2.4.6", "B1");
-        // Merchandise, no electronics, no warranty record beyond a standard 30-day window.
-        Add(cradle, "CR1-0004-0001", null, null, null, 25, "n/a", "A1");
-        Add(cradle, "CR1-0004-0002", null, null, null, 60, "n/a", "A1");
+        // Merchandise, no electronics, no warranty record beyond a standard 30-day window, which
+        // is the only coverage these items have. Both windows are matched to the ship dates below
+        // and kept clear of the grace period: the covered one has 25 of its 30 days left, and the
+        // expired one is DaysPastGrace beyond its end date, i.e. 30 days past the grace period.
+        Add(cradle, "CR1-0004-0001", null, null, null, 5, "n/a", "A1");
+        Add(cradle, "CR1-0004-0002", null, null, null, 90, "n/a", "A1");
         Add(cable, "CBL-0005-0001", null, null, null, 15, "n/a", "A1");
         Add(cable, "CBL-0005-0002", null, null, null, 200, "n/a", "A1");
 
         return list;
     }
 
-    private static List<Warranty> BuildWarranties(List<Device> devices)
+    private static List<Warranty> BuildWarranties(List<Device> devices, DateOnly anchor)
     {
         var warranties = new List<Warranty>();
 
@@ -248,35 +305,49 @@ internal static class DemoDataSeederCore
         var bySerial = devices.ToDictionary(d => d.SerialNumber, StringComparer.Ordinal);
 
         // Standard two-year coverage, running.
-        Add(bySerial["AX2-0001-0001"], "Standard Coverage", "standard", Anchor.AddYears(-2), Anchor.AddYears(0).AddMonths(8));
-        Add(bySerial["AX2-0001-0002"], "Standard Coverage", "standard", Anchor.AddYears(-2), Anchor.AddMonths(6));
-        Add(bySerial["AX2-0001-0003"], "Standard Coverage", "standard", Anchor.AddYears(-2), Anchor.AddMonths(2));
-        // Ended a month ago: inside the 30-day grace period.
-        Add(bySerial["AX2-0001-0004"], "Standard Coverage", "standard", Anchor.AddYears(-2), Anchor.AddDays(-30));
-        // Ended long ago.
-        Add(bySerial["AX2-0001-0005"], "Standard Coverage", "standard", Anchor.AddYears(-4), Anchor.AddYears(-2));
+        Add(bySerial["AX2-0001-0001"], "Standard Coverage", "standard", anchor.AddYears(-2), anchor.AddYears(0).AddMonths(8));
+        Add(bySerial["AX2-0001-0002"], "Standard Coverage", "standard", anchor.AddYears(-2), anchor.AddMonths(6));
+        // WarrantyDaysLeft, not a day or two: the unit stays covered for the life of the demo
+        // rather than expiring the moment the clock advances past the boundary.
+        Add(bySerial["AX2-0001-0003"], "Standard Coverage", "standard", anchor.AddYears(-2), anchor.AddDays(WarrantyDaysLeft));
+        // Ended GraceDaysPastEnd days ago: inside the 30-day grace period with 20 days to spare,
+        // so the grace demo survives a week of drift instead of flipping the day after seeding.
+        Add(bySerial["AX2-0001-0004"], "Standard Coverage", "standard", anchor.AddYears(-2), anchor.AddDays(-GraceDaysPastEnd));
+        // Over, but not long over: PaidRepairDaysSinceWarrantyEnd puts it well outside the grace
+        // period while staying after its ship date. The two offsets together are what make this
+        // unit a paid repair rather than a free one or a refusal, and the margin to each edge is
+        // spelled out above rather than left as two numbers that happen to work today.
+        Add(
+            bySerial["AX2-0001-0005"],
+            "Standard Coverage",
+            "standard",
+            anchor.AddYears(-3),
+            anchor.AddDays(-PaidRepairDaysSinceWarrantyEnd));
 
         // Extended tier still running on a four-year-old unit.
-        Add(bySerial["AX4-0002-0001"], "Extended Coverage Plus", "extended", Anchor.AddYears(-4), Anchor.AddMonths(10));
-        Add(bySerial["AX4-0002-0002"], "Extended Coverage Plus", "extended", Anchor.AddYears(-4), Anchor.AddYears(2));
+        Add(bySerial["AX4-0002-0001"], "Extended Coverage Plus", "extended", anchor.AddYears(-4), anchor.AddMonths(10));
+        Add(bySerial["AX4-0002-0002"], "Extended Coverage Plus", "extended", anchor.AddYears(-4), anchor.AddYears(2));
         // Premium tier.
-        Add(bySerial["AX4-0002-0003"], "Premium Care", "premium", Anchor.AddYears(-4), Anchor.AddYears(1));
+        Add(bySerial["AX4-0002-0003"], "Premium Care", "premium", anchor.AddYears(-4), anchor.AddYears(1));
         // A second, superseded record on the same unit, to prove the evaluator picks the
         // record with the latest end date rather than the first row.
-        Add(bySerial["AX4-0002-0003"], "Standard Coverage", "standard", Anchor.AddYears(-4), Anchor.AddDays(-200));
+        Add(bySerial["AX4-0002-0003"], "Standard Coverage", "standard", anchor.AddYears(-4), anchor.AddDays(-200));
 
-        Add(bySerial["BX1-0003-0001"], "Standard Coverage", "standard", Anchor.AddYears(-4), Anchor.AddYears(-2));
-        Add(bySerial["BX1-0003-0002"], "Standard Coverage", "standard", Anchor.AddYears(-4), Anchor.AddDays(-90));
+        Add(bySerial["BX1-0003-0001"], "Standard Coverage", "standard", anchor.AddYears(-4), anchor.AddYears(-2));
+        Add(bySerial["BX1-0003-0002"], "Standard Coverage", "standard", anchor.AddYears(-4), anchor.AddDays(-90));
 
-        // Merchandise: 30-day return only, so the accessories are deliberately out of
-        // warranty at the anchor date except one.
-        Add(bySerial["CR1-0004-0001"], "Accessory Return Window", "standard", Anchor.AddDays(-25), Anchor.AddDays(5));
-        Add(bySerial["CR1-0004-0002"], "Accessory Return Window", "standard", Anchor.AddDays(-60), Anchor.AddDays(-30));
-        Add(bySerial["CBL-0005-0001"], "Accessory Return Window", "standard", Anchor.AddDays(-15), Anchor.AddDays(15));
-        Add(bySerial["CBL-0005-0002"], "Accessory Return Window", "standard", Anchor.AddDays(-200), Anchor.AddDays(-170));
+        // Merchandise: 30-day return only, so the accessories are deliberately out of warranty
+        // at the anchor date except one. Each window starts on its ship date and runs 30 days.
+        // CR1-0004-0001 was shipped five days ago, so 25 days remain and it is still covered after
+        // a week. CR1-0004-0002 ended DaysPastGrace days ago, 30 days beyond the grace period, so
+        // it is outside every window and cannot drift back inside it.
+        Add(bySerial["CR1-0004-0001"], "Accessory Return Window", "standard", anchor.AddDays(-5), anchor.AddDays(25));
+        Add(bySerial["CR1-0004-0002"], "Accessory Return Window", "standard", anchor.AddDays(-90), anchor.AddDays(-DaysPastGrace));
+        Add(bySerial["CBL-0005-0001"], "Accessory Return Window", "standard", anchor.AddDays(-15), anchor.AddDays(15));
+        Add(bySerial["CBL-0005-0002"], "Accessory Return Window", "standard", anchor.AddDays(-200), anchor.AddDays(-170));
 
         // A revoked record, to prove IsActive is honoured.
-        Add(bySerial["BX1-0003-0001"], "Extended Coverage Plus", "extended", Anchor.AddYears(-1), Anchor.AddYears(3), active: false);
+        Add(bySerial["BX1-0003-0001"], "Extended Coverage Plus", "extended", anchor.AddYears(-1), anchor.AddYears(3), active: false);
 
         return warranties;
     }

@@ -1,0 +1,614 @@
+{
+  "description": "Golden retrieval questions for the shipped knowledge base. A question is written the way a customer or a bench technician would ask it, and lists every article that would be a correct citation for it. Forty cases covering all nineteen articles, deliberately including near-miss pairs (trigger vs firmware, decode vs window damage, freeze vs blank screen, cradle vs accessory, who decides vs what evidence) and scoped cases for both product-specific articles. recall@3 is the share of cases whose top three hits include one of the expected articles. P5's acceptance test is 'not worse than the lexical index measured here', so this file owns the floor and the cases, not a test constant. Eight cases are unanswerable on purpose (rq-041 to rq-048: billing, refunds, shipping, a mobile app, a courier, a tablet, an account e-mail): the right answer is no article at all, so they are left out of recall's denominator and counted against precision@3 and the rank-1 rate.",
+  "acceptance": "recall@3 must be at least recallAt3Floor, MRR at least mrrFloor, and precision@3 at least precisionAt3Floor, for whatever IKnowledgeRetriever the host registers. All three floors are required and they guard different failures: recall@3 alone permits a hit to slip from rank 1 to rank 3, because the same cases still appear in the top three; MRR is what notices the slip, and precision@3 is what charges for citing a wrong article where the right answer was none at all - the unanswerable cases are in its denominator and score zero when anything is cited. The acceptance test compares a run to the latest entry in measurements, per case and in aggregate; floorRules below say how a floor may move. Raising a floor is allowed only beside a measurement that meets it; lowering one needs a measurement that shows why, and never happens in the same commit as a scoring change.",
+  "recallAt3Floor": 0.9,
+  "mrrFloor": 0.8,
+  "precisionAt3Floor": 0.32,
+  "floorRules": ["A floor is never lowered in the same commit that changes scoring code — tokeniser, index, weights, synonym expansion, chunking or the scorer. The scoring change lands and is measured first, its entry is appended to measurements, and only a later commit may move the floor, citing the entry that justifies it.", "A floor is never lowered to turn a red run green. If a scoring change measures below the floor, either the change is wrong or the floor was already wrong; the second claim needs a measurement that shows it, not an argument.", "A floor may be raised only in the commit that appends a measurement meeting it, so every bar has a run behind it.", "measurements is append-only: a new run appends an entry with its own measuredOn, index description and corpusFingerprint, and an existing entry is never edited, reordered or deleted. A corrected measurement is a new entry whose notes name the one it supersedes.", "Every entry records the corpusFingerprint and the reviewedCorpusHash it was measured on (sha256 over the articles' relative paths and bytes, and over the sorted REVIEWED.sha256 entries): the same fingerprint with a different number is the retriever's doing, a different fingerprint means the corpus moved under the measurement, and a reviewed hash that moved says a reviewer signed off different bytes. Record both every time; an entry that carries neither cannot attribute anything.", "Cases may be added but not weakened: do not reword a question into the article's own vocabulary to reach a floor, and do not delete a question because it fails.", "The latest entry is the one a run must reproduce; older entries are history and are expected to disagree with today's retriever."],
+  "measurements": [
+    {
+      "measuredOn": "2026-11-16",
+      "index": "KnowledgeIndex, BM25-style over article token sets, TopK 3, measured on the twenty-one cases that existed before the set was widened",
+      "corpusFingerprint": null,
+      "recallAt3": 0.714,
+      "mrr": 0.627,
+      "cases": 21,
+      "notes": "The first measurement. The corpus fingerprint is null because the field did not exist yet: backfilling it would state a fingerprint nobody measured, which is worse than saying so."
+    },
+    {
+      "measuredOn": "2026-11-16",
+      "index": "KnowledgeIndex, BM25-style over article token sets, TopK 3, before the tokeniser gained its stopword list and stemmer",
+      "corpusFingerprint": null,
+      "recallAt3": 0.775,
+      "mrr": 0.646,
+      "cases": 40,
+      "misses": ["rq-002", "rq-008", "rq-010", "rq-012", "rq-013", "rq-017", "rq-022", "rq-028", "rq-033"],
+      "notes": "The forty-case set on the unstemmed, unfiltered tokeniser. Fingerprint null for the same reason as the entry above."
+    },
+    {
+      "measuredOn": "2026-11-19",
+      "index": "KnowledgeIndex, BM25-style over article token sets, TopK 3, no product families enabled except those the scoped cases name",
+      "corpusFingerprint": "sha256:e7d527b50de35e15da92d73a514228abb664ab86f85755b9e5ee5b26fda164c4",
+      "recallAt3": 0.85,
+      "mrr": 0.75,
+      "cases": 40,
+      "misses": ["rq-002", "rq-008", "rq-013", "rq-017", "rq-033", "rq-038"],
+      "ranks": {
+        "rq-001": 1,
+        "rq-002": 0,
+        "rq-003": 1,
+        "rq-004": 2,
+        "rq-005": 2,
+        "rq-006": 2,
+        "rq-007": 1,
+        "rq-008": 0,
+        "rq-009": 1,
+        "rq-010": 1,
+        "rq-011": 3,
+        "rq-012": 1,
+        "rq-013": 0,
+        "rq-014": 1,
+        "rq-015": 1,
+        "rq-016": 1,
+        "rq-017": 0,
+        "rq-018": 1,
+        "rq-019": 1,
+        "rq-020": 1,
+        "rq-021": 1,
+        "rq-022": 2,
+        "rq-023": 1,
+        "rq-024": 1,
+        "rq-025": 3,
+        "rq-026": 1,
+        "rq-027": 1,
+        "rq-028": 1,
+        "rq-029": 1,
+        "rq-030": 1,
+        "rq-031": 3,
+        "rq-032": 1,
+        "rq-033": 0,
+        "rq-034": 1,
+        "rq-035": 1,
+        "rq-036": 1,
+        "rq-037": 1,
+        "rq-038": 0,
+        "rq-039": 1,
+        "rq-040": 1
+      },
+      "notes": "Measured after the tokeniser gained a stopword list and a shallow stemmer (TextTokens). Before it: recall@3 0.775 (31/40), MRR 0.646, nine misses; before the set was widened: 0.714 (15/21), MRR 0.627. Case by case against that measurement: four questions were recovered (rq-010 0->1, rq-012 0->1, rq-022 0->2, rq-028 0->1), four moved up without changing whether they hit (rq-009 2->1, rq-026 3->1, rq-027 3->1, rq-006 3->2), two previously passing questions slipped a rank (rq-004 1->2, rq-005 1->2) and one was lost (rq-038 3->miss, where the question now matches the cradle vocabulary more strongly than the evidence article's) — the losses are recorded rather than hidden, and the surface forms are indexed beside their stems precisely because stemming alone lost rq-014. The ranks block below records every case's rank; a run prints its own rank N -> M lines and fails on any case that moved. Six still miss, and they are no longer tokeniser problems: 'switch on' against the article's 'turn on' (rq-002), and a synonym or phrase the lexicon does not share — 'nothing happens when I pull the trigger' (rq-008), 'stopped halfway' (rq-013), 'evidence'/'faulty' (rq-017), 'photos' against 'documentation' (rq-033), 'write down' (rq-038). Those need synonyms or embeddings, not more suffix rules. The floor is the measurement rounded down; with forty cases one lost question is 0.025 and fails it. Do not raise the floor to 1.0 by rewriting the questions into the articles' own wording; the questions are the customer's. Re-recorded here as the third entry, with the per-case ranks and the corpus fingerprint, by the run that checked the measurement on 2026-11-19; the numbers are unchanged from the 2026-11-16 run."
+    },
+    {
+      "measuredOn": "2026-11-19",
+      "index": "KnowledgeIndex, BM25-style over article token sets, TopK 3, no product families enabled except those the scoped cases name",
+      "corpusFingerprint": "sha256:e7d527b50de35e15da92d73a514228abb664ab86f85755b9e5ee5b26fda164c4",
+      "recallAt3": 0.85,
+      "mrr": 0.75,
+      "precisionAt3": 0.31851851851851853,
+      "rank1Rate": 0.6222222222222222,
+      "cases": 45,
+      "answerable": 40,
+      "misses": ["rq-002", "rq-008", "rq-013", "rq-017", "rq-033", "rq-038"],
+      "ranks": {
+        "rq-001": 1,
+        "rq-002": 0,
+        "rq-003": 1,
+        "rq-004": 2,
+        "rq-005": 2,
+        "rq-006": 2,
+        "rq-007": 1,
+        "rq-008": 0,
+        "rq-009": 1,
+        "rq-010": 1,
+        "rq-011": 3,
+        "rq-012": 1,
+        "rq-013": 0,
+        "rq-014": 1,
+        "rq-015": 1,
+        "rq-016": 1,
+        "rq-017": 0,
+        "rq-018": 1,
+        "rq-019": 1,
+        "rq-020": 1,
+        "rq-021": 1,
+        "rq-022": 2,
+        "rq-023": 1,
+        "rq-024": 1,
+        "rq-025": 3,
+        "rq-026": 1,
+        "rq-027": 1,
+        "rq-028": 1,
+        "rq-029": 1,
+        "rq-030": 1,
+        "rq-031": 3,
+        "rq-032": 1,
+        "rq-033": 0,
+        "rq-034": 1,
+        "rq-035": 1,
+        "rq-036": 1,
+        "rq-037": 1,
+        "rq-038": 0,
+        "rq-039": 1,
+        "rq-040": 1
+      },
+      "falseCitations": {
+        "rq-041": 3,
+        "rq-043": 3,
+        "rq-044": 3,
+        "rq-045": 3
+      },
+      "notes": "The set gained five unanswerable cases (rq-041 to rq-045) and two citation metrics. Recall and MRR are unchanged because they are divided by the forty answerable questions. precision@3 is the mean share of the three citations that were correct; an unanswerable question scores 1 when nothing is cited and 0 when anything is, because zero is the correct number there. rank-1 rate is the share of questions whose first citation is correct, with no first citation counting for an unanswerable one. Measured: four of the five unanswerable questions were given three articles each (rq-041, rq-043, rq-044, rq-045); rq-042 was correctly left alone."
+    },
+    {
+      "measuredOn": "2026-11-19",
+      "index": "KnowledgeIndex, BM25-style over article token sets, TopK 3, with SynonymExpandingRetriever in front of it (Rag:Retrieval:SynonymExpansion, now the default)",
+      "corpusFingerprint": "sha256:e7d527b50de35e15da92d73a514228abb664ab86f85755b9e5ee5b26fda164c4",
+      "recallAt3": 0.925,
+      "mrr": 0.825,
+      "precisionAt3": 0.3481481481481481,
+      "rank1Rate": 0.6888888888888889,
+      "cases": 45,
+      "answerable": 40,
+      "misses": ["rq-017", "rq-033", "rq-038"],
+      "ranks": {
+        "rq-001": 1,
+        "rq-002": 1,
+        "rq-003": 1,
+        "rq-004": 2,
+        "rq-005": 2,
+        "rq-006": 2,
+        "rq-007": 1,
+        "rq-008": 1,
+        "rq-009": 1,
+        "rq-010": 1,
+        "rq-011": 3,
+        "rq-012": 1,
+        "rq-013": 1,
+        "rq-014": 1,
+        "rq-015": 1,
+        "rq-016": 1,
+        "rq-017": 0,
+        "rq-018": 1,
+        "rq-019": 1,
+        "rq-020": 1,
+        "rq-021": 1,
+        "rq-022": 2,
+        "rq-023": 1,
+        "rq-024": 1,
+        "rq-025": 3,
+        "rq-026": 1,
+        "rq-027": 1,
+        "rq-028": 1,
+        "rq-029": 1,
+        "rq-030": 1,
+        "rq-031": 3,
+        "rq-032": 1,
+        "rq-033": 0,
+        "rq-034": 1,
+        "rq-035": 1,
+        "rq-036": 1,
+        "rq-037": 1,
+        "rq-038": 0,
+        "rq-039": 1,
+        "rq-040": 1
+      },
+      "falseCitations": {
+        "rq-041": 3,
+        "rq-043": 3,
+        "rq-044": 3,
+        "rq-045": 3
+      },
+      "notes": "The curated synonym map became the default retrieval path. It fixes three of the six misses the tokeniser could not: rq-002 (switch on -> turn on) 0->1, rq-008 (pull the trigger / nothing happens) 0->1, rq-013 (stopped halfway -> truncated) 0->1, so recall@3 0.850 -> 0.925, MRR 0.750 -> 0.825, precision@3 0.318 -> 0.348, rank-1 0.622 -> 0.689. No other case moved, in either direction. The three that remain are not vocabulary gaps: rq-017, rq-033 and rq-038 name words the expected article already contains (evidence, documentation, record are in kb-0017 title and keywords), so a synonym cannot bridge them - the long article loses on BM25 length normalisation and coverage against shorter ones. Fixing those is a ranking question, not a lexicon one, and is left for a measured change of its own."
+    },
+    {
+      "measuredOn": "2026-11-19",
+      "index": "KnowledgeIndex, BM25-style over article token sets, TopK 3, with SynonymExpandingRetriever in front of it (Rag:Retrieval:SynonymExpansion, the default)",
+      "corpusFingerprint": "sha256:e7d527b50de35e15da92d73a514228abb664ab86f85755b9e5ee5b26fda164c4",
+      "recallAt3": 0.925,
+      "mrr": 0.825,
+      "precisionAt3": 0.3263888888888889,
+      "rank1Rate": 0.6458333333333334,
+      "cases": 48,
+      "answerable": 40,
+      "misses": ["rq-017", "rq-033", "rq-038"],
+      "ranks": {
+        "rq-001": 1,
+        "rq-002": 1,
+        "rq-003": 1,
+        "rq-004": 2,
+        "rq-005": 2,
+        "rq-006": 2,
+        "rq-007": 1,
+        "rq-008": 1,
+        "rq-009": 1,
+        "rq-010": 1,
+        "rq-011": 3,
+        "rq-012": 1,
+        "rq-013": 1,
+        "rq-014": 1,
+        "rq-015": 1,
+        "rq-016": 1,
+        "rq-017": 0,
+        "rq-018": 1,
+        "rq-019": 1,
+        "rq-020": 1,
+        "rq-021": 1,
+        "rq-022": 2,
+        "rq-023": 1,
+        "rq-024": 1,
+        "rq-025": 3,
+        "rq-026": 1,
+        "rq-027": 1,
+        "rq-028": 1,
+        "rq-029": 1,
+        "rq-030": 1,
+        "rq-031": 3,
+        "rq-032": 1,
+        "rq-033": 0,
+        "rq-034": 1,
+        "rq-035": 1,
+        "rq-036": 1,
+        "rq-037": 1,
+        "rq-038": 0,
+        "rq-039": 1,
+        "rq-040": 1
+      },
+      "falseCitations": {
+        "rq-041": 3,
+        "rq-043": 3,
+        "rq-044": 3,
+        "rq-045": 3,
+        "rq-046": 3,
+        "rq-047": 3,
+        "rq-048": 3
+      },
+      "notes": "Three unanswerable cases added (rq-046 refunds, rq-047 shipping, rq-048 billing), so the set is 48 cases of which 40 are answerable. Nothing about the retriever changed: recall@3 and MRR are unmoved at 0.925 and 0.825 and every answerable rank is identical. What moved is what the new cases measure. All three cite three articles, as four of the five older unanswerable cases already did, so precision@3 falls 0.348 -> 0.326 and rank-1 0.689 -> 0.646 by arithmetic, not by regression - the denominators grew and the retriever answered unanswerable questions anyway. rq-042 (the mobile app) is still the only one that abstains. This is the case the floors are meant to charge for: a vector store can hold recall@3 and still hand the model a wrong first citation, so MRR's floor is raised 0.75 -> 0.80 and precision@3 gets one at 0.32 in the same commit."
+    },
+    {
+      "measuredOn": "2026-11-19",
+      "index": "KnowledgeIndex, BM25-style over article token sets, TopK 3, with SynonymExpandingRetriever in front of it (Rag:Retrieval:SynonymExpansion, the default)",
+      "corpusFingerprint": "sha256:e7d527b50de35e15da92d73a514228abb664ab86f85755b9e5ee5b26fda164c4",
+      "reviewedCorpusHash": "sha256:847edb5931e72d41908073cfccdc103b7b267339aaf80fc05956e3b28e3532c4",
+      "recallAt3": 0.925,
+      "mrr": 0.825,
+      "precisionAt3": 0.3263888888888889,
+      "rank1Rate": 0.6458333333333334,
+      "cases": 48,
+      "answerable": 40,
+      "misses": ["rq-017", "rq-033", "rq-038"],
+      "ranks": {
+        "rq-001": 1,
+        "rq-002": 1,
+        "rq-003": 1,
+        "rq-004": 2,
+        "rq-005": 2,
+        "rq-006": 2,
+        "rq-007": 1,
+        "rq-008": 1,
+        "rq-009": 1,
+        "rq-010": 1,
+        "rq-011": 3,
+        "rq-012": 1,
+        "rq-013": 1,
+        "rq-014": 1,
+        "rq-015": 1,
+        "rq-016": 1,
+        "rq-017": 0,
+        "rq-018": 1,
+        "rq-019": 1,
+        "rq-020": 1,
+        "rq-021": 1,
+        "rq-022": 2,
+        "rq-023": 1,
+        "rq-024": 1,
+        "rq-025": 3,
+        "rq-026": 1,
+        "rq-027": 1,
+        "rq-028": 1,
+        "rq-029": 1,
+        "rq-030": 1,
+        "rq-031": 3,
+        "rq-032": 1,
+        "rq-033": 0,
+        "rq-034": 1,
+        "rq-035": 1,
+        "rq-036": 1,
+        "rq-037": 1,
+        "rq-038": 0,
+        "rq-039": 1,
+        "rq-040": 1
+      },
+      "falseCitations": {
+        "rq-041": 3,
+        "rq-043": 3,
+        "rq-044": 3,
+        "rq-045": 3,
+        "rq-046": 3,
+        "rq-047": 3,
+        "rq-048": 3
+      },
+      "notes": "No retrieval change: this entry re-records the same run so the measurement carries the reviewed corpus hash. recall@3 0.925, MRR 0.825, precision@3 0.326 and rank-1 0.646 are identical to the previous entry, and so is every per-case rank and false-citation count. reviewedCorpusHash is sha256 over the nineteen sorted entries of knowledge-base/REVIEWED.sha256 - the bytes a reviewer signed off, which is the corpus this eval measured, because it loads with RequireReview on. The fingerprint beside it hashes the files on disk instead. The two together are what attribute a moved number: fingerprint moved with reviewed hash held means an article was edited without a re-review and the loader dropped it; both moved means the edit was reviewed."
+    }
+  ],
+  "cases": [
+    {
+      "id": "rq-001",
+      "question": "the screen is black but the lights are still on",
+      "expected": ["kb-0004"],
+      "note": "Power present, no image: the blank-screen article rather than the no-power one."
+    },
+    {
+      "id": "rq-002",
+      "question": "it will not switch on at all and there are no lights",
+      "expected": ["kb-0003", "kb-0001"],
+      "note": "No power at all. The indicator article is also correct, because it is the first check the power-on article sends you to."
+    },
+    {
+      "id": "rq-003",
+      "question": "what does the amber light on the top of the unit mean",
+      "expected": ["kb-0001"]
+    },
+    {
+      "id": "rq-004",
+      "question": "the cradle is not charging the scanner at all",
+      "expected": ["kb-0002", "kb-0018"],
+      "note": "No charge in any slot. The multi-slot article is scoped, so it can only be a correct citation when that product family is enabled."
+    },
+    {
+      "id": "rq-005",
+      "question": "bluetooth will not pair with my phone",
+      "expected": ["kb-0005"]
+    },
+    {
+      "id": "rq-006",
+      "question": "it keeps disconnecting when I walk to the far end of the warehouse",
+      "expected": ["kb-0006"],
+      "note": "Distance-dependent instability: link range, not pairing and not host detection."
+    },
+    {
+      "id": "rq-007",
+      "question": "the computer does not detect the scanner when I plug it in",
+      "expected": ["kb-0007"]
+    },
+    {
+      "id": "rq-008",
+      "question": "nothing happens when I pull the trigger",
+      "expected": ["kb-0008"]
+    },
+    {
+      "id": "rq-009",
+      "question": "it beeps but the barcode never reads",
+      "expected": ["kb-0009"],
+      "note": "A scan event happens, so this is decode rather than trigger."
+    },
+    {
+      "id": "rq-010",
+      "question": "there is a deep scratch across the scanner window",
+      "expected": ["kb-0010"]
+    },
+    {
+      "id": "rq-011",
+      "question": "I dropped it and the corner of the case is cracked",
+      "expected": ["kb-0011"],
+      "note": "Impact damage is an excluded cause, so the citation has to be the physical-damage article."
+    },
+    {
+      "id": "rq-012",
+      "question": "coffee spilled into the unit and now it misbehaves",
+      "expected": ["kb-0012"]
+    },
+    {
+      "id": "rq-013",
+      "question": "the firmware update stopped halfway and now it will not start",
+      "expected": ["kb-0013"]
+    },
+    {
+      "id": "rq-014",
+      "question": "it restarts by itself every few minutes",
+      "expected": ["kb-0014"]
+    },
+    {
+      "id": "rq-015",
+      "question": "I need to return a usb cable and a spare mount",
+      "expected": ["kb-0015"]
+    },
+    {
+      "id": "rq-016",
+      "question": "what can this assistant actually help with",
+      "expected": ["kb-0016"]
+    },
+    {
+      "id": "rq-017",
+      "question": "what evidence do you need before you accept the unit is faulty",
+      "expected": ["kb-0017"]
+    },
+    {
+      "id": "rq-018",
+      "question": "the multi slot dock charges one scanner but not the second one",
+      "expected": ["kb-0018"],
+      "scope": ["Vertex Widget"],
+      "note": "Product-scoped article: only reachable with the family enabled and named in the session scope."
+    },
+    {
+      "id": "rq-019",
+      "question": "the Nimbus Beacon dock says the charge has stalled",
+      "expected": ["kb-0019"],
+      "scope": ["Nimbus Beacon"]
+    },
+    {
+      "id": "rq-020",
+      "question": "how do I get lint off the scan window without damaging it",
+      "expected": ["kb-0009", "kb-0010"],
+      "note": "Cleaning advice lives in the decode article; the window-damage article is a fair citation for the same action."
+    },
+    {
+      "id": "rq-021",
+      "question": "will you tell me whether it is still under warranty",
+      "expected": ["kb-0001", "kb-0016"],
+      "note": "Both articles say the decision is made by the returns system against the serial, not by the assistant."
+    },
+    {
+      "id": "rq-022",
+      "question": "I held the power button for fifteen seconds and it still will not come on",
+      "expected": ["kb-0003", "kb-0001"],
+      "note": "The hard reset is step two of the power-on article; the indicator article is the flat-battery check it sends you to first. Near miss against the reboot article, which is about a unit that comes up."
+    },
+    {
+      "id": "rq-023",
+      "question": "the unit sits on the dock but the light goes out instead of charging",
+      "expected": ["kb-0002", "kb-0001"],
+      "note": "The indicator table sends 'off, unit on the cradle' straight to the cradle article, so either is a fair citation."
+    },
+    {
+      "id": "rq-024",
+      "question": "it was working and then the screen went dark and the touch does nothing",
+      "expected": ["kb-0004"],
+      "note": "Same early words as the freeze article, but the unit is powered and simply not drawing anything: display, not software."
+    },
+    {
+      "id": "rq-025",
+      "question": "it freezes every time I open the stock count app",
+      "expected": ["kb-0014"],
+      "note": "Trigger-specific freeze, which is the reboot article's own advice: record the action, not the count."
+    },
+    {
+      "id": "rq-026",
+      "question": "it rained on the cart and the scanner got soaked",
+      "expected": ["kb-0012"],
+      "note": "The article says any ingress counts, even when the unit still works, so this is liquid rather than impact."
+    },
+    {
+      "id": "rq-027",
+      "question": "it fell off the forklift and the corner is smashed in",
+      "expected": ["kb-0011"],
+      "note": "A second impact case in different words, because 'smashed' is not a keyword in the article and 'cracked' is."
+    },
+    {
+      "id": "rq-028",
+      "question": "the trigger stopped working after our app was updated",
+      "expected": ["kb-0008", "kb-0013"],
+      "note": "Near miss against the firmware article: an app update that drops the scan binding is the trigger article's most common cause, and a failed firmware update is a fair second citation."
+    },
+    {
+      "id": "rq-029",
+      "question": "the label is wrinkled and it beeps without reading the code",
+      "expected": ["kb-0009"],
+      "note": "Label condition and distance are the decode article's step three; the beep means the trigger fired."
+    },
+    {
+      "id": "rq-030",
+      "question": "I lose the connection when I walk behind the racking",
+      "expected": ["kb-0006", "kb-0005"],
+      "note": "Place-dependent loss, phrased without the word 'range': the connectivity articles share the vocabulary of dropping, so both are defensible."
+    },
+    {
+      "id": "rq-031",
+      "question": "my phone never asks for a pairing code",
+      "expected": ["kb-0005"],
+      "note": "Pairing phrase in the customer's words, with no mention of Bluetooth."
+    },
+    {
+      "id": "rq-032",
+      "question": "Windows says unknown USB device after I plug the scanner in",
+      "expected": ["kb-0007"],
+      "note": "Host-side wording ('unknown device') rather than the article's 'not detected'."
+    },
+    {
+      "id": "rq-033",
+      "question": "does the return need photos of the damage",
+      "expected": ["kb-0017"],
+      "note": "Evidence requirements, asked as a yes/no about photos rather than with the article's words."
+    },
+    {
+      "id": "rq-034",
+      "question": "can you approve the replacement for me today",
+      "expected": ["kb-0016"],
+      "note": "Near miss against the evidence article, which is about what a specialist needs, not about who decides."
+    },
+    {
+      "id": "rq-035",
+      "question": "the clip on the belt holster snapped off",
+      "expected": ["kb-0015"],
+      "note": "'Snapped' is impact vocabulary, but a holster is merchandise with no electronics, so the accessory article is the citation."
+    },
+    {
+      "id": "rq-036",
+      "question": "the second scanner in the Vertex dock just sits there showing amber",
+      "expected": ["kb-0018", "kb-0002"],
+      "scope": ["Vertex Widget"],
+      "note": "Scoped article named by its model, with the generic cradle article as the fallback citation."
+    },
+    {
+      "id": "rq-037",
+      "question": "the beacon has been docked all night and the light never turns green",
+      "expected": ["kb-0019", "kb-0001"],
+      "scope": ["Nimbus Beacon"],
+      "note": "Scoped article, described as the customer sees it: amber that never resolves rather than the article's word 'stalled'."
+    },
+    {
+      "id": "rq-038",
+      "question": "what should I write down before the courier comes",
+      "expected": ["kb-0017", "kb-0016"],
+      "note": "Both articles tell the customer what to record; neither is wrong for this phrasing."
+    },
+    {
+      "id": "rq-039",
+      "question": "the scan window looks cloudy and the label will not read",
+      "expected": ["kb-0009", "kb-0010"],
+      "note": "Near miss between decode and window damage: a cloudy window is dirty (decode article, clean it) until it is damaged, so both are correct citations."
+    },
+    {
+      "id": "rq-040",
+      "question": "a glass of water went over the desk and the unit was sitting in it",
+      "expected": ["kb-0012"],
+      "note": "Liquid described by the accident rather than by the word 'spill'; the article is explicit that brief exposure still counts."
+    },
+    {
+      "id": "rq-041",
+      "question": "can I pay the invoice in Norwegian kroner instead of euros",
+      "expected": [],
+      "note": "A billing question. Nothing in the corpus is about payment, currency or invoicing, so the right answer is no citation at all."
+    },
+    {
+      "id": "rq-042",
+      "question": "is there a mobile app for android and ios",
+      "expected": [],
+      "note": "Nothing in the corpus is about a mobile app, so a citation here would be an unrelated article chosen with confidence."
+    },
+    {
+      "id": "rq-043",
+      "question": "which courier do you use to deliver to a post office box",
+      "expected": [],
+      "note": "Logistics, not product support. An unanswerable case on purpose: the corpus has no shipping article to find."
+    },
+    {
+      "id": "rq-044",
+      "question": "do you sell a tablet version of the scanner",
+      "expected": [],
+      "note": "Sales and hardware that does not exist. 'tablet' and 'sell' appear nowhere in the corpus."
+    },
+    {
+      "id": "rq-045",
+      "question": "how do I change the email address on my subscription",
+      "expected": [],
+      "note": "Account administration the corpus does not cover. The right behaviour is to cite nothing rather than the nearest scanner article."
+    },
+    {
+      "id": "rq-046",
+      "question": "can I get a refund because the unit arrived late",
+      "expected": [],
+      "note": "Billing, not product support: no article is about refunds. The word occurs once in the corpus, in kb-0016's list of things the assistant must not quote, so citing it is not an answer."
+    },
+    {
+      "id": "rq-047",
+      "question": "how long does shipping to Ireland take",
+      "expected": [],
+      "note": "Logistics. No article covers shipping times or destinations. Like rq-046, the word appears only in kb-0016 as something not to quote, which is what a lexical retriever will find."
+    },
+    {
+      "id": "rq-048",
+      "question": "where can I see my billing statements",
+      "expected": [],
+      "note": "Account administration the corpus does not cover. 'billing' appears nowhere in it."
+    }
+  ]
+}

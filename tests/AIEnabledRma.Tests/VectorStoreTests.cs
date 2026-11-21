@@ -106,36 +106,13 @@ public sealed class HashingEmbeddingModelTests
 /// </summary>
 public sealed class VectorStoreLiveTests : IAsyncLifetime
 {
-    private string _admin = string.Empty;
-    private string _database = string.Empty;
+    private readonly LiveDatabase _db = new("rma_kb_test");
     private NpgsqlDataSource? _dataSource;
 
     public async ValueTask InitializeAsync()
     {
-        _admin = Environment.GetEnvironmentVariable(LiveDatabase.ConnectionVariable)
-            ?? "Host=localhost;Port=5432;Database=postgres;Username=rmauser;Password=placeholder";
-
-        try
-        {
-            await using var probe = new NpgsqlConnection(_admin);
-            await probe.OpenAsync();
-        }
-        catch (Exception ex)
-        {
-            LiveDatabase.Unavailable(ex);
-        }
-
-        _database = $"rma_kb_test_{Guid.NewGuid():N}";
-        await using (var create = new NpgsqlConnection(_admin))
-        {
-            await create.OpenAsync();
-            await using var cmd = create.CreateCommand();
-            cmd.CommandText = $"CREATE DATABASE \"{_database}\"";
-            cmd.CommandTimeout = LiveDatabase.DdlTimeoutSeconds;
-            await cmd.ExecuteNonQueryAsync();
-        }
-
-        _dataSource = NpgsqlDataSource.Create(new NpgsqlConnectionStringBuilder(_admin) { Database = _database }.ConnectionString);
+        await _db.InitializeAsync();
+        _dataSource = NpgsqlDataSource.Create(_db.ConnectionString);
     }
 
     public async ValueTask DisposeAsync()
@@ -145,24 +122,8 @@ public sealed class VectorStoreLiveTests : IAsyncLifetime
             await _dataSource.DisposeAsync();
         }
 
-        if (_database.Length == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            NpgsqlConnection.ClearAllPools();
-            await using var drop = new NpgsqlConnection(_admin);
-            await drop.OpenAsync();
-            await using var cmd = drop.CreateCommand();
-            cmd.CommandText = $"DROP DATABASE IF EXISTS \"{_database}\" WITH (FORCE)";
-            cmd.CommandTimeout = LiveDatabase.DdlTimeoutSeconds;
-            await cmd.ExecuteNonQueryAsync();
-        }
-        catch (NpgsqlException)
-        {
-        }
+        NpgsqlConnection.ClearAllPools();
+        await _db.DisposeAsync();
     }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -171,7 +132,7 @@ public sealed class VectorStoreLiveTests : IAsyncLifetime
 
     private static KnowledgeBaseLoadResult ShippedArticles() =>
         new KnowledgeBaseLoader(NullLogger<KnowledgeBaseLoader>.Instance)
-            .Load(RagServiceCollectionExtensions.ResolveKnowledgeBaseRoot("knowledge-base"), new KnowledgeIngestionOptions { RequireReviewed = true });
+            .Load(RagServiceCollectionExtensions.ResolveKnowledgeBaseRoot("knowledge-base"));
 
     private async Task<PgVectorKnowledgeStore> StoreAsync(IEmbeddingModel? embedder = null)
     {
@@ -260,7 +221,9 @@ public sealed class VectorStoreLiveTests : IAsyncLifetime
         await store.IngestAsync(KbKinds.Article, ArticleDocuments.From(loaded), Ct);
 
         var ragOptions = Options.Create(new RagOptions { EnabledProductFamilies = [.. EnabledFamilies] });
-        var lexical = new KnowledgeIndexRetriever(new KnowledgeIndexHolder
+        // The owner's default lexical retriever (synonym-expanding) is both the baseline and the
+        // hybrid retriever's fallback list.
+        IKnowledgeRetriever lexical = new SynonymExpandingRetriever(new KnowledgeIndexHolder
         {
             Current = new KnowledgeIndex(loaded, Options.Create(new RagRetrievalOptions()), ragOptions),
         });
@@ -271,8 +234,9 @@ public sealed class VectorStoreLiveTests : IAsyncLifetime
             ragOptions,
             NullLogger<HybridKnowledgeRetriever>.Instance);
 
-        var lexicalRecall = await GoldenSet.RecallAtAsync(lexical, 3, Ct);
-        var hybridRecall = await GoldenSet.RecallAtAsync(hybrid, 3, Ct);
+        var golden = AIEnabledRma.Rag.Evaluation.RetrievalGoldenSet.Load(Path.Combine(RepositoryPaths.Root(), "eval", "retrieval-golden.json"));
+        var lexicalRecall = (await AIEnabledRma.Rag.Evaluation.RetrievalGoldenSet.ScoreAsync(golden, lexical, Ct)).RecallAt3;
+        var hybridRecall = (await AIEnabledRma.Rag.Evaluation.RetrievalGoldenSet.ScoreAsync(golden, hybrid, Ct)).RecallAt3;
 
         TestContext.Current.TestOutputHelper?.WriteLine($"recall@3 lexical={lexicalRecall:0.000} hybrid={hybridRecall:0.000}");
         Assert.True(hybridRecall >= lexicalRecall, $"hybrid recall@3 {hybridRecall:0.000} < lexical {lexicalRecall:0.000}");
@@ -323,45 +287,16 @@ public sealed class VectorStoreLiveTests : IAsyncLifetime
     }
 }
 
-/// <summary>The golden question set shared by the retrieval tests and the evaluation (P7).</summary>
-internal static class GoldenSet
+internal static class RepositoryPaths
 {
-    internal sealed record Question(string Id, string QuestionText, string[] Expected, string[] Scope, string Class);
-
-    public static IReadOnlyList<Question> Load()
+    public static string Root()
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "golden-questions.json");
-        using var doc = JsonDocument.Parse(File.ReadAllText(path));
-        return doc.RootElement.GetProperty("questions").EnumerateArray()
-            .Select(q => new Question(
-                q.GetProperty("id").GetString()!,
-                q.GetProperty("question").GetString()!,
-                q.GetProperty("expected").EnumerateArray().Select(e => e.GetString()!).ToArray(),
-                q.TryGetProperty("scope", out var scope) ? scope.EnumerateArray().Select(e => e.GetString()!).ToArray() : [],
-                q.GetProperty("class").GetString()!))
-            .ToList();
-    }
-
-    public static async Task<double> RecallAtAsync(IKnowledgeRetriever retriever, int k, CancellationToken ct)
-    {
-        var questions = Load().Where(q => q.Expected.Length > 0).ToList();
-        var hits = 0;
-        foreach (var q in questions)
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "AIEnabledRma.slnx")))
         {
-            var result = await retriever.RetrieveAsync(
-                new KnowledgeRetrievalQuery
-                {
-                    Query = q.QuestionText,
-                    ScopeTokens = q.Scope.ToHashSet(StringComparer.OrdinalIgnoreCase),
-                    TopK = k,
-                },
-                ct);
-            if (result.Articles.Take(k).Any(a => q.Expected.Contains(a.Id, StringComparer.OrdinalIgnoreCase)))
-            {
-                hits++;
-            }
+            directory = directory.Parent;
         }
 
-        return (double)hits / questions.Count;
+        return directory?.FullName ?? throw new InvalidOperationException("Repository root not found.");
     }
 }

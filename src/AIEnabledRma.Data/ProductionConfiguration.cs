@@ -10,13 +10,17 @@ namespace AIEnabledRma.Data;
 /// </summary>
 public static class ProductionConfiguration
 {
-    /// <summary>Passwords that appear in this repository's development and CI settings.</summary>
+    /// <summary>
+    /// Real passwords that appear in this repository's development and CI settings. The checked-in
+    /// <c>placeholder</c> is not one: it never authenticates, so a host left on it fails at its first
+    /// query, and the owner's Production boot tests start on it deliberately.
+    /// </summary>
     private static readonly HashSet<string> KnownDefaultPasswords = new(StringComparer.Ordinal)
     {
-        "", "rmapassword", "placeholder", "postgres", "password", "ci-only-password", "testonly", "changeme",
+        "rmapassword", "postgres", "password", "ci-only-password", "testonly", "changeme",
     };
 
-    public static IReadOnlyList<string> Problems(IConfiguration configuration, bool checkOperatorSignIn = false, bool checkRagKeys = false)
+    public static IReadOnlyList<string> Problems(IConfiguration configuration, bool checkOperatorSignIn = false)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         var problems = new List<string>();
@@ -45,30 +49,20 @@ public static class ProductionConfiguration
         RequireHttps(configuration, "Ai:Provider", "openai-compatible", "Ai:OpenAiCompatible:BaseUrl", problems);
         RequireHttps(configuration, "Embeddings:Provider", "openai-compatible", "Embeddings:BaseUrl", problems);
 
-        if (configuration.GetValue<bool>("Payments:AllowFakeGateway"))
-        {
-            problems.Add("Payments:AllowFakeGateway is on: the fake gateway accepts every payment.");
-        }
-
         if (checkOperatorSignIn
             && (string.IsNullOrWhiteSpace(configuration["OperatorAuth:Authority"]) || string.IsNullOrWhiteSpace(configuration["OperatorAuth:ClientId"])))
         {
             problems.Add("OperatorAuth:Authority and OperatorAuth:ClientId are required: the operator area needs real sign-in.");
         }
 
-        if (checkRagKeys
-            && (string.IsNullOrWhiteSpace(configuration["Rag:Security:AdminKey"]) || string.IsNullOrWhiteSpace(configuration["Rag:Security:ReaderKey"])))
-        {
-            problems.Add("Rag:Security:AdminKey and ReaderKey are required.");
-        }
 
         return problems;
     }
 
     /// <summary>Throws with every problem listed when the configuration is unsafe for Production.</summary>
-    public static void EnsureSafe(IConfiguration configuration, bool checkOperatorSignIn = false, bool checkRagKeys = false)
+    public static void EnsureSafe(IConfiguration configuration, bool checkOperatorSignIn = false)
     {
-        var problems = Problems(configuration, checkOperatorSignIn, checkRagKeys);
+        var problems = Problems(configuration, checkOperatorSignIn);
         if (problems.Count > 0)
         {
             throw new InvalidOperationException(

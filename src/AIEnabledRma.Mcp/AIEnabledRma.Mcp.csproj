@@ -8,17 +8,30 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Hosting and console logging (stdio mode logs to stderr so stdout stays a clean
-         JSON-RPC channel) come from the Microsoft.AspNetCore.App framework reference below,
-         which HTTP mode needs anyway. -->
+    <!-- The Worker SDK would supply Hosting and the implicit usings, but this host also
+         needs to be referenced as a library by the test project, which the Worker SDK's
+         implicit top-level usings and generated Program type make awkward. Explicit
+         references keep it a plain library-with-an-entry-point. Hosting and the console
+         logger (used to keep stdout a clean JSON-RPC channel on stdio) both come from the
+         framework reference below. -->
     <PackageReference Include="ModelContextProtocol" />
-    <!-- HTTP mode (McpHttpHost): streamable HTTP transport behind JWT bearer authentication. -->
+    <!-- The remote transport: MapMcp and the streamable HTTP handler. -->
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
+    <!-- Token validation for that transport. Not part of the shared framework, so it is a
+         package reference like any other. -->
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Needed for WebApplication and the middleware pipeline the HTTP transport is built on;
+         the stdio host uses the same services through the hosting abstractions only. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The key-refresh resolver is internal because nothing outside this host configures it, and
+         the test that proves a re-imported realm recovers is in the test project. -->
+    <InternalsVisibleTo Include="AIEnabledRma.Tests" />
   </ItemGroup>
 
   <ItemGroup>
@@ -40,4 +53,10 @@
     <ProjectReference Include="..\AIEnabledRma.Data\AIEnabledRma.Data.csproj" />
   </ItemGroup>
 
+  <!-- No corpus, deliberately. Every tool here is a function of stored data read through the
+       repositories; nothing in this host opens knowledge-base/, and the startup check that inspects a
+       corpus is registered by AddRag, which this host does not call. The image used to carry nineteen
+       articles and the reviewed manifest anyway, which made "the tool server's image carries the
+       corpus" true and meaningless. The projects that read the corpus declare it; PublishLayoutTests
+       asserts that this one publishes none, so a later change is a decision rather than an accident. -->
 </Project>

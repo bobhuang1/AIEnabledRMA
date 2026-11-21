@@ -60,7 +60,8 @@ services:
       dockerfile: src/AIEnabledRma.Web/Dockerfile
     environment:
       <<: *app-env
-      Operations__ApiKey: ${RMA_OPERATIONS_KEY:?set RMA_OPERATIONS_KEY}
+      # Operator key for /health detail and the RAG admin endpoints (the owner's Rag:Admin:ApiKey).
+      Rag__Admin__ApiKey: ${RMA_OPERATIONS_KEY:?set RMA_OPERATIONS_KEY}
       OperatorAuth__Authority: ${OIDC_AUTHORITY:?set OIDC_AUTHORITY}
       OperatorAuth__ClientId: ${OIDC_OPERATOR_CLIENT_ID:?set OIDC_OPERATOR_CLIENT_ID}
       OperatorAuth__ClientSecret: ${OIDC_OPERATOR_CLIENT_SECRET:?set OIDC_OPERATOR_CLIENT_SECRET}
@@ -89,9 +90,11 @@ services:
     environment:
       <<: *app-env
       Mcp__Transport: http
-      McpHttp__Authority: ${OIDC_AUTHORITY:?set OIDC_AUTHORITY}
-      McpHttp__AllowedClientIds__0: ${MCP_CLIENT_ID:?set MCP_CLIENT_ID}
-      McpHttp__ResourceUrl: https://${RMA_MCP_HOST:?set RMA_MCP_HOST}/mcp
+      # The owner's Mcp:Http settings (see docs/mcp.md): issuer, audience, scope, client allow-list.
+      Mcp__Http__Issuer: ${OIDC_AUTHORITY:?set OIDC_AUTHORITY}
+      Mcp__Http__Audience: aienabledrma-mcp
+      Mcp__Http__RequiredScope: rma:read
+      Mcp__Http__AllowedClientIds__0: ${MCP_CLIENT_ID:?set MCP_CLIENT_ID}
     depends_on:
       postgres:
         condition: service_healthy
@@ -111,8 +114,7 @@ services:
       dockerfile: src/AIEnabledRma.Rag/Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: Production
-      Rag__Security__AdminKey: ${RAG_ADMIN_KEY:?set RAG_ADMIN_KEY}
-      Rag__Security__ReaderKey: ${RAG_READER_KEY:?set RAG_READER_KEY}
+      Rag__Admin__ApiKey: ${RAG_ADMIN_KEY:?set RAG_ADMIN_KEY}
 
 volumes:
   ollama:

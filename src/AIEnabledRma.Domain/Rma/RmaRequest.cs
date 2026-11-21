@@ -13,6 +13,13 @@ public enum RmaRequestStatus
     Closed = 8,
     Cancelled = 9,
     Rejected = 10,
+
+    /// <summary>
+    /// Stopped because the policy asked for a human once the fault description was recorded.
+    /// Terminal for the wizard like <see cref="Rejected"/>, but not a refusal: a specialist
+    /// still decides what happens to the return.
+    /// </summary>
+    NeedsReview = 11,
 }
 
 public enum RmaRequestKind

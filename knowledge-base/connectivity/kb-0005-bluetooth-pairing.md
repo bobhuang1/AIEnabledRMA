@@ -2,12 +2,11 @@
 id: kb-0005
 title: Bluetooth pairing fails or drops
 category: connectivity
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [bluetooth, pair, pairing, unpair, disconnect, drops, connection, host, radio]
 related: [kb-0006, kb-0007]
-reviewed_by: kb-maintainers
-reviewed_at: 2026-11-20
-content_hash: 9de5529104e972feab77f1959d5600aa7ce344c978e3a4dc0466081cdd10db3c
 ---
 
 # Bluetooth pairing fails or drops

@@ -11,8 +11,8 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
-    <!-- packages.lock.json per project: CI restores with locked mode, so a dependency can only
-         change through a reviewed lock-file diff. -->
+    <!-- Lock files are checked in so CI can restore in locked mode: an accidental dependency
+         change then fails the build instead of silently resolving to something else. -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 

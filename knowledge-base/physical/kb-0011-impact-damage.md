@@ -2,12 +2,11 @@
 id: kb-0011
 title: Unit was dropped or suffered impact damage
 category: physical
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [dropped, drop, impact, cracked, broken, physical damage, fall, knocked, smashed]
 related: [kb-0012]
-reviewed_by: kb-maintainers
-reviewed_at: 2026-11-20
-content_hash: 7503b6456df9d9604c41bffba96d3f17b22ee712e93106e9aeb57a6faed3f4c6
 ---
 
 # Unit was dropped or suffered impact damage

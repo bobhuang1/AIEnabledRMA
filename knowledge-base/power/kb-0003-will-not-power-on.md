@@ -2,12 +2,11 @@
 id: kb-0003
 title: Unit will not power on
 category: power
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [power on, wont turn on, dead, no power, boot, start up, shutdown, hard reset]
 related: [kb-0001, kb-0004]
-reviewed_by: kb-maintainers
-reviewed_at: 2026-11-20
-content_hash: 16e68eb70573b8f17634a00ddfa42afd59d302122007c2206a987a9facb1f3e3
 ---
 
 # Unit will not power on

@@ -16,20 +16,25 @@ dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
 
 ## Status
 
+Since the merge of `origin/main` on 2026-11-20, P0–P4, P7 and P8 are the owner's implementations (pushed to
+`origin/main` on 2026-11-19); ours for those workstreams were removed in the merge. P5, P6, P9, P10, P11 and D4
+are this branch's work, re-seated on the owner's code. plan.md section 5 carries the owner's status lines and a
+"Merged 2026-11-20" note under each of ours.
+
 | Step | Workstream | Status | Notes |
 |---|---|---|---|
-| 1 | P0 Baseline and CI | Done (local) | CI workflow written; it has not run on GitHub yet because nothing is pushed. |
-| 2 | P1 MCP data surface | Done | Masked projection, exact-only contact search, `ToolCallGuard` (permission, budgets, audit), `reveal_customer_contact` (support role only). Budgets are in-process memory. |
-| 2 | P3 Redact before model calls | Done (pattern recognisers) | `PiiRedactor` in `Domain/Privacy` (not a separate project). The optional local-model NER pass is not built: it needs a local model choice (D4). |
-| 2 | P8 Wizard hardening | Done | Rate limits, link expiry, no contact-detail probing, security headers, fake gateway refused outside Development/Testing, split health endpoints. `/health/details` uses a shared operator key until P10 brings sign-in. |
-| 3 | P4 Secure KB ingestion | Done | API keys (not JWT) on the RAG host; JWT comes with P2's identity provider. Symlink test skips on Windows without Developer Mode, runs in Linux CI. |
-| 3 | P2 Remote MCP + OAuth | Done (provider-neutral) | Streamable HTTP + JWT + RFC 9728 metadata; which identity provider (D2) is still the owner's call and is pure configuration. |
-| 4 | P5 Vector store + chunking | Done | Embedding model per D4: Ollama by default, hosted or hashing by configuration. Token sizes are estimated (4/3 per word), not tokenizer-exact. |
-| 5 | P6 CRM case ingestion | Done; real import waits on the owner's tenant (D1 decided) | Tenant, app registration and field list; everything else runs on synthetic data. |
-| 5 | P7 Retrieval/triage eval | Done | Real-model run is wired (`eval.yml`) but needs a model endpoint and secrets from the owner. |
-| 6 | P9 Real payment gateway | Done; real payments wait on the owner's Stripe account (D5 decided) | No account, keys or Elements card form yet; everything else is tested against a fake Stripe API. |
-| 6 | P10 Operator view | Done | OIDC provider (D2) is configuration; a dev sign-in exists for Development/Testing only. |
-| 6 | P11 Production pack | Done | Not deployed anywhere: no host, domain or identity provider yet (owner). |
+| 1 | P0 Baseline and CI | Done (owner) | Owner's CI, lock files, SDK pin and the three gates (`scripts/verify-all.sh`). The CI service and the suite gate now use `pgvector/pgvector:pg16`, which P5's suites need. |
+| 2 | P1 MCP data surface | Done (owner) | Owner's masking, audit and PostgreSQL-counted budgets. |
+| 2 | P3 Redact before model calls | Done (owner) | Owner's `AIEnabledRma.Privacy` redactor; P6 now uses it. |
+| 2 | P8 Wizard hardening | Done (owner) | Owner's expiry, rate limits, headers, fake-gateway rule and operator key. |
+| 3 | P4 Secure KB ingestion | Done (owner) | Owner's corpus manifest (`REVIEWED.sha256`) and RAG admin gate. |
+| 3 | P2 Remote MCP + OAuth | Done (owner) | Owner's Keycloak realm, auth gate and transport. |
+| 4 | P5 Vector store + chunking | Done (ours, merged) | Embedding model per D4. The owner's lexical retriever stays the authority for articles in the hybrid ranking. |
+| 5 | P6 CRM case ingestion | Done (ours, merged); real import waits on the owner's tenant (D1) | Uses the owner's redactor. |
+| 5 | P7 Retrieval/triage eval | Done (owner) | Owner's `eval/retrieval-golden.json` and measurement history; our evaluation test and `eval.yml` were removed in favour of it. |
+| 6 | P9 Real payment gateway | Done (ours, merged); real payments wait on the owner's Stripe account (D5) | Fake gateway and its rule unchanged unless `Payments:Provider=stripe`. |
+| 6 | P10 Operator view | Done (ours, merged) | Review queue now also takes the owner's re-run policy decisions that send a return to a person. |
+| 6 | P11 Production pack | Done (ours, merged) | Startup checks narrowed to what the owner's Production rules do not already decide. |
 
 ## Log
 
@@ -188,3 +193,35 @@ Notes for the owner:
   configuration refused, `/api/embed` batching, wrong-size refusal) and `EmbeddingMismatchLiveTests` (another
   dimension refused at schema and ingest, another model refused at query, model recorded per chunk, lexical
   fallback, rebuild re-embeds); prod compose config valid; full suite 334 passed, 1 skipped (symlink, Windows), 0 failed.
+
+### 2026-11-20 (merge of origin/main)
+
+- **Merged `origin/main` into local `main`** (a merge, not a rebase, so every SHA cited above stays valid). The
+  owner had pushed 97 commits on 2026-11-14..19 implementing P0–P4, P7 and P8 differently (the Privacy project,
+  the Keycloak realm and auth gate, PostgreSQL-counted MCP budgets, the corpus manifest `REVIEWED.sha256`, the
+  golden set in `eval/`, the SDK pin in `global.json`, and `scripts/verify-all.sh`). Where both sides solved the
+  same thing, the owner's version was kept: every conflicted code file was taken from `origin/main`, and our
+  duplicates were removed (our MCP guard and masking, `Domain/Privacy`, `KnowledgeIngestion`/`RagApiKeys`, our
+  wizard filters and headers, our P0 test helper, our evaluation test, `eval.yml`, our MCP audit migration and our
+  knowledge-base front-matter stamps). Our P5, P6, P9, P10, P11 and D4 were re-seated on the owner's code:
+  - P6 uses the owner's `IPiiRedactor` (the Rag project now references Privacy);
+  - P5's hybrid retriever wraps the owner's synonym-expanding retriever, which stays the authority for article
+    ranking; the vector store contributes redacted cases and chunk snippets (recall@3 0.925 = lexical 0.925 on
+    the owner's golden set with the hashing embedder; an earlier straight fusion scored 0.725–0.825 and was
+    replaced);
+  - P10's `review_items`/`operator_actions` are a new `AddOperations` migration after the owner's migrations;
+    the review queue also takes the owner's re-run policy decisions that send a return to a person, and its
+    test uses a human-review region because the owner moved the duplicate check to confirmation;
+  - P9's Stripe registration sits beside the owner's `AddFakePaymentGateway` (`AddPaymentGateway`);
+  - P11's `ProductionConfiguration` was narrowed to a development database password and plain-http model or
+    embedding endpoints, because the owner's Production boot tests deliberately start on the placeholder
+    password, the fake-gateway opt-in and no operator OIDC; the prod compose now uses the owner's `Mcp:Http:*` and
+    `Rag:Admin:ApiKey` settings; the RAG Dockerfile copies `global.json` and the Privacy project.
+  - CI, the suite gate and the dev compose use `pgvector/pgvector:pg16` (P5's suites need the extension).
+- **Verification**, with the owner's gates: `scripts/verify-all.sh suite` (pinned SDK container, `restore
+  --locked-mode`, `build -warnaserror`, throwaway pgvector PostgreSQL): **458 passed, 0 skipped, 0 failed**;
+  `verify-auth.sh`: all checks passed, run from a scratch copy under its own compose project and ports so the
+  gate's `docker compose up` could not recreate the owner's `aienabledrma-postgres` container (its containers were
+  removed afterwards); `verify-all.sh images`: all checks passed; the RAG image builds with the corpus and its
+  manifest; the production compose validates.
+- A local backup of the pre-merge branch is kept as `backup/pre-merge-2026-11-20` (local only).

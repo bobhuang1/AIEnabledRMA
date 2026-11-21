@@ -1,5 +1,4 @@
 using System.Text.Json;
-using AIEnabledRma.Domain.Audit;
 using AIEnabledRma.Domain.Catalog;
 using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Operations;
@@ -30,6 +29,8 @@ public sealed class RmaDbContext(DbContextOptions<RmaDbContext> options) : DbCon
     public DbSet<RmaExclusion> RmaExclusions => Set<RmaExclusion>();
 
     public DbSet<McpToolCall> McpToolCalls => Set<McpToolCall>();
+
+    public DbSet<McpCallStamp> McpCallStamps => Set<McpCallStamp>();
 
     public DbSet<ReviewItem> ReviewItems => Set<ReviewItem>();
 
@@ -238,6 +239,39 @@ public sealed class RmaLineConfiguration : IEntityTypeConfiguration<RmaLine>
     }
 }
 
+public sealed class McpToolCallConfiguration : IEntityTypeConfiguration<McpToolCall>
+{
+    public void Configure(EntityTypeBuilder<McpToolCall> builder)
+    {
+        builder.ToTable("mcp_tool_calls");
+        builder.HasKey(c => c.Id);
+        builder.Property(c => c.Tool).HasMaxLength(64).IsRequired();
+        builder.Property(c => c.Caller).HasMaxLength(128).IsRequired();
+        builder.Property(c => c.ArgumentHashes).HasMaxLength(1000).IsRequired();
+
+        // The audit trail is read by time and by tool, not by id: an operator asking "what did
+        // agents look up yesterday" scans the newest rows first.
+        builder.HasIndex(c => c.AtUtc).HasDatabaseName("ix_mcp_tool_calls_at");
+        builder.HasIndex(c => new { c.Tool, c.AtUtc }).HasDatabaseName("ix_mcp_tool_calls_tool_at");
+    }
+}
+
+public sealed class McpCallStampConfiguration : IEntityTypeConfiguration<McpCallStamp>
+{
+    public void Configure(EntityTypeBuilder<McpCallStamp> builder)
+    {
+        builder.ToTable("mcp_call_stamps");
+        builder.HasKey(s => s.Id);
+        builder.Property(s => s.Caller).HasMaxLength(160).IsRequired();
+        builder.Property(s => s.Kind).HasMaxLength(16).IsRequired();
+
+        // Every read is "this caller's stamps of one kind inside the window", and every cleanup is
+        // the same predicate with an older cutoff. One index answers both.
+        builder.HasIndex(s => new { s.Caller, s.Kind, s.AtUtc })
+            .HasDatabaseName("ix_mcp_call_stamps_caller_kind_at");
+    }
+}
+
 public sealed class RmaExclusionConfiguration : IEntityTypeConfiguration<RmaExclusion>
 {
     public void Configure(EntityTypeBuilder<RmaExclusion> builder)
@@ -261,21 +295,6 @@ public sealed class RmaExclusionConfiguration : IEntityTypeConfiguration<RmaExcl
             .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasIndex(e => e.RmaRequestId).HasDatabaseName("ix_rma_exclusions_request");
-    }
-}
-
-public sealed class McpToolCallConfiguration : IEntityTypeConfiguration<McpToolCall>
-{
-    public void Configure(EntityTypeBuilder<McpToolCall> builder)
-    {
-        builder.ToTable("mcp_tool_calls");
-        builder.HasKey(c => c.Id);
-        builder.Property(c => c.Tool).HasMaxLength(64).IsRequired();
-        builder.Property(c => c.Caller).HasMaxLength(256).IsRequired();
-        builder.Property(c => c.SessionId).HasMaxLength(128);
-        builder.Property(c => c.ArgumentHashes).HasColumnType("jsonb").IsRequired();
-        builder.Property(c => c.Outcome).HasMaxLength(32).IsRequired();
-        builder.HasIndex(c => new { c.Caller, c.AtUtc }).HasDatabaseName("ix_mcp_tool_calls_caller_at");
     }
 }
 

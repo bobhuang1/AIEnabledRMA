@@ -120,35 +120,13 @@ public sealed class EmbeddingProviderTests
 /// <summary>D4: the store never mixes vectors from different models or dimensions.</summary>
 public sealed class EmbeddingMismatchLiveTests : IAsyncLifetime
 {
-    private string _admin = string.Empty;
-    private string _database = string.Empty;
+    private readonly LiveDatabase _db = new("rma_emb_test");
     private NpgsqlDataSource? _dataSource;
 
     public async ValueTask InitializeAsync()
     {
-        _admin = Environment.GetEnvironmentVariable(LiveDatabase.ConnectionVariable)
-            ?? "Host=localhost;Port=5432;Database=postgres;Username=rmauser;Password=placeholder";
-        try
-        {
-            await using var probe = new NpgsqlConnection(_admin);
-            await probe.OpenAsync();
-        }
-        catch (Exception ex)
-        {
-            LiveDatabase.Unavailable(ex);
-        }
-
-        _database = $"rma_emb_test_{Guid.NewGuid():N}";
-        await using (var create = new NpgsqlConnection(_admin))
-        {
-            await create.OpenAsync();
-            await using var cmd = create.CreateCommand();
-            cmd.CommandText = $"CREATE DATABASE \"{_database}\"";
-            cmd.CommandTimeout = LiveDatabase.DdlTimeoutSeconds;
-            await cmd.ExecuteNonQueryAsync();
-        }
-
-        _dataSource = NpgsqlDataSource.Create(new NpgsqlConnectionStringBuilder(_admin) { Database = _database }.ConnectionString);
+        await _db.InitializeAsync();
+        _dataSource = NpgsqlDataSource.Create(_db.ConnectionString);
     }
 
     public async ValueTask DisposeAsync()
@@ -158,24 +136,8 @@ public sealed class EmbeddingMismatchLiveTests : IAsyncLifetime
             await _dataSource.DisposeAsync();
         }
 
-        if (_database.Length == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            NpgsqlConnection.ClearAllPools();
-            await using var drop = new NpgsqlConnection(_admin);
-            await drop.OpenAsync();
-            await using var cmd = drop.CreateCommand();
-            cmd.CommandText = $"DROP DATABASE IF EXISTS \"{_database}\" WITH (FORCE)";
-            cmd.CommandTimeout = LiveDatabase.DdlTimeoutSeconds;
-            await cmd.ExecuteNonQueryAsync();
-        }
-        catch (NpgsqlException)
-        {
-        }
+        NpgsqlConnection.ClearAllPools();
+        await _db.DisposeAsync();
     }
 
     [Fact]

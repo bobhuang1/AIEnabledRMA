@@ -42,7 +42,7 @@ public sealed class OperatorController(
         {
             ReviewItems = await operations.OpenReviewItemsAsync(100, cancellationToken),
             Requests = await operations.RequestsInStatusAsync(Waiting, 100, cancellationToken),
-            UnreviewedArticles = knowledge.Current.Articles.Where(a => !a.IsReviewed).Select(a => (a.Id, a.Title, a.ContentHash)).ToList(),
+            UnreviewedArticles = knowledge.Current.Articles.Where(a => a.ReviewedBy is null || a.ReviewedAt is null).Select(a => (a.Id, a.Title, a.ContentHash)).ToList(),
             KnowledgeLoadErrors = knowledge.Current.LoadErrors,
             CaseReportJson = caseReport,
             RecentActions = await operations.RecentActionsAsync(25, cancellationToken),

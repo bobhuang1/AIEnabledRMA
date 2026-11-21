@@ -556,15 +556,22 @@
         "dependencies": {
           "AIEnabledRma.Data": "[1.0.0, )",
           "AIEnabledRma.Domain": "[1.0.0, )",
-          "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.12, )",
+          "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.15, )",
           "ModelContextProtocol": "[2.2.0, )",
           "ModelContextProtocol.AspNetCore": "[2.2.0, )"
+        }
+      },
+      "aienabledrma.privacy": {
+        "type": "Project",
+        "dependencies": {
+          "AIEnabledRma.Domain": "[1.0.0, )"
         }
       },
       "aienabledrma.rag": {
         "type": "Project",
         "dependencies": {
           "AIEnabledRma.Domain": "[1.0.0, )",
+          "AIEnabledRma.Privacy": "[1.0.0, )",
           "Npgsql": "[10.0.3, )"
         }
       },
@@ -574,8 +581,9 @@
           "AIEnabledRma.Ai": "[1.0.0, )",
           "AIEnabledRma.Data": "[1.0.0, )",
           "AIEnabledRma.Domain": "[1.0.0, )",
+          "AIEnabledRma.Privacy": "[1.0.0, )",
           "AIEnabledRma.Rag": "[1.0.0, )",
-          "Microsoft.AspNetCore.Authentication.OpenIdConnect": "[10.0.12, )"
+          "Microsoft.AspNetCore.Authentication.OpenIdConnect": "[10.0.15, )"
         }
       },
       "EFCore.NamingConventions": {
@@ -591,18 +599,18 @@
       },
       "Microsoft.AspNetCore.Authentication.JwtBearer": {
         "type": "CentralTransitive",
-        "requested": "[10.0.12, )",
-        "resolved": "10.0.12",
-        "contentHash": "DeE+Bq2OqB3FikFkZk+7gFBeLOQhkSolejLrbi+a9zpfvXtW1Ff6Nd6DIvHXIm+pc4aM4+52vDy3jnuau0qoUQ==",
+        "requested": "[10.0.15, )",
+        "resolved": "10.0.15",
+        "contentHash": "Y8VbPrQuABpTkMrqO/K2URdfqBBheri/YDcB+sO530arpqsy7vsd/go/YfEP8XaRkACWPQV2gPxedl7dnxp0zg==",
         "dependencies": {
           "Microsoft.IdentityModel.Protocols.OpenIdConnect": "8.19.2"
         }
       },
       "Microsoft.AspNetCore.Authentication.OpenIdConnect": {
         "type": "CentralTransitive",
-        "requested": "[10.0.12, )",
-        "resolved": "10.0.12",
-        "contentHash": "UfkKr9EP+LBgnFfxwkfnZzta7XkalCroZWoxg2yW9dt8iPXO7bJYpcmyFIeM+FLcAlOKZeduP93XhuCcfWaYIQ==",
+        "requested": "[10.0.15, )",
+        "resolved": "10.0.15",
+        "contentHash": "e+YnssZ13Vs9wMi4Jvw+nA46oh+0I3bZKASmASHX4x2IQh4Ns9ilcNw30YC1lnyMLF6mIF4Fe7U0Mn0WJbr3Hg==",
         "dependencies": {
           "Microsoft.IdentityModel.Protocols.OpenIdConnect": "8.19.2"
         }

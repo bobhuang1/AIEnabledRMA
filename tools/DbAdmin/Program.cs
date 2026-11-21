@@ -44,7 +44,7 @@ builder.Services.AddSingleton(_ => Npgsql.NpgsqlDataSource.Create(
     ?? throw new InvalidOperationException("ConnectionStrings:Rma is not configured.")));
 builder.Services.AddSingleton<PgVectorKnowledgeStore>();
 builder.Services.AddOptions<ChunkingOptions>().Bind(builder.Configuration.GetSection(ChunkingOptions.SectionName));
-builder.Services.AddOptions<KnowledgeIngestionOptions>().Bind(builder.Configuration.GetSection(KnowledgeIngestionOptions.SectionName));
+builder.Services.AddOptions<KnowledgeBaseOptions>().Bind(builder.Configuration.GetSection(KnowledgeBaseOptions.SectionName));
 
 using var host = builder.Build();
 
@@ -92,7 +92,8 @@ switch (command)
         break;
 
     case "seed":
-        await SchemaBootstrapper.InitializeAsync(db, DemoDataSeeder.SeedAsync);
+        await SchemaBootstrapper.InitializeAsync(
+            db, (context, token) => DemoDataSeeder.SeedAsync(context, token));
         await PrintStatsAsync(db);
         break;
 
@@ -115,7 +116,7 @@ switch (command)
 
         await db.Database.ExecuteSqlRawAsync("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
         await db.Database.MigrateAsync();
-        await DemoDataSeeder.SeedAsync(db);
+        await DemoDataSeeder.SeedAsync(db, CancellationToken.None);
 
         // A dropped schema takes the sequence with it, and seeding writes RMA-2026-00001, so
         // the counter has to be put back in step or the first new return collides.
@@ -134,11 +135,12 @@ switch (command)
         var root = RagServiceCollectionExtensions.ResolveKnowledgeBaseRoot(
             pathIndex >= 0 && pathIndex + 1 < args.Length ? args[pathIndex + 1] : "knowledge-base");
 
-        // Review is required everywhere except Development, exactly as the RAG host requires it.
-        var ingestion = host.Services.GetRequiredService<IOptions<KnowledgeIngestionOptions>>().Value;
-        ingestion.RequireReviewed |= !isDevelopment;
+        // Review (and the REVIEWED.sha256 manifest) is required everywhere except Development,
+        // exactly as the hosts require it.
+        var corpusOptions = host.Services.GetRequiredService<IOptions<KnowledgeBaseOptions>>().Value;
+        corpusOptions.RequireReview |= !isDevelopment;
 
-        var loaded = new KnowledgeBaseLoader(NullLogger<KnowledgeBaseLoader>.Instance).Load(root, ingestion);
+        var loaded = new KnowledgeBaseLoader(NullLogger<KnowledgeBaseLoader>.Instance, Options.Create(corpusOptions)).Load(root);
         var documents = ArticleDocuments.From(loaded, host.Services.GetRequiredService<IOptions<ChunkingOptions>>().Value);
 
         var store = host.Services.GetRequiredService<PgVectorKnowledgeStore>();

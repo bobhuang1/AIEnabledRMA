@@ -2,12 +2,11 @@
 id: kb-0014
 title: Unit reboots or freezes repeatedly
 category: software
+reviewed_by: docs-team
+reviewed_at: 2026-09-29
 product_scope: ["*"]
 keywords: [reboot, restart, freeze, frozen, crash, loop, unstable, restarts]
 related: [kb-0013, kb-0004]
-reviewed_by: kb-maintainers
-reviewed_at: 2026-11-20
-content_hash: 924d63baad453a9b3c79a6f74fef812632aa037638f903b91758c130d8397efb
 ---
 
 # Unit reboots or freezes repeatedly

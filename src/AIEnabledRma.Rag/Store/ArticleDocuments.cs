@@ -28,7 +28,7 @@ public static class ArticleDocuments
                 Category = a.Category,
                 ProductScope = a.ProductScope,
                 ReviewedBy = a.ReviewedBy,
-                ReviewedAt = a.ReviewedAt,
+                ReviewedAt = a.ReviewedAt is { } reviewed ? DateOnly.FromDateTime(reviewed.UtcDateTime) : null,
                 ContentHash = DocumentHash(a),
                 Chunks = MarkdownChunker.Chunk(a.Title, a.Body, chunking),
             })
@@ -48,7 +48,7 @@ public static class ArticleDocuments
             article.Category,
             string.Join(",", article.ProductScope),
             article.ReviewedBy,
-            article.ReviewedAt?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture));
+            article.ReviewedAt?.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 }

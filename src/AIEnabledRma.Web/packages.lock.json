@@ -4,9 +4,9 @@
     "net10.0": {
       "Microsoft.AspNetCore.Authentication.OpenIdConnect": {
         "type": "Direct",
-        "requested": "[10.0.12, )",
-        "resolved": "10.0.12",
-        "contentHash": "UfkKr9EP+LBgnFfxwkfnZzta7XkalCroZWoxg2yW9dt8iPXO7bJYpcmyFIeM+FLcAlOKZeduP93XhuCcfWaYIQ==",
+        "requested": "[10.0.15, )",
+        "resolved": "10.0.15",
+        "contentHash": "e+YnssZ13Vs9wMi4Jvw+nA46oh+0I3bZKASmASHX4x2IQh4Ns9ilcNw30YC1lnyMLF6mIF4Fe7U0Mn0WJbr3Hg==",
         "dependencies": {
           "Microsoft.IdentityModel.Protocols.OpenIdConnect": "8.19.2"
         }
@@ -101,10 +101,17 @@
       "aienabledrma.domain": {
         "type": "Project"
       },
+      "aienabledrma.privacy": {
+        "type": "Project",
+        "dependencies": {
+          "AIEnabledRma.Domain": "[1.0.0, )"
+        }
+      },
       "aienabledrma.rag": {
         "type": "Project",
         "dependencies": {
           "AIEnabledRma.Domain": "[1.0.0, )",
+          "AIEnabledRma.Privacy": "[1.0.0, )",
           "Npgsql": "[10.0.3, )"
         }
       },

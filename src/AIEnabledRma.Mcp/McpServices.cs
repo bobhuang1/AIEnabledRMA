@@ -1,0 +1,49 @@
+using AIEnabledRma.Data;
+using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Mcp.Tools;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using ModelContextProtocol.Server;
+
+namespace AIEnabledRma.Mcp;
+
+/// <summary>
+/// Everything the tools need, registered once for both transports. The transport itself is the only
+/// thing the two hosts decide differently, so a tool cannot end up covered on one and not the other.
+/// </summary>
+public static class McpServices
+{
+    public static IServiceCollection AddRmaMcpServices(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddRmaDbContext(configuration);
+        services.AddRmaData(configuration);
+
+        // Every tool call is audited and counted against the caller's per-minute budget at one
+        // choke point (the tools/call filter), so a tool added later is covered without being
+        // wrapped. The customer tools additionally cap customer lookups per caller per day.
+        services.AddSingleton(TimeProvider.System);
+        services.AddOptions<McpBudgetOptions>()
+            .Bind(configuration.GetSection(McpBudgetOptions.SectionName));
+
+        // The counter is in PostgreSQL, not in this process: two replicas of the HTTP transport
+        // would otherwise each hand out the full allowance, and the limit would multiply by the
+        // replica count while every replica looked compliant. Both transports use the same meter,
+        // so stdio and HTTP cannot disagree about what a caller has spent.
+        services.AddSingleton<ICallMeter, PostgresCallMeter>();
+        services.AddSingleton<CallBudget>();
+        services.AddScoped<IToolAuditSink, EfToolAuditSink>();
+        services.AddToolCallGuard();
+
+        // Registered explicitly as well as through WithToolsFromAssembly: these classes take scoped
+        // dependencies (the DbContext through their repositories), so how the SDK activates them is
+        // not something to leave to a convention.
+        services.AddScoped<DeviceLookupTools>();
+        services.AddScoped<CustomerLookupTools>();
+        services.AddScoped<PolicyTools>();
+
+        return services;
+    }
+}

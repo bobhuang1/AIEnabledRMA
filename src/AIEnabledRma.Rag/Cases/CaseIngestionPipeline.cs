@@ -3,7 +3,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using AIEnabledRma.Domain.Cases;
-using AIEnabledRma.Domain.Privacy;
+using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Privacy;
 using AIEnabledRma.Rag.Store;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -54,7 +55,7 @@ public static class CaseOutcomes
 /// <remarks>
 /// For each case: only resolved cases with a resolution are used; e-mail header lines and
 /// signature blocks are removed; names from greetings, sign-offs and agent labels are collected
-/// and redacted everywhere in the case, together with everything <see cref="PiiRedactor"/>
+/// and redacted everywhere in the case, together with everything the <see cref="IPiiRedactor"/>
 /// recognises. A verification pass then looks for anything identifying that survived (an
 /// address, a long digit run, an "@", a case number). A case that fails it is quarantined, not
 /// indexed: the pipeline fails closed. The redacted fields become symptom / diagnosis /
@@ -64,9 +65,11 @@ public static class CaseOutcomes
 public sealed partial class CaseIngestionPipeline(
     PgVectorKnowledgeStore store,
     ChunkingOptions? chunking = null,
-    ILogger<CaseIngestionPipeline>? logger = null)
+    ILogger<CaseIngestionPipeline>? logger = null,
+    IPiiRedactor? redactor = null)
 {
     private readonly ILogger _logger = logger ?? NullLogger<CaseIngestionPipeline>.Instance;
+    private readonly IPiiRedactor _redactor = redactor ?? new PiiRedactor();
 
     public const string WatermarkKey = "case_watermark";
 
@@ -144,13 +147,23 @@ public sealed partial class CaseIngestionPipeline(
             .ToList();
 
         var protectedValues = string.IsNullOrWhiteSpace(supportCase.Product) ? [] : new[] { supportCase.Product };
-        var session = new RedactionSession(protectedValues, names);
+        var session = _redactor.BeginSession(names, protectedValues);
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
 
-        var symptom = PiiRedactor.Redact(string.Join("\n\n", new[] { title, description }.Where(t => t.Length > 0)), session);
-        var diagnosis = PiiRedactor.Redact(string.Join("\n\n", notes), session);
-        var fix = PiiRedactor.Redact(resolution, session);
+        string RedactPart(string text)
+        {
+            var redacted = session.Redact(text);
+            foreach (var (kind, count) in redacted.Counts)
+            {
+                counts[kind] = counts.GetValueOrDefault(kind) + count;
+            }
 
-        var counts = session.Counts.Where(c => c.Value > 0).ToDictionary(c => c.Key.ToString(), c => c.Value, StringComparer.Ordinal);
+            return redacted.Text;
+        }
+
+        var symptom = RedactPart(string.Join("\n\n", new[] { title, description }.Where(t => t.Length > 0)));
+        var diagnosis = RedactPart(string.Join("\n\n", notes));
+        var fix = RedactPart(resolution);
         foreach (var (kind, count) in removed)
         {
             counts[kind] = count;
@@ -158,7 +171,17 @@ public sealed partial class CaseIngestionPipeline(
 
         // Verification: anything identifying that survived means the case is not indexed.
         var prepared = string.Join("\n", symptom, diagnosis, fix);
-        var residual = PiiRedactor.Detect(prepared, new RedactionSession(protectedValues, names)).Select(k => k.ToString()).ToList();
+        var residual = new List<string>();
+        if (session.ContainsIdentifiers(prepared))
+        {
+            residual.Add("Identifier");
+        }
+
+        if (names.Any(n => prepared.Contains(n, StringComparison.OrdinalIgnoreCase)))
+        {
+            residual.Add("Name");
+        }
+
         var withoutProduct = protectedValues.Aggregate(prepared, (text, value) => text.Replace(value, " ", StringComparison.OrdinalIgnoreCase));
         if (withoutProduct.Contains('@'))
         {

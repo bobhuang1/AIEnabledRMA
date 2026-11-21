@@ -79,9 +79,9 @@ public sealed class CaseIngestionTests
 
         var report = Pipeline().Prepare(cases[0], "reviewer", Today).Report;
 
-        Assert.True(report.Redactions["Email"] >= 1);
-        Assert.True(report.Redactions["Phone"] >= 1);
-        Assert.True(report.Redactions["Name"] >= 1);
+        Assert.True(report.Redactions["EMAIL"] >= 1);
+        Assert.True(report.Redactions["NAME"] >= 1);
+        Assert.True(report.Redactions.Where(r => r.Key is not "Signature" and not "Header").Sum(r => r.Value) >= 4);
         Assert.True(report.Redactions["Signature"] >= 1);
     }
 
@@ -147,35 +147,13 @@ public sealed class CaseIngestionTests
 /// </summary>
 public sealed class CaseLeakLiveTests : IAsyncLifetime
 {
-    private string _admin = string.Empty;
-    private string _database = string.Empty;
+    private readonly LiveDatabase _db = new("rma_case_test");
     private NpgsqlDataSource? _dataSource;
 
     public async ValueTask InitializeAsync()
     {
-        _admin = Environment.GetEnvironmentVariable(LiveDatabase.ConnectionVariable)
-            ?? "Host=localhost;Port=5432;Database=postgres;Username=rmauser;Password=placeholder";
-        try
-        {
-            await using var probe = new NpgsqlConnection(_admin);
-            await probe.OpenAsync();
-        }
-        catch (Exception ex)
-        {
-            LiveDatabase.Unavailable(ex);
-        }
-
-        _database = $"rma_case_test_{Guid.NewGuid():N}";
-        await using (var create = new NpgsqlConnection(_admin))
-        {
-            await create.OpenAsync();
-            await using var cmd = create.CreateCommand();
-            cmd.CommandText = $"CREATE DATABASE \"{_database}\"";
-            cmd.CommandTimeout = LiveDatabase.DdlTimeoutSeconds;
-            await cmd.ExecuteNonQueryAsync();
-        }
-
-        _dataSource = NpgsqlDataSource.Create(new NpgsqlConnectionStringBuilder(_admin) { Database = _database }.ConnectionString);
+        await _db.InitializeAsync();
+        _dataSource = NpgsqlDataSource.Create(_db.ConnectionString);
     }
 
     public async ValueTask DisposeAsync()
@@ -185,24 +163,8 @@ public sealed class CaseLeakLiveTests : IAsyncLifetime
             await _dataSource.DisposeAsync();
         }
 
-        if (_database.Length == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            NpgsqlConnection.ClearAllPools();
-            await using var drop = new NpgsqlConnection(_admin);
-            await drop.OpenAsync();
-            await using var cmd = drop.CreateCommand();
-            cmd.CommandText = $"DROP DATABASE IF EXISTS \"{_database}\" WITH (FORCE)";
-            cmd.CommandTimeout = LiveDatabase.DdlTimeoutSeconds;
-            await cmd.ExecuteNonQueryAsync();
-        }
-        catch (NpgsqlException)
-        {
-        }
+        NpgsqlConnection.ClearAllPools();
+        await _db.DisposeAsync();
     }
 
     [Fact]

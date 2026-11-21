@@ -19,7 +19,20 @@ public interface IRmaWorkflow
 {
     Task<StepResult> StartAsync(StartRmaCommand command, CancellationToken cancellationToken);
 
-    Task<StepResult> ApplyTriageAsync(Guid rmaId, TriageResult triage, CancellationToken cancellationToken);
+    /// <summary>
+    /// Records the triage verdict and re-runs the policy against <paramref name="customerStatement"/>.
+    /// </summary>
+    /// <remarks>
+    /// The statement is required rather than optional: it is the only place a fault description
+    /// exists at this stage, and an omitted one would silently disable every excluded-cause rule,
+    /// so the liquid and impact exclusions would never fire. It is the customer's own words, never
+    /// the model's output — the AI may not influence eligibility in either direction.
+    /// </remarks>
+    Task<StepResult> ApplyTriageAsync(
+        Guid rmaId,
+        TriageResult triage,
+        string customerStatement,
+        CancellationToken cancellationToken);
 
     Task<StepResult> RecordProblemsAsync(Guid rmaId, IReadOnlyList<ProblemEntry> problems, CancellationToken cancellationToken);
 
@@ -44,6 +57,13 @@ public sealed record StartRmaCommand
     public Guid? CustomerId { get; init; }
 
     public string? RegionCode { get; init; }
+
+    /// <summary>
+    /// What the customer says is wrong, when the caller already knows. Optional, because the
+    /// wizard only collects it at the triage step; supplied here it lets the excluded-cause
+    /// rules (liquid, impact, cosmetic) refuse the item at intake instead of much later.
+    /// </summary>
+    public string? ProblemDescription { get; init; }
 
     public string CurrencyCode { get; init; } = "USD";
 }
@@ -76,6 +96,13 @@ public enum StepOutcome
     /// still cannot mistake a partial return for a complete one.
     /// </summary>
     PartiallyCreated = 6,
+
+    /// <summary>
+    /// The request is not in a state where this step is legal. Deliberately distinct from
+    /// <see cref="RequiresHumanReview"/>: nothing needs a person here, the caller posted a step
+    /// out of order (a skipped or replayed wizard page).
+    /// </summary>
+    InvalidTransition = 7,
 }
 
 /// <summary>
@@ -158,14 +185,26 @@ public sealed partial class RmaWorkflow(
         {
             if (device.Device is null)
             {
+                // Nothing was looked up, so nothing was refused: an identifier that resolves to
+                // no unit is the customer's typo, not the company turning the return down. "Not
+                // in our product catalog" read like a policy answer and offered no next step,
+                // and it matters more now that intake matches exact identifiers only — a missing
+                // character is the likeliest reason for a miss. Units we do know still get their
+                // policy explanation, which is the only place catalogue wording belongs.
+                var typed = string.IsNullOrWhiteSpace(device.Identifier)
+                    ? "that identifier"
+                    : $"'{Truncate(device.Identifier.Trim(), 60)}'";
+
                 decisions.Add((device, Denied(
                     RmaDecisionReason.DeviceNotFound,
-                    "That item is not in our product catalog.")));
+                    $"We could not find an item with the identifier {typed}. "
+                    + "Check what you typed and try again.")));
                 continue;
             }
 
-            var hasOpen = await deviceRepository.HasOpenRequestAsync(
+            var hasReturnInProgress = await deviceRepository.HasReturnInProgressAsync(
                 device.Device.Id,
+                excludingRequestId: null,
                 cancellationToken);
 
             var decision = eligibilityService.Evaluate(new RmaPolicyRequest
@@ -173,13 +212,14 @@ public sealed partial class RmaWorkflow(
                 Device = device.Device,
                 Today = command.Today,
                 RegionCode = command.RegionCode,
-                HasOpenRequestForDevice = hasOpen,
+                ProblemDescription = command.ProblemDescription,
+                HasReturnInProgress = hasReturnInProgress,
             });
 
             decisions.Add((device, decision));
         }
 
-// Every device that clears policy becomes a line. An out-of-warranty unit is still a
+        // Every device that clears policy becomes a line. An out-of-warranty unit is still a
         // line: it just becomes a paid repair instead of a free one. Only decisions that do
         // not allow creation (unknown device, excluded cause, needs review, ...) are left out.
         var includable = decisions.Where(d => d.Decision.AllowsRmaCreation).ToList();
@@ -200,7 +240,7 @@ public sealed partial class RmaWorkflow(
                 worst.Reason,
                 string.Join(", ", worst.MatchedRuleIds));
 
-            // Human review creates no return, so this row is the only trace a person will see.
+            // Human review creates no return, so this row is the only trace a person will see (P10).
             if (worst.Eligibility == RmaEligibility.RequiresHumanReview)
             {
                 await EnqueueAsync(
@@ -230,7 +270,7 @@ public sealed partial class RmaWorkflow(
             };
         }
 
-// The trace covers the items actually in the return. Using the batch's worst decision
+        // The trace covers the items actually in the return. Using the batch's worst decision
         // would file a return under the reason one excluded item failed, which misstates why
         // the customer is eligible at all. A paid line governs a paid return: if anything in
         // the batch is not covered, the request is a PaidRepair and must be filed under the
@@ -249,7 +289,7 @@ public sealed partial class RmaWorkflow(
             RmaNumber = rmaNumber,
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
-Status = RmaRequestStatus.Draft,
+            Status = RmaRequestStatus.Draft,
             Kind = paid.Count > 0 ? RmaRequestKind.PaidRepair : RmaRequestKind.Warranty,
             CustomerId = command.CustomerId,
             CurrencyCode = command.CurrencyCode,
@@ -278,6 +318,11 @@ Status = RmaRequestStatus.Draft,
                 ProblemDescription = string.Empty,
             });
         }
+
+        // Priced the moment the request exists, not when the customer reaches the shipping
+        // step. The payment step authorises whatever is stored on the request, so a paid repair
+        // that could be read before it was priced authorised zero and shipped for free.
+        ApplyPricing(request, includable.Select(d => d.Device.Device!.Product));
 
         // Exclusions are persisted with the request, not returned only in the response. The
         // wizard warns on the page that follows this step, and a refresh or a new session must
@@ -316,7 +361,7 @@ Status = RmaRequestStatus.Draft,
             };
         }
 
-logger.LogInformation(
+        logger.LogInformation(
             "RMA {RmaNumber} created for {Included} of {Supplied} item(s); {Excluded} left out: {Reasons}.",
             request.RmaNumber,
             includable.Count,
@@ -356,6 +401,7 @@ logger.LogInformation(
     public async Task<StepResult> ApplyTriageAsync(
         Guid rmaId,
         TriageResult triage,
+        string customerStatement,
         CancellationToken cancellationToken)
     {
         var request = await LoadAsync(rmaId, cancellationToken);
@@ -363,6 +409,13 @@ logger.LogInformation(
         if (request is null)
         {
             return NotFound();
+        }
+
+        // Triage is the first step after intake. Allowing it from any other status let a
+        // replayed POST "resolve" a return that had already been confirmed, cancelling it.
+        if (RefuseUnless(request, [RmaRequestStatus.Draft], "troubleshooting") is { } cannotTriage)
+        {
+            return cannotTriage;
         }
 
         // AI influence is limited to annotation and to the "resolved" early exit. Note that
@@ -388,13 +441,32 @@ logger.LogInformation(
         {
             request.Status = RmaRequestStatus.Cancelled;
             request.CancellationReason = "Resolved during automated troubleshooting.";
+
+            await CommitAsync(cancellationToken);
+
+            return new StepResult
+            {
+                Outcome = StepOutcome.ResolvedByTroubleshooting,
+                RmaId = request.Id,
+                RmaNumber = request.RmaNumber,
+                Message = "Troubleshooting resolved the issue, so no return is needed.",
+                Status = request.Status,
+            };
         }
 
-        await rmaRepository.UpdateAsync(request, cancellationToken);
+        // The customer's description of the fault only exists from this step onward, which is
+        // exactly why the excluded-cause rules could never fire: intake evaluates a device, not
+        // a statement. The same deterministic policy runs again here, with that statement as its
+        // input, before the request is allowed to continue.
+        if (await ApplyPolicyDecisionAsync(request, _ => customerStatement, cancellationToken)
+            is { } refusedTriage)
+        {
+            return refusedTriage;
+        }
+
         await CommitAsync(cancellationToken);
 
-        if (!triage.Verdict.Resolved
-            && (triage.UsedFallback || triage.Verdict.Confidence < _policy.HumanReviewConfidenceThreshold))
+        if (triage.UsedFallback || triage.Verdict.Confidence < _policy.HumanReviewConfidenceThreshold)
         {
             await EnqueueAsync(
                 ReviewSources.TriageLowConfidence,
@@ -408,14 +480,157 @@ logger.LogInformation(
 
         return new StepResult
         {
-            Outcome = triage.Verdict.Resolved
-                ? StepOutcome.ResolvedByTroubleshooting
-                : StepOutcome.Continue,
+            Outcome = StepOutcome.Continue,
             RmaId = request.Id,
             RmaNumber = request.RmaNumber,
-            Message = triage.Verdict.Resolved
-                ? "Troubleshooting resolved the issue, so no return is needed."
-                : "Troubleshooting confirmed the fault. Please continue with the return.",
+            Message = "Troubleshooting confirmed the fault. Please continue with the return.",
+            Status = request.Status,
+        };
+    }
+
+    /// <summary>
+    /// Runs the deterministic policy again, now that a fault description exists.
+    /// </summary>
+    /// <remarks>
+    /// Three inputs are deliberately not resupplied. The region is not re-applied because a
+    /// unit that needed review for its region never became a line at intake, so omitting it
+    /// cannot relax anything. The duplicate check is not re-asked because this request's own
+    /// line is in progress, and the repository would report it as a duplicate of itself; the
+    /// confirmation step asks it again with this id excluded, which is where a second return for
+    /// the same unit is caught. AI confidence is never passed, because the AI is advisory and may not move
+    /// eligibility in either direction.
+    ///
+    /// The description is chosen per line because the two callers have different numbers of
+    /// them: triage has one statement for the whole request, and the problems step has one per
+    /// line. Either way one refused line stops the whole request — keeping it would hand out a
+    /// repair the rules do not allow.
+    /// </remarks>
+    private RmaEligibilityDecision? ReEvaluate(RmaRequest request, Func<RmaLine, string?> statementOf)
+    {
+        var decisions = new List<RmaEligibilityDecision>();
+
+        foreach (var line in request.Lines)
+        {
+            // A line without its device loaded cannot be evaluated, and there is nothing useful
+            // to say about it here: see the remark above about not inventing a decision.
+            if (line.Device is not { } device)
+            {
+                continue;
+            }
+
+            decisions.Add(eligibilityService.Evaluate(new RmaPolicyRequest
+            {
+                Device = device,
+                Today = clock.Today,
+                ProblemDescription = statementOf(line),
+                HasReturnInProgress = false,
+            }));
+        }
+
+        // Nothing to evaluate against. Inventing a decision here would be worse than leaving
+        // intake's on the record.
+        return decisions.Count == 0 ? null : Aggregate(decisions);
+    }
+
+    /// <summary>
+    /// Turns a policy decision about the customer's own words into state: refuse the return, or
+    /// promote it to a paid repair and price it.
+    /// </summary>
+    /// <remarks>
+    /// Triage and the problems step are the two places a description exists, and both run this
+    /// one method so they cannot drift apart. They did: the problems step once re-evaluated for
+    /// refusals only, so the same fault typed one step later was ignored and a covered fault at
+    /// triage followed by cosmetic wear at problems went through as a free repair.
+    /// </remarks>
+    /// <returns>The refusal to return as the step's result, or null when the request may continue.</returns>
+    private async Task<StepResult?> ApplyPolicyDecisionAsync(
+        RmaRequest request,
+        Func<RmaLine, string?> statementOf,
+        CancellationToken cancellationToken)
+    {
+        var decision = ReEvaluate(request, statementOf);
+
+        if (decision is null)
+        {
+            return null;
+        }
+
+        if (!decision.AllowsRmaCreation)
+        {
+            return await RefuseAsync(request, decision, cancellationToken);
+        }
+
+        // A cause the deployment prices as a paid repair (cosmetic wear, say) changes what the
+        // customer owes, so the request becomes a paid repair and is priced here, before the
+        // shipping and payment steps can ask for money against a stale zero. Pricing on every
+        // such decision rather than only on the first is what keeps a fee quoted from an older
+        // price table from surviving an edit to the description it was quoted against.
+        if (decision.Eligibility == RmaEligibility.EligibleForPaidRepair)
+        {
+            request.Kind = RmaRequestKind.PaidRepair;
+            request.EligibilityReason = Truncate(decision.Reason.ToString(), 64);
+            ApplyPricing(request, request.Lines.Select(l => l.Device?.Product));
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Stops a return that the policy refused after the customer described the fault, and shapes
+    /// the decision into the step result the wizard renders.
+    /// </summary>
+    /// <remarks>
+    /// Rejected when the policy said no, NeedsReview when a person has to decide; both are
+    /// terminal for the wizard, so the guarded steps cannot be driven afterwards. Intake's trace
+    /// is kept and the rules that fired here are appended, so the audit trail shows both
+    /// decisions rather than replacing one with the other.
+    /// </remarks>
+    private async Task<StepResult> RefuseAsync(
+        RmaRequest request,
+        RmaEligibilityDecision decision,
+        CancellationToken cancellationToken)
+    {
+        // One flag, because the status and the outcome are the same decision told twice: a rule
+        // that says "no" rejects the return, and a rule that says "a person decides" parks it
+        // for review. Deriving both from one expression keeps them from disagreeing.
+        var rejected = decision.Eligibility == RmaEligibility.NotEligible;
+
+        request.Status = rejected ? RmaRequestStatus.Rejected : RmaRequestStatus.NeedsReview;
+
+        request.EligibilityReason = Truncate(decision.Reason.ToString(), 64);
+
+        request.PolicyRuleTrace = Truncate(
+            string.Join(
+                ", ",
+                (request.PolicyRuleTrace ?? string.Empty)
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Concat(decision.MatchedRuleIds)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)),
+            2000);
+
+        request.UpdatedAtUtc = clock.UtcNow;
+
+        await CommitAsync(cancellationToken);
+
+        if (!rejected)
+        {
+            await EnqueueAsync(
+                ReviewSources.PolicyHumanReview,
+                decision.Reason.ToString(),
+                decision.Explanation,
+                serials: null,
+                request.Id,
+                request.CustomerId,
+                cancellationToken);
+        }
+
+        return new StepResult
+        {
+            Outcome = rejected ? StepOutcome.NotEligible : StepOutcome.RequiresHumanReview,
+            RmaId = request.Id,
+            RmaNumber = request.RmaNumber,
+            Message = decision.Explanation,
+            Decision = decision,
             Status = request.Status,
         };
     }
@@ -431,6 +646,23 @@ logger.LogInformation(
             return NotFound();
         }
 
+        // The problems step is the only writer of a line's description, so it must not run on a
+        // return that has already left Draft. Without this, a confirmed or cancelled return
+        // still had its stored descriptions replaced by whatever a stale or hand-crafted page
+        // posted, and the record of what was actually wrong with the item was lost after the
+        // decision that depended on it.
+        //
+        // PendingPayment is deliberately excluded, although SetShippingAsync allows it so a
+        // customer can go back and change the address: shipping re-prices on the way through,
+        // while this step only re-evaluates the descriptions. An edit from the payment step would
+        // therefore leave a quoted amount that no longer matches what the record says is wrong,
+        // minutes before the customer authorises that amount. Changing the fault after a fee has
+        // been quoted is a new return, not an edit to this one.
+        if (RefuseUnless(request, [RmaRequestStatus.Draft], "problem") is { } cannotRecordProblems)
+        {
+            return cannotRecordProblems;
+        }
+
         foreach (var entry in problems)
         {
             var line = request.Lines.FirstOrDefault(l => l.DeviceId == entry.DeviceId);
@@ -444,8 +676,16 @@ logger.LogInformation(
             line.ProblemCategoryCode = entry.CategoryCode;
         }
 
+        // The same excluded-cause rules, now against what the customer wrote here. Leaving this
+        // to triage alone let a customer dodge them by describing a screen fault in the triage
+        // statement and the spilled drink only in the per-line description below it.
+        if (await ApplyPolicyDecisionAsync(request, line => line.ProblemDescription, cancellationToken)
+            is { } refusedProblems)
+        {
+            return refusedProblems;
+        }
+
         request.UpdatedAtUtc = clock.UtcNow;
-        await rmaRepository.UpdateAsync(request, cancellationToken);
         await CommitAsync(cancellationToken);
 
         return new StepResult
@@ -469,7 +709,15 @@ logger.LogInformation(
             return NotFound();
         }
 
-if (addressId is { } address)
+        // Reached from the problems step, and from the payment step when the customer goes
+        // back to change the address. Any later status means shipping has already been decided,
+        // so re-running it would re-price and re-approve a request that is already committed.
+        if (RefuseUnless(request, [RmaRequestStatus.Draft, RmaRequestStatus.PendingPayment], "shipping") is { } cannotShip)
+        {
+            return cannotShip;
+        }
+
+        if (addressId is { } address)
         {
             request.ShipToAddressId = address;
         }
@@ -482,28 +730,7 @@ if (addressId is { } address)
         // The covered amount is taken from the product price table, not from any tier: two
         // different products on the same request each bring their own price, and the charge
         // an out-of-warranty repair actually carries is the one the fee-quoting tool reports.
-        if (request.Kind == RmaRequestKind.PaidRepair)
-        {
-            // The currency is the price table's, never the caller's: a fee is a number in a
-            // specific currency, and accepting a client-chosen code would let "69 USD" be
-            // authorised as "69 JPY".
-            var prices = request.Lines.Select(l => _policy.RepairPrice(l.Device?.Product)).ToList();
-            var currencies = prices.Select(p => p.CurrencyCode.ToUpperInvariant()).Distinct().ToList();
-            if (currencies.Count > 1)
-            {
-                throw new InvalidOperationException(
-                    $"Repair prices on one request use different currencies ({string.Join(", ", currencies)}); configure Policy:RepairPrices in a single currency.");
-            }
-
-            request.CurrencyCode = currencies.Count == 1 ? currencies[0] : request.CurrencyCode;
-            request.ShippingCharge = 0m;
-            request.DepositAmount = prices.Sum(p => p.Fee);
-        }
-        else
-        {
-            request.ShippingCharge = 0m;
-            request.DepositAmount = 0m;
-        }
+        ApplyPricing(request, request.Lines.Select(l => l.Device?.Product));
 
         var total = new Domain.Common.Money(request.ShippingCharge + request.DepositAmount,
             request.CurrencyCode);
@@ -517,7 +744,6 @@ if (addressId is { } address)
             : RmaRequestStatus.Approved;
 
         request.UpdatedAtUtc = clock.UtcNow;
-        await rmaRepository.UpdateAsync(request, cancellationToken);
         await CommitAsync(cancellationToken);
 
         return new StepResult
@@ -543,68 +769,65 @@ if (addressId is { } address)
             return NotFound();
         }
 
+        // Payment is only legal once the shipping step has parked the request at
+        // PendingPayment. Without this guard a draft posted straight to the payment endpoint
+        // authorised its (zero) total, became Approved, and confirmed without triage, shipping,
+        // or a charge — a free paid repair.
+        if (RefuseUnless(request, [RmaRequestStatus.PendingPayment], "payment") is { } cannotPay)
+        {
+            return cannotPay;
+        }
+
         var amount = new Domain.Common.Money(
             request.ShippingCharge + request.DepositAmount,
             request.CurrencyCode);
 
-        if (amount.IsZero)
+        // A zero total is already settled, and asking a real gateway to authorise nothing is
+        // how it starts refusing requests. Skipping the call leaves one approval path below
+        // instead of two copies of the same status write, update, and commit.
+        if (!amount.IsZero)
         {
-            request.Status = RmaRequestStatus.Approved;
-        request.UpdatedAtUtc = clock.UtcNow;
-        await rmaRepository.UpdateAsync(request, cancellationToken);
-        await CommitAsync(cancellationToken);
-
-
-            return new StepResult
-            {
-                Outcome = StepOutcome.Continue,
-                RmaId = request.Id,
-                RmaNumber = request.RmaNumber,
-                Message = "Nothing to charge.",
-                Status = request.Status,
-            };
-        }
-
-        var result = await paymentGateway.AuthorizeAsync(
-            new PaymentAuthorizationRequest
-            {
-                RmaNumber = request.RmaNumber,
-                Amount = amount,
-                Purpose = request.DepositAmount > 0 ? PaymentPurpose.Deposit : PaymentPurpose.Shipping,
-                CaptureMode = request.DepositAmount > 0
-                    ? PaymentCaptureMode.ManualLater
-                    : PaymentCaptureMode.Immediate,
-                CustomerEmail = request.Customer?.Email ?? "unknown",
-                PaymentMethodToken = paymentMethodToken,
-                ReferenceNumbers = [request.RmaNumber, .. request.Lines.Select(l => l.DeviceId.ToString())],
-            },
-            cancellationToken);
-
-        if (result.IsFailure)
-        {
-            await EnqueueAsync(
-                ReviewSources.PaymentFailed,
-                "PaymentAuthorisationFailed",
-                result.ErrorMessage,
-                serials: null,
-                request.Id,
-                request.CustomerId,
+            var authorization = await paymentGateway.AuthorizeAsync(
+                new PaymentAuthorizationRequest
+                {
+                    RmaNumber = request.RmaNumber,
+                    Amount = amount,
+                    Purpose = request.DepositAmount > 0 ? PaymentPurpose.Deposit : PaymentPurpose.Shipping,
+                    CaptureMode = request.DepositAmount > 0
+                        ? PaymentCaptureMode.ManualLater
+                        : PaymentCaptureMode.Immediate,
+                    CustomerEmail = request.Customer?.Email ?? "unknown",
+                    PaymentMethodToken = paymentMethodToken,
+                    ReferenceNumbers = [request.RmaNumber, .. request.Lines.Select(l => l.DeviceId.ToString())],
+                },
                 cancellationToken);
 
-            return new StepResult
+            if (authorization.IsFailure)
             {
-                Outcome = StepOutcome.RequiresHumanReview,
-                RmaId = request.Id,
-                RmaNumber = request.RmaNumber,
-                Message = result.ErrorMessage ?? "Payment could not be authorised.",
-                Status = request.Status,
-            };
+                await EnqueueAsync(
+                    ReviewSources.PaymentFailed,
+                    "PaymentAuthorisationFailed",
+                    authorization.ErrorMessage,
+                    serials: null,
+                    request.Id,
+                    request.CustomerId,
+                    cancellationToken);
+
+                return new StepResult
+                {
+                    Outcome = StepOutcome.RequiresHumanReview,
+                    RmaId = request.Id,
+                    RmaNumber = request.RmaNumber,
+                    Message = authorization.ErrorMessage ?? "Payment could not be authorised.",
+                    Status = request.Status,
+                };
+            }
+
+            request.PaymentTransactionId = authorization.Value!.TransactionId;
         }
 
-        request.PaymentTransactionId = result.Value!.TransactionId;
         request.Status = RmaRequestStatus.Approved;
         request.UpdatedAtUtc = clock.UtcNow;
-        await rmaRepository.UpdateAsync(request, cancellationToken);
         await CommitAsync(cancellationToken);
 
         return new StepResult
@@ -612,7 +835,7 @@ if (addressId is { } address)
             Outcome = StepOutcome.Continue,
             RmaId = request.Id,
             RmaNumber = request.RmaNumber,
-            Message = "Payment authorised.",
+            Message = amount.IsZero ? "Nothing to charge." : "Payment authorised.",
             Status = request.Status,
         };
     }
@@ -625,21 +848,36 @@ if (addressId is { } address)
             return NotFound();
         }
 
-        if (request.Status != RmaRequestStatus.Approved)
+        // Confirmation commits the return, so it is legal only from Approved. Anything else is
+        // an out-of-order or replayed page, not a request that needs a person.
+        if (RefuseUnless(request, [RmaRequestStatus.Approved], "confirmation") is { } cannotConfirm)
         {
-            return new StepResult
+            return cannotConfirm;
+        }
+
+        // The duplicate rule lives here rather than only at intake. Intake used to count any
+        // return that was not cancelled or closed, which meant a visitor could hold a unit by
+        // starting a return and abandoning it — the serial only had to be known once, and the
+        // owner was then told there was already an open return. Confirmation is where this
+        // return joins the in-flight set, so it is where the unit is checked for another one
+        // that got there first.
+        foreach (var deviceId in request.Lines.Select(l => l.DeviceId).Distinct())
+        {
+            if (await deviceRepository.HasReturnInProgressAsync(
+                    deviceId, request.Id, cancellationToken))
             {
-                Outcome = StepOutcome.RequiresHumanReview,
-                RmaId = request.Id,
-                RmaNumber = request.RmaNumber,
-                Message = "This return is not ready to be confirmed yet.",
-                Status = request.Status,
-            };
+                return await RefuseAsync(
+                    request,
+                    Denied(
+                        RmaDecisionReason.DuplicateOpenRequest,
+                        "Another return for this item is already on its way to us, so a specialist "
+                        + "will confirm which one to use."),
+                    cancellationToken);
+            }
         }
 
         request.Status = RmaRequestStatus.AwaitingShipment;
         request.UpdatedAtUtc = clock.UtcNow;
-        await rmaRepository.UpdateAsync(request, cancellationToken);
         await CommitAsync(cancellationToken);
 
         return new StepResult
@@ -684,8 +922,8 @@ if (addressId is { } address)
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // The customer's step has already succeeded or been answered; a queue failure is
-            // logged loudly rather than turned into an error page.
+            // The customer's step has already been answered; a queue failure is logged loudly
+            // rather than turned into an error page.
             logger.LogError(ex, "Could not file a review item ({Source}, {Reason}).", source, reason);
         }
     }
@@ -693,16 +931,17 @@ if (addressId is { } address)
     private Task<RmaRequest?> LoadAsync(Guid rmaId, CancellationToken cancellationToken) =>
         rmaRepository.GetByIdAsync(rmaId, cancellationToken);
 
-    private static RmaEligibilityDecision Aggregate(IEnumerable<RmaEligibilityDecision> decisions)
-    {
-        var list = decisions.ToList();
-        if (list.Count == 0)
-        {
-            return Denied(RmaDecisionReason.DeviceNotFound, "No items were supplied.");
-        }
-
-// Worst-first ordering. This is the only place outcome precedence is defined.
-        return list
+    /// <summary>
+    /// The one decision that governs a batch: worst first, then the one that fired the most rules.
+    /// </summary>
+    /// <remarks>
+    /// Callers always have at least one decision — intake refuses an empty device list before
+    /// reaching here, and re-evaluation returns null rather than aggregating nothing — so this
+    /// does not invent a decision for an empty batch. That case used to be handled here as well
+    /// as in the two callers, which is three places to keep one rule true.
+    /// </remarks>
+    private static RmaEligibilityDecision Aggregate(IEnumerable<RmaEligibilityDecision> decisions) =>
+        decisions
             .OrderBy(d => d.Eligibility switch
             {
                 RmaEligibility.RequiresHumanReview => 0,
@@ -713,7 +952,6 @@ if (addressId is { } address)
             })
             .ThenByDescending(d => d.MatchedRuleIds.Count)
             .First();
-    }
 
     private static RmaEligibilityDecision Denied(RmaDecisionReason reason, string explanation) => new()
     {
@@ -730,6 +968,73 @@ if (addressId is { } address)
         Message = "That return could not be found.",
         Decision = Denied(RmaDecisionReason.DeviceNotFound, "That return could not be found."),
     };
+
+    /// <summary>
+    /// The state machine's single enforcement point. Every mutating step asks whether the
+    /// request's current status allows it; a refusal is reported as
+    /// <see cref="StepOutcome.InvalidTransition"/> rather than thrown, because it is a stale or
+    /// hand-crafted page, not a server fault.
+    /// </summary>
+    private static StepResult? RefuseUnless(
+        RmaRequest request,
+        RmaRequestStatus[] allowed,
+        string step)
+    {
+        if (allowed.Contains(request.Status))
+        {
+            return null;
+        }
+
+        return new StepResult
+        {
+            Outcome = StepOutcome.InvalidTransition,
+            RmaId = request.Id,
+            RmaNumber = request.RmaNumber,
+            // Not "moved past": a draft posted straight to the payment step never reached it
+            // either, and the same refusal has to read correctly for both.
+            Message = $"This return is not at the {step} step, so that step cannot be completed "
+                + "now. Open the return from where you left off, or start a new one.",
+            Status = request.Status,
+        };
+    }
+
+    /// <summary>
+    /// Applies the per-product repair price table to the request: at creation, from triage or the
+    /// problems step when a cause turns the return into a paid repair, and again when shipping is
+    /// set. Pricing at intake is what stops the payment step authorising a stale zero; re-pricing
+    /// later keeps the stored amount current if the table changed while the request sat in the
+    /// database.
+    /// </summary>
+    private void ApplyPricing(RmaRequest request, IEnumerable<Product?> products)
+    {
+        // Nothing is ever charged for shipping, and a covered return charges nothing at all.
+        request.ShippingCharge = 0m;
+        request.DepositAmount = 0m;
+
+        if (request.Kind != RmaRequestKind.PaidRepair)
+        {
+            return;
+        }
+
+        var prices = products.Select(_policy.RepairPrice).ToList();
+
+        // The currency is the price table's, never the caller's: a fee is a number in a
+        // specific currency, and accepting a client-chosen code would let "69 USD" be
+        // authorised as "69 JPY".
+        var currencies = prices.Select(p => p.CurrencyCode.ToUpperInvariant()).Distinct().ToArray();
+
+        if (currencies is [var currency])
+        {
+            request.CurrencyCode = currency;
+        }
+        else if (currencies.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"Repair prices on one request use different currencies ({string.Join(", ", currencies)}); configure RmaPolicy:RepairPrices in a single currency.");
+        }
+
+        request.DepositAmount = prices.Sum(p => p.Fee);
+    }
 
     private static string Truncate(string? value, int max) =>
         string.IsNullOrEmpty(value) || value.Length <= max

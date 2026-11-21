@@ -1,27 +1,43 @@
-# Build and run AIEnabledRma.Web.
+# Build and run the customer-facing wizard.
 #
-# Base images are pinned by digest (refresh them deliberately, not by accident) and the restore is
-# locked to the committed packages.lock.json files. The runtime runs as the image's non-root user
-# and is meant to run with a read-only root filesystem (docker-compose.prod.yml).
-FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:bef136a371963aaa46ec97882845ef6f54dec15728bb4b128b1c2a400ffbc9b4 AS build
+# Multi-stage so the runtime layer carries no SDK. The knowledge base is copied in as content
+# because the RAG index reads it from disk relative to the content root.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-COPY Directory.Build.props Directory.Packages.props ./
+# Restore against the manifests alone first, so a source-only change does not re-resolve.
+COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY AIEnabledRma.slnx ./
-COPY src/AIEnabledRma.Domain/AIEnabledRma.Domain.csproj src/AIEnabledRma.Domain/packages.lock.json src/AIEnabledRma.Domain/
-COPY src/AIEnabledRma.Data/AIEnabledRma.Data.csproj src/AIEnabledRma.Data/packages.lock.json src/AIEnabledRma.Data/
-COPY src/AIEnabledRma.Ai/AIEnabledRma.Ai.csproj src/AIEnabledRma.Ai/packages.lock.json src/AIEnabledRma.Ai/
-COPY src/AIEnabledRma.Rag/AIEnabledRma.Rag.csproj src/AIEnabledRma.Rag/packages.lock.json src/AIEnabledRma.Rag/
-COPY src/AIEnabledRma.Web/AIEnabledRma.Web.csproj src/AIEnabledRma.Web/packages.lock.json src/AIEnabledRma.Web/
-RUN dotnet restore src/AIEnabledRma.Web/AIEnabledRma.Web.csproj --locked-mode
+COPY src/AIEnabledRma.Domain/AIEnabledRma.Domain.csproj src/AIEnabledRma.Domain/
+COPY src/AIEnabledRma.Data/AIEnabledRma.Data.csproj src/AIEnabledRma.Data/
+COPY src/AIEnabledRma.Ai/AIEnabledRma.Ai.csproj src/AIEnabledRma.Ai/
+COPY src/AIEnabledRma.Privacy/AIEnabledRma.Privacy.csproj src/AIEnabledRma.Privacy/
+COPY src/AIEnabledRma.Rag/AIEnabledRma.Rag.csproj src/AIEnabledRma.Rag/
+COPY src/AIEnabledRma.Web/AIEnabledRma.Web.csproj src/AIEnabledRma.Web/
+RUN dotnet restore src/AIEnabledRma.Web/AIEnabledRma.Web.csproj
 
 COPY . .
 RUN dotnet publish src/AIEnabledRma.Web -c Release -o /app --no-restore
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:12b1135f5f8b3c0a214f2a680ff2033dff4f684f445d6c697d9524ceeb303586 AS runtime
+# The corpus is part of the image, not an optional mount. A host that starts without it answers every
+# question as though the corpus said nothing, so fail the build here instead of shipping that — the
+# publish step alone does not: a project that stops declaring the content still publishes cleanly.
+RUN test -f /app/knowledge-base/REVIEWED.sha256 \
+    && find /app/knowledge-base -name '*.md' | grep -q . \
+    || (echo "knowledge-base is missing from /app: the publish output carried no corpus" >&2; exit 1)
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app ./
 
+# The commit this image was built from. scripts/verify-images.sh passes it and compares the label
+# with the checkout, so "is this image from before or after the fix" is a question the image answers
+# instead of a question about which build produced it.
+ARG GIT_REVISION=unknown
+LABEL org.opencontainers.image.revision=$GIT_REVISION
+
+# The app is not root. The image carries no writable state the process needs, so the whole
+# filesystem can stay read-only apart from /tmp.
 USER $APP_UID
 EXPOSE 8080
 ENV ASPNETCORE_HTTP_PORTS=8080

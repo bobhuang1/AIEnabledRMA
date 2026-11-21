@@ -1,133 +1,82 @@
-using AIEnabledRma.Mcp.Security;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Options;
-using ModelContextProtocol.AspNetCore.Authentication;
-using ModelContextProtocol.Authentication;
+using Microsoft.Extensions.Logging;
+using ModelContextProtocol.AspNetCore;
 
 namespace AIEnabledRma.Mcp;
 
-/// <summary>Settings for the remote (streamable HTTP) transport.</summary>
-public sealed class McpHttpOptions
-{
-    public const string SectionName = "McpHttp";
-
-    /// <summary>The identity provider's issuer URL (Keycloak realm, Entra tenant). HTTPS outside Development.</summary>
-    public string? Authority { get; set; }
-
-    /// <summary>Audience the access token must carry.</summary>
-    public string Audience { get; set; } = "aienabledrma-mcp";
-
-    /// <summary>Scope every caller must hold to reach any tool.</summary>
-    public string RequiredScope { get; set; } = "rma:read";
-
-    /// <summary>Client ids (<c>azp</c>/<c>client_id</c>) allowed to call. Empty refuses everyone.</summary>
-    public IList<string> AllowedClientIds { get; set; } = [];
-
-    /// <summary>
-    /// Browser origins allowed to call. A request without an Origin header (a server-side agent)
-    /// is allowed; one with an Origin not on this list is refused, which blocks DNS-rebinding and
-    /// cross-site calls from a browser.
-    /// </summary>
-    public IList<string> AllowedOrigins { get; set; } = [];
-
-    /// <summary>The public URL of this server's MCP endpoint, published in the resource metadata.</summary>
-    public string? ResourceUrl { get; set; }
-
-    /// <summary>Path the MCP endpoint is mapped at.</summary>
-    public string Path { get; set; } = "/mcp";
-}
-
 /// <summary>
-/// The remote MCP server: the same tools and <see cref="ToolCallGuard"/> as stdio, over
-/// streamable HTTP, behind JWT bearer authentication with RFC 9728 protected-resource metadata
-/// (D2). Every request needs a token for <see cref="McpHttpOptions.Audience"/> carrying
-/// <see cref="McpHttpOptions.RequiredScope"/> from an allowed client, and the caller's identity
-/// flows into the audit trail and the budgets.
+/// The remote transport: streamable HTTP, behind token validation, an origin allow-list and the
+/// tools' own guard. stdio remains the default and shares every service registered here.
 /// </summary>
 public static class McpHttpHost
 {
-    public const string PolicyName = "mcp-caller";
-
-    /// <summary>True when configuration selects the HTTP transport (<c>Mcp:Transport=http</c> or <c>--http</c>).</summary>
-    public static bool IsSelected(string[] args, IConfiguration configuration) =>
-        args.Contains("--http", StringComparer.OrdinalIgnoreCase)
-        || string.Equals(configuration["Mcp:Transport"], "http", StringComparison.OrdinalIgnoreCase);
-
-    public static WebApplicationBuilder Configure(WebApplicationBuilder builder)
+    /// <summary>The CORS policy derived from <see cref="McpHttpOptions.AllowedOrigins"/>.</summary>
+    public const string CorsPolicyName = "mcp-browser-clients";
+    /// <summary>
+    /// Builds the remote host without running it. Tests build it with <c>UseTestServer</c> so the
+    /// real pipeline — routing, the origin check, authentication, authorization, the MCP endpoint —
+    /// is exercised in process, and the 401s and 403s below are the ones a deployment produces.
+    /// </summary>
+    public static WebApplication Build(
+        string[] args,
+        Action<IWebHostBuilder>? configureHost = null,
+        Action<IServiceCollection>? configureServices = null)
     {
-        ArgumentNullException.ThrowIfNull(builder);
+        var builder = WebApplication.CreateBuilder(args);
 
-        var http = builder.Configuration.GetSection(McpHttpOptions.SectionName).Get<McpHttpOptions>() ?? new McpHttpOptions();
-        builder.Services.AddOptions<McpHttpOptions>()
-            .Bind(builder.Configuration.GetSection(McpHttpOptions.SectionName))
-            .Validate(
-                o => builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing")
-                    || (Uri.TryCreate(o.Authority, UriKind.Absolute, out var authority) && authority.Scheme == Uri.UriSchemeHttps),
-                "McpHttp:Authority must be an https URL outside Development.")
-            .Validate(o => o.AllowedClientIds.Count > 0, "McpHttp:AllowedClientIds must list at least one client.")
-            .ValidateOnStart();
+        // stdout carries nothing on this transport, but a host log line and an SSE frame sharing
+        // one stream is still a mistake worth not making; stderr keeps the log readable.
+        builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 
-        builder.Services
-            .AddAuthentication(options =>
-            {
-                options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-                options.DefaultChallengeScheme = McpAuthenticationDefaults.AuthenticationScheme;
-            })
-            .AddJwtBearer(options =>
-            {
-                options.Authority = http.Authority;
-                options.Audience = http.Audience;
-                options.MapInboundClaims = false;
-                options.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
-                options.TokenValidationParameters.ValidateAudience = true;
-                options.TokenValidationParameters.ValidateIssuer = true;
-                options.TokenValidationParameters.ValidateLifetime = true;
-                options.TokenValidationParameters.ValidAudience = http.Audience;
-            })
-            .AddMcp(options =>
-            {
-                options.ResourceMetadata = new ProtectedResourceMetadata
-                {
-                    Resource = http.ResourceUrl ?? string.Empty,
-                    AuthorizationServers = http.Authority is null ? [] : [http.Authority],
-                    ScopesSupported = [http.RequiredScope],
-                    BearerMethodsSupported = ["header"],
-                    ResourceName = "AIEnabledRMA returns tools",
-                };
-            });
+        var http = new McpHttpOptions();
+        builder.Configuration.GetSection(McpHttpOptions.SectionName).Bind(http);
+        http.EnsureUsable(builder.Environment.IsDevelopment());
 
-        builder.Services.AddAuthorizationBuilder()
-            .AddPolicy(PolicyName, policy => policy
-                .RequireAuthenticatedUser()
-                .RequireAssertion(context =>
-                {
-                    var caller = McpCaller.From(context.User, new McpSecurityOptions());
-                    return caller.Has(http.RequiredScope)
-                        && http.AllowedClientIds.Contains(caller.Id, StringComparer.Ordinal);
-                }));
+        builder.Services.AddSingleton(http);
+        builder.Services.AddRmaMcpServices(builder.Configuration);
+        builder.Services.AddMcpServer()
+            .WithHttpTransport()
+            .WithToolsFromAssembly();
+        builder.Services.AddMcpHttpAuthentication(http, builder.Environment.IsDevelopment());
 
-        // Stateless: every request is authenticated and authorised on its own, and nothing about a
-        // caller survives in server memory between requests except the guard's budgets.
-        builder.Services.AddRmaMcpServer(builder.Configuration)
-            .WithHttpTransport(options => options.Stateless = true);
+        // The origin allow-list is also the CORS policy. It is the set of pages the operator said
+        // may drive these tools, and without CORS headers the list could only ever refuse browsers
+        // rather than admit them: an allowed page's preflight would be answered by nothing, so no
+        // browser client could call the endpoint at all.
+        //
+        // An empty list configures a policy that admits no origin, which is the same meaning it has
+        // in the check below. Both read the one setting, so a page cannot be allowed by one and
+        // refused by the other.
+        builder.Services.AddCors(options => options.AddPolicy(
+            CorsPolicyName,
+            policy => policy
+                .WithOrigins(http.AllowedOrigins)
+                .AllowAnyHeader()
+                .AllowAnyMethod()
+                // A browser client cannot read a header it was not told about, and the session id
+                // is the one the transport may hand back on initialize.
+                .WithExposedHeaders("Mcp-Session-Id")));
 
-        return builder;
-    }
+        configureHost?.Invoke(builder.WebHost);
+        configureServices?.Invoke(builder.Services);
 
-    public static WebApplication Map(WebApplication app)
-    {
-        ArgumentNullException.ThrowIfNull(app);
+        var app = builder.Build();
 
-        var http = app.Services.GetRequiredService<IOptions<McpHttpOptions>>().Value;
+        // First, so a preflight from an allowed origin is answered here rather than falling through
+        // to the check below, which sees an OPTIONS request with no token and no route to run.
+        app.UseCors(CorsPolicyName);
 
-        // Origin check before authentication, so a browser page on another site cannot even
-        // probe the endpoint with a user's ambient credentials.
+        // Before authentication, so a page from an origin that was never allowed is refused
+        // without the host validating, logging or rate-limiting its token first. A request with no
+        // Origin header is not a browser request and passes: only a page is bound by the scheme,
+        // host and port the browser attaches.
         app.Use(async (context, next) =>
         {
             var origin = context.Request.Headers.Origin.ToString();
-            if (origin.Length > 0 && !http.AllowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase))
+
+            if (origin.Length > 0 && !http.AllowedOrigins.Contains(origin, StringComparer.Ordinal))
             {
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
                 return;
@@ -139,9 +88,31 @@ public static class McpHttpHost
         app.UseAuthentication();
         app.UseAuthorization();
 
-        app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
-        app.MapMcp(http.Path).RequireAuthorization(PolicyName);
+        app.MapMcp(http.Path).RequireAuthorization(McpHttpAuthentication.PolicyName);
+
+        // RFC 9728 discovery, served without a token because it describes how to get one. Both
+        // addresses exist: the path-specific one the 401 names and the root one an MCP client falls
+        // back to when it ignores the header. Distinct, because a host whose endpoint is at the root
+        // maps the same path twice and ASP.NET refuses a duplicate route at startup.
+        foreach (var path in new[]
+                 {
+                     ProtectedResourceMetadata.WellKnownPath,
+                     ProtectedResourceMetadata.PathFor(http.Path),
+                 }.Distinct(StringComparer.Ordinal))
+        {
+            app.MapGet(
+                path,
+                (HttpContext context) =>
+                    Results.Json(ProtectedResourceMetadata.DocumentFor(context.Request, http)));
+        }
 
         return app;
+    }
+
+    public static async Task RunAsync(string[] args)
+    {
+        var app = Build(args);
+
+        await app.RunAsync();
     }
 }

@@ -120,6 +120,9 @@ internal static class TestData
             ProductScope = scope ?? ["*"],
             Keywords = keywords ?? [],
             Related = related ?? [],
+            // Fixtures are not files, so they carry no hash; the loader is what fills this in
+            // for real articles and the tests that care about it read it from there.
+            ContentHash = string.Empty,
             Tokens = tokens,
         };
     }
@@ -143,7 +146,8 @@ internal sealed class FakeDeviceRepository : IDeviceRepository
 {
     public List<Device> Devices { get; } = [];
 
-    public Dictionary<Guid, bool> OpenRequestByDevice { get; } = [];
+    /// <summary>Device ids whose unit already has a return in progress, as the real query means it.</summary>
+    public Dictionary<Guid, bool> ReturnInProgressByDevice { get; } = [];
 
     public DeviceLookupResult? LookupResult { get; set; }
 
@@ -173,8 +177,24 @@ internal sealed class FakeDeviceRepository : IDeviceRepository
         return Task.FromResult(LookupResult ?? new DeviceLookupResult { MatchScore = 0d });
     }
 
-    public Task<bool> HasOpenRequestAsync(Guid deviceId, CancellationToken cancellationToken = default) =>
-        Task.FromResult(OpenRequestByDevice.TryGetValue(deviceId, out var has) && has);
+    /// <summary>
+    /// The fake returns whatever <see cref="LookupResult"/> it was given, because a fake that
+    /// re-implemented exact-versus-fuzzy semantics would let the tests agree with the code for
+    /// the wrong reason. Whether a partial serial actually resolves is asserted against
+    /// PostgreSQL in <c>WebWizardTests</c>, which uses the real repository.
+    /// </summary>
+    public Task<DeviceLookupResult> LookupExactAsync(
+        string identifier, DateOnly today, CancellationToken cancellationToken = default)
+    {
+        LookupCallCount++;
+        return Task.FromResult(LookupResult ?? new DeviceLookupResult { MatchScore = 0d });
+    }
+
+    public Task<bool> HasReturnInProgressAsync(
+        Guid deviceId,
+        Guid? excludingRequestId = null,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(ReturnInProgressByDevice.TryGetValue(deviceId, out var inProgress) && inProgress);
 }
 
 internal sealed class FakeCustomerRepository : ICustomerRepository
@@ -183,24 +203,43 @@ internal sealed class FakeCustomerRepository : ICustomerRepository
 
     public AddressResolution? Resolution { get; set; }
 
-    /// <summary>Returned by every search, standing in for the fuzzy repository's candidates.</summary>
-    public List<Customer> Customers { get; } = [];
+    public Customer? ById { get; set; }
 
-    public List<CustomerSearchQuery> Queries { get; } = [];
+    /// <summary>What <see cref="SearchAsync"/> returns, whatever was asked for.</summary>
+    public List<Customer> SearchResults { get; } = [];
+
+    public int SearchCalls { get; private set; }
 
     public Task<Customer?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-        Task.FromResult(Customers.FirstOrDefault(c => c.Id == id));
+        Task.FromResult(ById);
+
+    public Task<CustomerName?> GetNameAsync(Guid id, CancellationToken cancellationToken = default) =>
+        Task.FromResult(ById is null
+            ? null
+            : new CustomerName(ById.FirstName, ById.LastName));
 
     public Task<IReadOnlyList<Customer>> SearchAsync(
         CustomerSearchQuery query, CancellationToken cancellationToken = default)
     {
-        Queries.Add(query);
-        return Task.FromResult<IReadOnlyList<Customer>>(Customers.ToList());
+        SearchCalls++;
+        return Task.FromResult<IReadOnlyList<Customer>>(SearchResults);
     }
 
     public Task<AddressResolution?> ResolveAddressAsync(
         Guid customerId, string? freeTextAddress, CancellationToken cancellationToken = default) =>
         Task.FromResult(Resolution);
+}
+
+/// <summary>Records what the tools handed to the audit sink, in order.</summary>
+internal sealed class FakeToolAuditSink : IToolAuditSink
+{
+    public List<ToolCallRecord> Records { get; } = [];
+
+    public Task RecordAsync(ToolCallRecord record, CancellationToken cancellationToken)
+    {
+        Records.Add(record);
+        return Task.CompletedTask;
+    }
 }
 
 internal sealed class FakeRmaRepository : IRmaRepository
@@ -219,9 +258,6 @@ internal sealed class FakeRmaRepository : IRmaRepository
 
     public Task<RmaRequest?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
         Task.FromResult(Requests.FirstOrDefault(r => r.Id == id));
-
-    public Task UpdateAsync(RmaRequest request, CancellationToken cancellationToken = default) =>
-        Task.CompletedTask;
 
     public Task<IReadOnlyList<RmaRequest>> GetForCustomerAsync(
         Guid customerId, CancellationToken cancellationToken = default) =>
@@ -275,6 +311,15 @@ internal sealed class FakeClock(DateTimeOffset now) : IClock
     public DateTimeOffset UtcNow { get; set; } = now;
 
     public DateOnly Today => DateOnly.FromDateTime(UtcNow.UtcDateTime);
+}
+
+/// <summary>
+/// The caller a stdio launch has: no request, no token, one named local agent. Used where a test
+/// builds a component directly instead of going through the host that registers the real one.
+/// </summary>
+internal sealed class StdioCallerIdentity : AIEnabledRma.Mcp.ICallerIdentity
+{
+    public string Describe() => AIEnabledRma.Mcp.ToolCallGuard.CallerName;
 }
 
 internal sealed class FakePaymentGateway : IPaymentGateway

@@ -22,6 +22,12 @@ public sealed class CustomerRepository(
             .Include(c => c.Addresses)
             .FirstOrDefaultAsync(c => c.Id == id, cancellationToken);
 
+    public Task<CustomerName?> GetNameAsync(Guid id, CancellationToken cancellationToken) =>
+        _db.Customers
+            .Where(c => c.Id == id)
+            .Select(c => new CustomerName(c.FirstName, c.LastName))
+            .FirstOrDefaultAsync(cancellationToken);
+
     /// <summary>
     /// Two-stage lookup. The database does trigram prefiltering and returns a bounded
     /// candidate set; <see cref="FuzzyMatcher"/> then re-ranks in memory. Doing it this way
@@ -34,26 +40,12 @@ public sealed class CustomerRepository(
     {
         if (string.IsNullOrWhiteSpace(query.Name)
             && string.IsNullOrWhiteSpace(query.Email)
-            && string.IsNullOrWhiteSpace(query.PhoneNumber)
-            && string.IsNullOrWhiteSpace(query.ExternalCustomerId))
+            && string.IsNullOrWhiteSpace(query.PhoneNumber))
         {
             return [];
         }
 
         var q = _db.Customers.Include(c => c.Addresses).AsNoTracking();
-
-        if (!string.IsNullOrWhiteSpace(query.ExternalCustomerId))
-        {
-            var external = query.ExternalCustomerId.Trim();
-            return await q
-                .Where(c => c.ExternalCustomerId == external)
-                // Ordered before Take so the same query returns the same page. An unordered
-                // Take is a row-limiting plan with no defined order, so which rows come back
-                // can change with the plan chosen and the physical row order.
-                .OrderBy(c => c.Id)
-                .Take(query.Take)
-                .ToListAsync(cancellationToken);
-        }
 
         // Build a server-side prefilter from whatever the caller supplied. Each clause is
         // trigram-indexed; the OR keeps a partial match on any one field sufficient.

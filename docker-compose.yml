@@ -2,10 +2,8 @@ name: aienabledrma
 
 services:
   postgres:
-    # PostgreSQL 16 with the pgvector extension, for the knowledge store (DbAdmin kb-ingest).
-    # Same major version as the earlier postgres:16-alpine image and the cluster uses locale C, so
-    # an existing ./data/pgdata directory is reused as is. `docker compose up` recreates the
-    # container with this image; the data directory is kept.
+    # PostgreSQL 16 with pgvector for the knowledge store (DbAdmin kb-ingest). Same major version
+    # and locale C, so an existing ./data/pgdata is reused; `up` recreates the container, keeps data.
     image: pgvector/pgvector:pg16
     container_name: aienabledrma-postgres
     environment:
@@ -14,9 +12,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rmapassword}
       # Deterministic collation so trigram similarity is stable across machines.
       POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    # Bound to loopback: the container runs with a demo password, and publishing it on every
+    # interface turned a local database into a network service.
     ports:
-      # Loopback only: the default credentials are for local development and must not be
-      # reachable from the network.
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - ./data/pgdata:/var/lib/postgresql/data
@@ -25,4 +23,79 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    restart: unless-stopped
+
+  # The identity provider behind the MCP HTTP transport. The realm is imported on every start,
+  # from infra/keycloak/realm-aienabledrma.json: the realm, the rma:read client scope and the
+  # audience mapper that puts aienabledrma-mcp into aud are what the tool server's JWT checks are
+  # written against, and a realm built by hand on one machine is a realm nobody else can reproduce.
+  #
+  # No volume on purpose. The import only runs when the realm is absent, so a container that keeps
+  # its data would ignore edits to the file; recreating the container re-imports the realm exactly
+  # as committed. Nothing here is worth keeping across a restart.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: aienabledrma-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      # The default is for hands-on use of this checkout. scripts/verify-auth.sh exports a generated
+      # password before it starts anything, because the master admin can rewrite every client and user
+      # the realm commits, and a shared default is a credential published in the repository.
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      # Development mode serves http and derives the issuer from the request host. That is what
+      # lets both recipes in docs/mcp.md work: a host-run server validates http://localhost:8080/...
+      # and a containerised one validates http://keycloak:8080/..., each minting tokens by the same
+      # hostname it validates.
+      KC_HTTP_ENABLED: "true"
+    ports:
+      # Loopback only, like the database: the realm carries a committed client secret and the
+      # admin account is a demo one.
+      - "127.0.0.1:${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      # A TCP connect, not an HTTP status: the point is whether Kestrel is listening yet, and the
+      # image has no curl. `start-dev` finishes the realm import before it opens the port.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080'"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+    restart: unless-stopped
+
+  # The remote transport, under a profile so `docker compose up` still brings up only the database
+  # and the identity provider. Built from the same Dockerfile as the stdio server; the image is the
+  # ASP.NET runtime because this mode listens.
+  mcp-http:
+    profiles: ["mcp-http"]
+    build:
+      context: .
+      dockerfile: src/AIEnabledRma.Mcp/Dockerfile
+    container_name: aienabledrma-mcp-http
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    environment:
+      # An http issuer is accepted in Development only, and this is a local realm.
+      DOTNET_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      Mcp__Transport: http
+      # The hostname Keycloak is reached by, which must be the one the token's iss names. Inside
+      # the compose network that is the service name, not localhost.
+      Mcp__Http__Issuer: http://keycloak:8080/realms/aienabledrma
+      Mcp__Http__Audience: aienabledrma-mcp
+      Mcp__Http__RequiredScope: rma:read
+      Mcp__Http__AllowedClientIds__0: mcp-agent
+      # The public PKCE client as well, so the browser runbook can call the transport; and the
+      # page origin it is meant to run from, which is also the CORS policy.
+      Mcp__Http__AllowedClientIds__1: mcp-browser
+      # The gate's negative-path client. It is listed so its refusals come from the token (audience,
+      # scope, expiry) rather than from the allow-list, which would make the three cases one case.
+      Mcp__Http__AllowedClientIds__2: mcp-negative
+      Mcp__Http__AllowedOrigins__0: http://localhost:5173
+      ConnectionStrings__Rma: Host=postgres;Port=5432;Database=${POSTGRES_DB:-rmadev};Username=${POSTGRES_USER:-rmauser};Password=${POSTGRES_PASSWORD:-rmapassword}
+    ports:
+      - "127.0.0.1:${MCP_HTTP_PORT:-5080}:8080"
     restart: unless-stopped

@@ -287,7 +287,10 @@ public sealed class KnowledgeIndex
             .Select(p => new
             {
                 Paragraph = p,
-                Hits = querySet.Count(t => p.Contains(t, StringComparison.OrdinalIgnoreCase)),
+
+                // Tokenised rather than substring-matched: the query is stemmed, so "charging" would
+                // never contain the stem "charg" and every paragraph would look like a non-match.
+                Hits = TextTokens.Tokenize(p).Count(querySet.Contains),
             })
             .OrderByDescending(x => x.Hits)
             .ThenBy(x => x.Paragraph.Length)
@@ -318,14 +321,7 @@ public sealed class KnowledgeIndex
             : snippet;
     }
 
-    private static IReadOnlyList<string> Tokenize(string value) =>
-        string.IsNullOrWhiteSpace(value)
-            ? []
-            : System.Text.RegularExpressions.Regex
-                .Matches(value.ToLowerInvariant(), "[a-z0-9]+")
-                .Select(m => m.Value)
-                .Where(t => t.Length > 2)
-                .ToArray();
+    private static IReadOnlyList<string> Tokenize(string value) => TextTokens.Tokenize(value);
 }
 
 public sealed class RagRetrievalOptions
@@ -355,6 +351,17 @@ public sealed class RagRetrievalOptions
 
     /// <summary>How many top articles may pull in their <c>related</c> siblings.</summary>
     public int MaxRelatedExpansions { get; set; } = 2;
+
+    /// <summary>
+    /// Ask <see cref="SynonymExpandingRetriever"/> instead of the lexical index directly.
+    /// </summary>
+    /// <remarks>
+    /// On by default: the golden set measured it at 0.925 recall@3 against the plain index's 0.850,
+    /// and the six questions it fixes are vocabulary gaps rather than ranking preferences. Turning
+    /// it off is the ablation — the measurement entry for the map records both numbers — so a
+    /// deployment that disables it is choosing a number the suite already knows.
+    /// </remarks>
+    public bool SynonymExpansion { get; set; } = true;
 
     /// <summary>
     /// Floor applied to the reported score of a related-article expansion, so an article with
