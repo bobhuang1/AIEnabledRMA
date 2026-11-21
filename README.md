@@ -54,7 +54,7 @@ ambiguous-identity path; `j.smith@example.com` resolves to exactly one customer.
 | `src/AIEnabledRma.Mcp` | MCP tool server: the same policy and lookups exposed to an agent. |
 | `src/AIEnabledRma.Web` | Customer-facing return wizard (ASP.NET Core MVC). |
 | `tools/DbAdmin` | Migrate, seed, reset, and inspect the database from the command line. |
-| `tests/AIEnabledRma.Tests` | 253 tests, incl. live PostgreSQL sequence and end-to-end wizard suites. |
+| `tests/AIEnabledRma.Tests` | The full suite, incl. live PostgreSQL sequence and end-to-end wizard suites. |
 
 The Web and MCP hosts call the same `AddRmaData` registration, so the fuzzy-match thresholds an
 agent's lookup tool uses cannot drift apart from the ones the tests exercise. The RAG host
@@ -130,7 +130,8 @@ Walk a return:
 
 1. **Start** (`/RmaWizard/Start`) — enter customer + serial(s), one per line.
 2. **Triage** (`/RmaWizard/Triage/{id}`) — describe the fault. A local `example-local` model
-   is the default AI provider, so no API key is needed. The description is also re-checked
+   is the default AI provider in Development, so no API key is needed. Production refuses it: a
+   deployment must name a real provider (`Ai:Provider=openai-compatible`). The description is also re-checked
    against the deterministic excluded-cause rules (`RmaPolicy:ExcludedCauses` →
    `RmaPolicyEvaluator`), so liquid or impact damage reported here is refused now rather than
    covered, because intake runs before any fault description exists.
@@ -209,7 +210,9 @@ dotnet test
 
 Tests that need a real server (`RmaNumberSequenceTests`, `WebWizardTests`) **skip** rather
 than fail when `RMA_TEST_CONNECTION` is unset or PostgreSQL is unreachable, so `dotnet test`
-with no environment still goes green. The two live suites exist because concurrency semantics
+with no environment still goes green. A gate does not: `scripts/verify-all.sh suite` and CI run the
+same command against a service database and **fail the run when any test was skipped**, because a
+suite that silently dropped its database tests answers a smaller question than the one it claims. The two live suites exist because concurrency semantics
 (sequence allocation) and persistence (every wizard step reads what it wrote through a real
 host) cannot be faked.
 
@@ -222,28 +225,35 @@ per-product price.
 Hosted-runner minutes are billed per account, so the pipeline is deliberately narrow. These
 rules hold until someone changes the workflow on purpose:
 
-- **Pull requests and manual runs only.** A commit on `main` is a commit a pull request already
-  built; running the same job again on push pays twice for one signal. `workflow_dispatch` covers
-  the "verify main now" case when it is wanted.
+- **Every push to `main`, every pull request, and manual runs.** Exempting `main` looked cheaper,
+  but a merge is only pre-tested if the pull request actually ran, and this repository once had
+  twenty commits reach origin without CI seeing them. `workflow_dispatch` is still there for a run
+  on demand.
 - **Documentation-only changes start no run.** `paths-ignore` covers root-level markdown
   (`README.md`, `plan.md`, the licence) and `docs/`. `knowledge-base/**/*.md` is deliberately not
   ignored: those files are data the retrieval tests read, so editing one can change what the suite
   sees. If the check ever becomes required for merging, replace the filter with a job that starts
   and exits early: a path-filtered run leaves the check absent, not green.
-- **Superseded runs are cancelled** for the same ref, so a fixup push does not also pay for the
-  run it replaced, and every job has a hard timeout so a hung test cannot bill indefinitely.
-- **No matrix, no second operating system, no extra job** without a sentence in the pull request
-  saying what the added minutes buy.
+- **A superseded pull-request run is cancelled**, so a fixup push does not also pay for the run
+  it replaced. A `main` run is never cancelled: its run is the only evidence that commit has. Every
+  job has a hard timeout so a hung test cannot bill indefinitely.
+- **Three jobs, each with its own reason.** `build-and-test` does restore, build, the EF
+  model/migration comparison, the suite, the skip guard and the dependency audit. `auth-flows` boots
+  the committed realm and drives the token flows. `runtime-images` builds the three images, boots
+  both corpus hosts, starts the production pack's three application services and resolves the pack
+  with `docker compose config`. No matrix, no second operating system, no fourth job without a
+  sentence in the pull request saying what the added minutes buy.
 - **Local first.** `dotnet test` runs the whole suite against a local PostgreSQL in about four
   minutes; CI is a gate for what already passed locally, not the first place a change runs.
 
 ## Containers
 
-Build and run the two shipped Dockerfiles:
+Build and run the three shipped Dockerfiles:
 
 ```bash
 docker build -f src/AIEnabledRma.Web/Dockerfile -t aienabledrma-web .
 docker build -f src/AIEnabledRma.Mcp/Dockerfile -t aienabledrma-mcp .
+docker build -f src/AIEnabledRma.Rag/Dockerfile -t aienabledrma-rag .
 docker run -p 8080:8080 -e ConnectionStrings__Rma="$ConnectionStrings__Rma" aienabledrma-web
 ```
 
@@ -275,7 +285,7 @@ RmaPolicy:
   FallbackEligibility: RequiresHumanReview
 
 Ai:
-  Provider:                  # openai | openai-compatible | ollama | lmstudio | llamacpp
+  Provider:                  # example-local | openai-compatible; Production refuses example-local
   BaseUrl:                   # absolute URL, required + validated for openai-compatible
   ApiKey:                    # optional for local runtimes; never commit a real key
 
@@ -415,7 +425,11 @@ dotnet run --project tools\DbAdmin -- kb-cases --file cases.json --publish --rev
 - Every action, refused or not, is written to `operator_actions` with the operator's name.
 
 Sign-in is OpenID Connect (`OperatorAuth:Authority`, `ClientId`, `ClientSecret` from the environment) and the
-token must carry the `rma:operator` role or scope. For local development only, set
+token must carry the `rma:operator` role or scope. The committed development realm
+(`infra/keycloak/realm-aienabledrma.json`) carries the confidential `rma-operator` client, the `rma:operator`
+realm role and a mapper that flattens the user's realm roles into the flat `roles` claim this policy reads;
+`scripts/verify-auth.sh` mints a token for `operator-demo` and asserts the claim, and that a user without the
+role does not get it. For local development only, set
 `OperatorAuth:DevSignIn=true` in `appsettings.Development.json` for a one-click `dev-operator` sign-in; the app
 refuses to start with it in any other environment. In Production the host also refuses to start when
 `OperatorAuth:Authority` and `ClientId` are missing: the dev sign-in is unavailable there, so `/Operator` would
@@ -593,11 +607,14 @@ required value is missing.
 - `scripts/verify-images.sh` starts this file's web service from `deploy/prod.env.example` (under its own
   project name, then removes it), so a value the example forgot, or a service the current host refuses, fails
   the gate instead of a deployment.
-- In Production every host refuses a development database password (`ProductionConfiguration`). The tool
-  server applies that rule from the services its stdio and HTTP transports share, and the RAG host applies it
-  whenever a database is configured, so a lexical-only RAG host still starts. The web host additionally
-  refuses plain-`http` model or embedding endpoints, on top of its own rules for the fake gateway, the operator
-  key and the corpus manifest.
+- In Production every host refuses a development database password, an empty password, or a placeholder
+  from `deploy/prod.env.example` (`ProductionConfiguration`, `ProductionSecrets`). The tool server applies that
+  rule from the services its stdio and HTTP transports share, and the RAG host applies the database half
+  whenever a database is configured, so a lexical-only RAG host still starts. The same rule refuses the
+  example env file's placeholder operator secret and Stripe keys, and every host refuses the bundled
+  `example-local` model: `AI_PROVIDER` is required by the compose file with no default. The web host
+  additionally refuses plain-`http` model or embedding endpoints, on top of its own rules for the fake
+  gateway, the operator key and the corpus manifest.
 
 For a demo on another day, `Demo:Today` (Development only, `yyyy-MM-dd`) runs the wizard on a fixed date.
 

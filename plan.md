@@ -142,11 +142,12 @@ bullets stay as requirements.
 - Bind compose PostgreSQL to `127.0.0.1` (F8). Make the README match the code (F7).
 - **Done when** CI is green with 199 run and 0 skipped.
 
-**Status: shipped, except that no run of the workflow has been observed.**
-- `.github/workflows/ci.yml` runs on pull requests and manual dispatch, ignores root markdown and `docs/` but
-  not `knowledge-base/` (its markdown is data the retrieval tests read), cancels a superseded run, and has a
-  25-minute timeout. Actions are pinned by commit, `permissions` is `contents: read`, and the NuGet cache is
-  keyed on the checked-in lock files.
+**Status: shipped, and green on `main`.** Runs `44932712009` and earlier are recorded in `progress.md`.
+- `.github/workflows/ci.yml` runs on every push to `main`, on pull requests and on manual dispatch, ignores
+  root markdown and `docs/` but not `knowledge-base/` (its markdown is data the retrieval tests read),
+  cancels a superseded *pull-request* run (never a `main` run), and has a 25-minute timeout per job. Actions
+  are pinned by commit, `permissions` is `contents: read`, and the NuGet cache is keyed on the checked-in lock
+  files.
 - Restore is `--locked-mode` and the build is `-warnaserror`. The job starts a `postgres:16` service so the live
   suites run, and the step after the tests fails the job if the log shows `Skipped: N` *or* no tests at all — a
   run that quietly skipped the database is red, not green.
@@ -157,11 +158,12 @@ bullets stay as requirements.
   runtime's own version in `.config/dotnet-tools.json` and `has-pending-model-changes` running before the tests,
   so a widened column fails by name rather than only failing the live suites through
   `PendingModelChangesWarning`.
-- Evidence: the same commands in an SDK 10 container against a throwaway PostgreSQL give 335 passed, 0 skipped
-  and "No changes have been made to the model since the last migration". The bullet's "199 run" is the
-  baseline's count and is now stale.
-- **Unproven:** the workflow has never executed on a runner — the tree is not pushed — so what is evidenced is
-  the command list and the file's structure, not a green check on a pull request.
+- Added later: two more jobs — `auth-flows`, which boots the committed realm and drives the token flows, and
+  `runtime-images`, which builds the three images, boots both corpus hosts, starts the production pack's three
+  application services and resolves the pack with `docker compose config`. The suite one job runs is now 470+
+  cases; the bullet's "199 run" is the baseline's count and is long stale.
+- Evidence: the workflow has run on a runner, on `main`, and passed (`44932712009` and earlier runs recorded in
+  `progress.md`); locally `scripts/verify-all.sh suite` runs the same commands and reports the same counts.
 
 ### P1. Lock down the MCP data surface (M) — F1
 
@@ -518,7 +520,7 @@ bullets stay as requirements.
     articles);
   - live pgvector tests in CI (P0's service container).
 
-**Status: not started; its acceptance test now exists, so the first line of it is measurable.**
+**Status: shipped; the measured numbers below are the baseline the acceptance test enforces.**
 - `eval/retrieval-golden.json` holds 40 questions written in a customer's or a bench technician's wording, each
   naming every article that would be a correct citation, plus the recall@3 floor. All nineteen articles are
   covered. Many of the cases are near-miss pairs — trigger vs firmware, decode vs window damage, freeze vs

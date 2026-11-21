@@ -18,7 +18,8 @@ commands CI runs, each with the database or containers it needs started as part 
 network; the working tree is copied in without `bin/`, `obj/` or `data/`, so a Windows artefact cannot
 shadow the Linux build. `images` builds the Web, MCP and RAG images, checks the commit label and the
 corpus content of each, boots both hosts that read the corpus in Production, and starts the production
-compose web service from `deploy/prod.env.example`. `auth` runs from a scratch compose project on its
+compose web, mcp and rag services from `deploy/prod.env.example` (with synthetic non-placeholder secrets,
+because the hosts now refuse the example's placeholders). `auth` runs from a scratch compose project on its
 own ports.
 
 CI runs the same three gates as separate jobs (`build-and-test`, `auth-flows`, `runtime-images`) and,
@@ -45,7 +46,7 @@ are this branch's work, re-seated on the owner's code. plan.md section 5 carries
 | 5 | P7 Retrieval/triage eval | Done (owner) | Owner's `eval/retrieval-golden.json` and measurement history; our evaluation test and `eval.yml` were removed in favour of it. |
 | 6 | P9 Real payment gateway | Done (ours, merged); real payments wait on the owner's Stripe account (D5) | Fake gateway and its rule unchanged unless `Payments:Provider=stripe`. |
 | 6 | P10 Operator view | Done (ours, merged) | Review queue now also takes the owner's re-run policy decisions that send a return to a person. |
-| 6 | P11 Production pack | Done (ours, merged) | Startup checks cover every host that opens the database, and the Web host also requires the operator identity provider. The image gate builds all three images, boots Web and RAG on the corpus, and starts the production web service from the example env; the compose file is resolved in CI. |
+| 6 | P11 Production pack | Done (ours, merged) | Startup checks cover every host that opens the database, refuse empty or placeholder passwords and secrets, and refuse the bundled example model; the Web host also requires the operator identity provider. The image gate builds all three images, boots Web and RAG on the corpus, starts the production web, mcp and rag services from the example env, and the compose file is resolved in CI. The realm carries the operator client and role the back office needs. |
 
 ## Log
 
@@ -286,6 +287,52 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   instead of serving an `/Operator` sign-in that can never complete. The Production boot tests and the web
   image smoke supply synthetic OIDC settings so they still reach the guard they are about; the new refusal
   test fails when the flag is removed.
+- **Production refuses placeholder and empty secrets.** `ProductionSecrets` (Domain) names the example env
+  file's placeholders (`replace-me`, `replace-with-…`, `sk_live_replace-me`), and `ProductionDatabaseCredentials`
+  now refuses empty and placeholder passwords as well as the six development defaults, so its long-standing
+  "default, placeholder or empty" sentence is true. `ProductionConfiguration` applies the same rule to the
+  operator client secret and both Stripe keys, and `RagAdminGate` refuses a placeholder admin key outside
+  Development. Mutation-checked: restoring the empty exclusion fails
+  `An_empty_or_placeholder_database_password_is_refused`.
+- **Production refuses the bundled example model.** A blank or `example-local` `Ai:Provider` is a problem for
+  every host that selects a provider. `docker-compose.prod.yml` requires `AI_PROVIDER` with no default and the
+  example env file sets `openai-compatible` and an https base URL; the Production boot tests supply a synthetic
+  compatible provider so each still reaches the guard it is about. Mutation-checked: removing the condition fails
+  `The_bundled_example_model_is_refused`.
+- **Operator sign-in is gated end to end.** The realm gains the `rma:operator` realm role, the confidential
+  `rma-operator` client for the web host, and an `operator-roles` scope whose `oidc-usermodel-realm-role-mapper`
+  flattens realm roles into the flat `roles` claim `OperatorAuthSetup.HasRole` reads (Keycloak's default
+  `realm_access.roles` is nested, so a correct sign-in would otherwise be denied every page). `operator-demo`
+  holds the role. `verify-auth.sh` asserts the imported shape (27 rows), mints an operator token and asserts the
+  claim, and proves a user without the role does not get it.
+- **Stripe webhook deliveries are recorded once.** New `webhook_events` table (`AddWebhookEvents` migration),
+  `IWebhookEventLedger` implemented as one `INSERT … ON CONFLICT (event_id) DO NOTHING`, and a handler that
+  refuses a delivery without an event id and acknowledges a repeat without filing a second review item.
+  `WebhookDedupeTests` covers the three decisions against a recording ledger; `WebhookEventLedgerTests` proves the
+  constraint against PostgreSQL. Mutation-checked: removing the guard files two review items for one delivery.
+- **The image gate boots all three production services.** `prod_boot_smoke` starts web, mcp and rag from the
+  pack (with synthetic non-placeholder secrets, because the hosts now refuse the example's), waits for each
+  host's own line (the corpus count for web and rag, `Application started` for the tool server), and asserts each
+  is still running. The compose file gives the tool server a startup log line, which its Warning default
+  suppressed.
+- **The RAG host applies the shared database rule.** It calls `ProductionConfiguration.DatabaseProblems` instead
+  of carrying its own parse-and-refuse copy, so placeholder and malformed-connection handling cannot drift from
+  the web and tool-server hosts; a database is still optional for a lexical-only deployment.
+- **A triage says which retriever answered.** One `LogInformation` line after retrieval names the registered
+  implementation and the article count. The retriever's own log only spoke when it fell back, so a lexical-only
+  answer and a vector-backed one looked identical from the pipeline.
+- **Docs match the tree.** README's CI section now describes what CI does (every push to `main`, three jobs, the
+  pack resolution), the containers section lists all three Dockerfiles, the provider list matches the switch,
+  the tests section states that the gates fail on a skip, and the operator section names the committed client and
+  role. plan.md's P0 status no longer says no run has been observed, and P5 no longer says "not started".
 - **Gate at `6b2ee20`:** `suite` 478 passed, 0 skipped, 0 failed (437 s), EF model check clean, audit clean
   for all nine projects; CI's `build-and-test`, `auth-flows` and `runtime-images` jobs all passed, and the
   production compose resolution step passed.
+- **Gate after this batch:** `suite` 497 passed, 0 skipped, 0 failed; EF model check clean ("No changes have
+  been made to the model since the last migration"); vulnerability audit clean for all nine projects. `auth`:
+  all checks passed, including the 28-row realm shape and the operator token (subject, `preferred_username`,
+  flat `roles` claim, and no role for a user without it). The production pack resolves with the example env
+  (`docker compose ... config --quiet`). Two import defects were found by that gate and fixed: a client-scope
+  description longer than Keycloak's 255-character column stopped the import, and an imported realm has no
+  built-in profile scope, so `preferred_username` had to be mapped explicitly or the operator audit trail
+  would have recorded a UUID.
