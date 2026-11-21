@@ -32,7 +32,7 @@ decisions (D1–D6) are in section 4; this table covers the engineering choices 
 | The local gate runs CI's whole build-and-test job | The job is more than build and test: the EF model check and the audit fail in CI, and a local pass that skipped them was a pass CI would not give | `scripts/verify-all.sh`, `GateScriptTests` |
 | The Web host owns the corpus; the tool server does not | The tool server's tools read stored data, never `knowledge-base/`, and its startup check never ran | `PublishLayoutTests`, `scripts/verify-images.sh` |
 | A production host refuses a drifted corpus | An empty corpus answers every question as though the policy said nothing | `KnowledgeBaseStartupCheck`, `CorpusStartupBootTests` |
-| Images carry the commit they were built from | "Is this image from before or after the fix" had no answer from the image | both Dockerfiles, `scripts/verify-images.sh` |
+| Images carry the commit they were built from | "Is this image from before or after the fix" had no answer from the image | all three Dockerfiles, `scripts/verify-images.sh` |
 | Every image is digest-pinned and gated | A tag is whatever was published last, and the RAG image — the host that reads the corpus most directly — was the one image no check looked inside | both older Dockerfiles, `src/AIEnabledRma.Rag/Dockerfile`, `scripts/verify-images.sh` |
 | The production pack is resolved in CI | A compose typo is otherwise invisible until a deployment | `.github/workflows/ci.yml`, `GateScriptTests` |
 | The SDK is pinned in `global.json` | The runner image ships a newer SDK, and the CLI prefers it: `setup-dotnet` installed 10.0.x and the build ran 11.0.100 | `global.json`, `CiWorkflowTests` |
@@ -650,20 +650,22 @@ bullets stay as requirements.
   `/app/knowledge-base` carries the same twenty files, and `The_dockerfile_copies_every_project_it_builds` walks each
   host's references transitively and fails when one is not in the COPY list above the restore — removing the Privacy
   line reproduces the exact message in CI rather than at the next hand-built image.
-- The images themselves are a check, not just a claim: `scripts/verify-images.sh` builds both from their Dockerfiles
-  and asserts each carries every article and `REVIEWED.sha256` under `/app/knowledge-base`, and the `runtime-images`
-  CI job runs it. It is a different claim from the publish test — the Docker build sees only what the context and
+- The images themselves are a check, not just a claim: `scripts/verify-images.sh` builds all three from their
+  Dockerfiles and asserts what each is meant to have — the web and RAG images carry every article and
+  `REVIEWED.sha256` under `/app/knowledge-base`, and the tool server carries none — and the `runtime-images` CI job
+  runs it. It is a different claim from the publish test — the Docker build sees only what the context and
   `.dockerignore` admit, and restores from a hand-written COPY list — and it fails as a named check rather than an
-  aborted build: appending `knowledge-base/` to `.dockerignore` leaves both images without a corpus and the script
-  reports `FAIL MCP image builds` and `FAIL Web image builds`, exit 1. Measured on this workstation: both images
-  build, both carry all twenty files and the manifest, all checks passed.
-- The Dockerfiles now refuse to produce such an image at all: each one asserts `/app/knowledge-base/REVIEWED.sha256`
-  exists and at least one article does, right after publish, and fails the build with
-  `knowledge-base is missing from /app: the publish output carried no corpus`. This is the check that lives with the
-  artefact rather than beside it — `dotnet publish` exits zero when a project stops declaring the content, which is
-  how the corpus went missing the first time, and a plain `docker build` now inherits the failure instead of needing
-  someone to run the script. Mutation: deleting the corpus `ItemGroup` from the tool server's project leaves publish
-  clean and the build fails at that line, exit 1; with the group restored the image carries all twenty articles.
+  aborted build: appending `knowledge-base/` to `.dockerignore` fails the web and RAG builds, which the script
+  reports as `FAIL Web image builds` and `FAIL RAG image builds`, exit 1, while the tool server still builds and its
+  carries-nothing check still passes. Measured on this workstation: all three images build, the two corpus hosts
+  carry all twenty files and the manifest, the tool server carries none, and every check passed.
+- The two corpus-reading Dockerfiles refuse to produce a corpus-less image at all: each asserts
+  `/app/knowledge-base/REVIEWED.sha256` exists and at least one article does, right after publish, and fails the
+  build with `knowledge-base is missing from /app: the publish output carried no corpus`. This is the check that
+  lives with the artefact rather than beside it — `dotnet publish` exits zero when a project stops declaring the
+  content, which is how the corpus went missing the first time, and a plain `docker build` now inherits the failure
+  instead of needing someone to run the script. The tool server has no such guard because it has no corpus: removing
+  the content from the web or RAG project leaves publish clean and fails that image's build at the guard line.
 - All three numbers are floored, not just printed. `mrrFloor: 0.8` sits beside `recallAt3Floor: 0.9` because
   recall@3 cannot see a hit slipping from rank 1 to rank 3: the same questions still appear in the top three, so the
   recall number does not move while the citation handed to the model gets worse. The acceptance test asserts the

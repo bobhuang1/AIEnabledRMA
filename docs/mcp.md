@@ -25,7 +25,7 @@ The three gates CI runs can be run here, in the order CI runs them, without a Gi
 without a token for its logs:
 
 ```bash
-./scripts/verify-all.sh            # the suite, then the auth flows, then both images
+./scripts/verify-all.sh            # the suite, then the auth flows, then all three images
 ./scripts/verify-all.sh auth       # one of them, by name
 ```
 

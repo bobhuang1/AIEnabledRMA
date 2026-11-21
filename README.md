@@ -570,7 +570,8 @@ liveness or readiness probe and read a green result as "the app can serve return
 `deploy/prod.env.example` to `prod.env` (ignored by git) and fill it in; compose refuses to start while any
 required value is missing.
 
-- Base images are pinned by digest and every image restores with `--locked-mode`.
+- Base images are pinned by digest. The RAG image copies the lock files and restores with `--locked-mode`; the
+  web and tool-server images restore without them, so their package resolution is not lock-checked at build time.
 - App containers run as non-root with a read-only root filesystem, `no-new-privileges` and no capabilities.
 - Caddy routes web traffic only while `/health/ready` (database reachable) answers.
 - In Production the web host refuses a development database password and plain-`http` model or embedding

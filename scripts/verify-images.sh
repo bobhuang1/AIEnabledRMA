@@ -16,8 +16,8 @@
 # asserted here rather than left for the next reader to wonder about, because the image used to carry
 # the corpus and the check that said so was true and told nobody anything.
 #
-# Both images carry the commit they were built from as org.opencontainers.image.revision, and that
-# label is compared with this checkout. After a fix had been pushed, "is this image from before or
+# All three images carry the commit they were built from as org.opencontainers.image.revision, and
+# that label is compared with this checkout. After a fix had been pushed, "is this image from before or
 # after it" was a question this repository could not answer from the image.
 #
 # Usage:
