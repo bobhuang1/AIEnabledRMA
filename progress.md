@@ -328,11 +328,14 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
 - **Gate at `6b2ee20`:** `suite` 478 passed, 0 skipped, 0 failed (437 s), EF model check clean, audit clean
   for all nine projects; CI's `build-and-test`, `auth-flows` and `runtime-images` jobs all passed, and the
   production compose resolution step passed.
-- **Gate after this batch:** `suite` 497 passed, 0 skipped, 0 failed; EF model check clean ("No changes have
+- **Gate after this batch** (CI run `44943468403` on `7324ba7`: all three jobs green): `suite` 497 passed, 0 skipped, 0 failed; EF model check clean ("No changes have
   been made to the model since the last migration"); vulnerability audit clean for all nine projects. `auth`:
   all checks passed, including the 28-row realm shape and the operator token (subject, `preferred_username`,
   flat `roles` claim, and no role for a user without it). The production pack resolves with the example env
-  (`docker compose ... config --quiet`). Two import defects were found by that gate and fixed: a client-scope
+  (`docker compose ... config --quiet`). `images`: all checks passed — the three images build, carry the corpus
+  they should (and the tool server none), boot on it and refuse a drifted one; the production pack's web, mcp
+  and rag services each start from the example env with synthetic secrets and stay running. Two import defects
+  were found by the auth gate and fixed: a client-scope
   description longer than Keycloak's 255-character column stopped the import, and an imported realm has no
   built-in profile scope, so `preferred_username` had to be mapped explicitly or the operator audit trail
   would have recorded a UUID.
