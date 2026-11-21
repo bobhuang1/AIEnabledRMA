@@ -175,7 +175,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Check both runtime images carry what their host reads
+      - name: Check what each runtime image carries, and boot the web host on its corpus
         # The tool server's image is built by auth-flows as well, on another machine, so the layers
         # cannot be handed over — but the buildx cache keyed on the image name means a rerun of either
         # job reuses what the other already compiled, and a Dockerfile change invalidates only its

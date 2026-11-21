@@ -104,6 +104,42 @@ public sealed class GateScriptTests
     }
 
     [Fact]
+    public void The_image_gate_boots_the_web_host_on_its_corpus()
+    {
+        var script = Script("verify-images.sh");
+
+        // Counting files proves the COPY list, not the load. The gate starts the web image through its
+        // own entrypoint in Production — the environment where a drifted corpus is a startup failure —
+        // and reads the count the host logs.
+        Assert.Contains("boot_smoke \"$WEB_IMAGE\"", script, StringComparison.Ordinal);
+        Assert.Contains("ASPNETCORE_ENVIRONMENT=Production", script, StringComparison.Ordinal);
+        Assert.Contains("\"$expected_articles article(s)\"", script, StringComparison.Ordinal);
+        Assert.Contains("0 problem(s)", script, StringComparison.Ordinal);
+
+        // The second case is the one that makes the first meaningful: the same image, one article
+        // removed, must exit non-zero and say which manifest it does not match.
+        Assert.Contains("head -1 /app/knowledge-base/REVIEWED.sha256", script, StringComparison.Ordinal);
+        Assert.Contains("REVIEWED.sha256", script, StringComparison.Ordinal);
+        Assert.Contains("does not match", script, StringComparison.Ordinal);
+        Assert.Contains("if [ \"$rc\" -ne 0 ]", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The boot smoke must not need a database somebody else already started, and must not run against
+    /// one whose development password the host refuses in Production.
+    /// </summary>
+    [Fact]
+    public void The_image_gate_starts_its_own_database_for_the_boot_smoke()
+    {
+        var script = Script("verify-images.sh");
+
+        Assert.Contains("PG_IMAGE=${PG_IMAGE:-pgvector/pgvector:pg16}", script, StringComparison.Ordinal);
+        Assert.Contains("--name \"$SMOKE_PG\"", script, StringComparison.Ordinal);
+        Assert.Contains("pg_isready", script, StringComparison.Ordinal);
+        Assert.Contains("smoke_cleanup", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_image_gate_checks_the_commit_label_and_which_host_has_a_corpus()
     {
         var script = Script("verify-images.sh");
