@@ -47,11 +47,13 @@ cleanup() {
 
 trap cleanup EXIT
 
-# The CI job's build-and-test, including the database the live fixtures need. The live suites skip
-# silently without RMA_TEST_CONNECTION, so the connection string and the skip check travel together:
-# a green run that ran no database test is the failure this gate exists to prevent.
+# The CI job's build-and-test, step for step and in its order: restore, build, the EF model check,
+# the tests, the skip and "no tests ran" guards, and the dependency audit. The database the live
+# fixtures need is here too: the live suites skip silently without RMA_TEST_CONNECTION, so the
+# connection string and the skip check travel together — a green run that ran no database test is
+# the failure this gate exists to prevent.
 suite() {
-    step "suite: restore --locked-mode, build -warnaserror, test against a throwaway PostgreSQL"
+    step "suite: restore, build, EF model, tests against a throwaway PostgreSQL, dependency audit"
 
     command -v docker >/dev/null 2>&1 || fail "suite" "docker is required"
 
@@ -86,6 +88,15 @@ suite() {
             set -euo pipefail
             dotnet restore AIEnabledRma.slnx --locked-mode
             dotnet build AIEnabledRma.slnx --no-restore -warnaserror
+
+            # A migration left uncommitted, or a model changed without one, builds and passes every
+            # test in this repository and then fails at `rma db migrate` in a deployment.
+            dotnet tool restore
+            dotnet ef migrations has-pending-model-changes \
+                --project src/AIEnabledRma.Data \
+                --no-build \
+                --configuration Debug
+
             dotnet test AIEnabledRma.slnx --no-build --logger "console;verbosity=normal" | tee test.log
 
             if grep -Eq "Skipped:[[:space:]]+[1-9]" test.log; then
@@ -95,6 +106,16 @@ suite() {
 
             if ! grep -Eq "Total tests:[[:space:]]+[1-9]" test.log; then
                 echo "no tests ran" >&2
+                exit 1
+            fi
+
+            # The same audit CI runs, last: a restore against the locked file still resolves
+            # transitive packages, and one of them can acquire a published advisory the day after a
+            # green run. This needs the live advisory feed, so an offline machine fails here rather
+            # than reporting a pass CI would not give.
+            dotnet list AIEnabledRma.slnx package --vulnerable --include-transitive | tee vulnerable.log
+            if grep -q "has the following vulnerable packages" vulnerable.log; then
+                echo "a dependency has a known vulnerability" >&2
                 exit 1
             fi
         '

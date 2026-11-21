@@ -41,6 +41,26 @@ public sealed class GateScriptTests
         Assert.Contains("./scripts/verify-images.sh", script, StringComparison.Ordinal);
         Assert.Contains("dotnet test AIEnabledRma.slnx --no-build", script, StringComparison.Ordinal);
 
+        // The build-and-test job also refuses a model that disagrees with its migrations and a
+        // dependency with a known advisory. Without those here, a local pass means less than a CI
+        // pass, and the difference stays invisible until the deployment or the next audit. The
+        // workflow is the source of the list, so this fails when CI gains a step the local gate
+        // does not have as well as when the local gate drops one.
+        var workflow = File.ReadAllText(
+            Path.Combine(RepositoryRoot(), ".github", "workflows", "ci.yml"));
+
+        foreach (var check in new[]
+                 {
+                     "dotnet tool restore",
+                     "dotnet ef migrations has-pending-model-changes",
+                     "dotnet list AIEnabledRma.slnx package --vulnerable --include-transitive",
+                     "has the following vulnerable packages",
+                 })
+        {
+            Assert.Contains(check, workflow, StringComparison.Ordinal);
+            Assert.Contains(check, script, StringComparison.Ordinal);
+        }
+
         // The database and the skip check travel together: without a connection string the live
         // suites skip, and a green run that ran no database test is the failure the gate exists for.
         Assert.Contains("RMA_TEST_CONNECTION=", script, StringComparison.Ordinal);
