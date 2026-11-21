@@ -505,6 +505,32 @@ namespace AIEnabledRma.Data.Migrations
                     b.ToTable("operator_actions", (string)null);
                 });
 
+            modelBuilder.Entity("AIEnabledRma.Domain.Operations.ProcessedWebhookEvent", b =>
+                {
+                    b.Property<string>("EventId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("event_id");
+
+                    b.Property<DateTimeOffset>("ReceivedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at_utc");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("type");
+
+                    b.HasKey("EventId")
+                        .HasName("pk_webhook_events");
+
+                    b.HasIndex("ReceivedAtUtc")
+                        .HasDatabaseName("ix_webhook_events_received");
+
+                    b.ToTable("webhook_events", (string)null);
+                });
+
             modelBuilder.Entity("AIEnabledRma.Domain.Operations.ReviewItem", b =>
                 {
                     b.Property<Guid>("Id")

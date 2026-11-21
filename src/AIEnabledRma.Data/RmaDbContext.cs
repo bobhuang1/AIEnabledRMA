@@ -36,6 +36,8 @@ public sealed class RmaDbContext(DbContextOptions<RmaDbContext> options) : DbCon
 
     public DbSet<OperatorAction> OperatorActions => Set<OperatorAction>();
 
+    public DbSet<ProcessedWebhookEvent> WebhookEvents => Set<ProcessedWebhookEvent>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // snake_case naming is applied by UseSnakeCaseNamingConvention() on the options
@@ -326,5 +328,22 @@ public sealed class OperatorActionConfiguration : IEntityTypeConfiguration<Opera
         builder.Property(a => a.Target).HasMaxLength(64).IsRequired();
         builder.Property(a => a.Detail).HasMaxLength(2000);
         builder.HasIndex(a => a.AtUtc).HasDatabaseName("ix_operator_actions_at");
+    }
+}
+
+public sealed class ProcessedWebhookEventConfiguration : IEntityTypeConfiguration<ProcessedWebhookEvent>
+{
+    public void Configure(EntityTypeBuilder<ProcessedWebhookEvent> builder)
+    {
+        builder.ToTable("webhook_events");
+
+        // Stripe's own id is the key. A surrogate id would let the same delivery be inserted twice,
+        // which is the whole thing this table exists to prevent.
+        builder.HasKey(e => e.EventId);
+        builder.Property(e => e.EventId).HasMaxLength(128).IsRequired();
+        builder.Property(e => e.Type).HasMaxLength(128).IsRequired();
+
+        // Time-ordered for an operator reading recent deliveries and for a future retention job.
+        builder.HasIndex(e => e.ReceivedAtUtc).HasDatabaseName("ix_webhook_events_received");
     }
 }

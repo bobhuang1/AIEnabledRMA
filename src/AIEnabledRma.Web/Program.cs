@@ -224,6 +224,7 @@ if (PaymentGatewayServiceCollectionExtensions.UsesStripe(app.Configuration))
         HttpContext context,
         IOptions<StripeOptions> stripe,
         AIEnabledRma.Domain.Operations.IReviewQueue reviews,
+        AIEnabledRma.Domain.Operations.IWebhookEventLedger webhookEvents,
         TimeProvider time,
         ILogger<StripeOptions> log) =>
     {
@@ -242,6 +243,29 @@ if (PaymentGatewayServiceCollectionExtensions.UsesStripe(app.Configuration))
 
         using var json = System.Text.Json.JsonDocument.Parse(payload);
         var type = json.RootElement.GetProperty("type").GetString();
+
+        // Stripe retries a delivery until it is answered 2xx, and can deliver one twice even after
+        // that answer. Filing the retry would open a second review item for one failed payment, so
+        // the event id is recorded first and a repeat is acknowledged without being acted on. An
+        // event without an id cannot be deduplicated at all, which makes it unsafe to act on.
+        var eventId = json.RootElement.TryGetProperty("id", out var eventIdElement)
+            ? eventIdElement.GetString()
+            : null;
+        if (string.IsNullOrWhiteSpace(eventId))
+        {
+            return Results.BadRequest();
+        }
+
+        if (!await webhookEvents.TryRecordAsync(
+                eventId,
+                type ?? "unknown",
+                time.GetUtcNow(),
+                context.RequestAborted))
+        {
+            log.LogInformation("Stripe webhook {Type} {EventId} was already processed; ignored.", type, eventId);
+            return Results.Ok();
+        }
+
         if (type is "payment_intent.payment_failed" or "payment_intent.canceled")
         {
             var intent = json.RootElement.GetProperty("data").GetProperty("object");
@@ -258,7 +282,7 @@ if (PaymentGatewayServiceCollectionExtensions.UsesStripe(app.Configuration))
                 context.RequestAborted);
         }
 
-        log.LogInformation("Stripe webhook {Type} accepted.", type);
+        log.LogInformation("Stripe webhook {Type} {EventId} accepted.", type, eventId);
         return Results.Ok();
     });
 }

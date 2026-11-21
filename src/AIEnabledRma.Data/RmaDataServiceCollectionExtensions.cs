@@ -58,6 +58,11 @@ public static class RmaDataServiceCollectionExtensions
         services.AddScoped<AIEnabledRma.Domain.Operations.IOperationsRepository, EfOperationsRepository>();
         services.AddSingleton<AIEnabledRma.Domain.Operations.IReviewQueue, EfReviewQueue>();
 
+        // Scoped, because the ledger's answer is a database primary key and the insert has to run on
+        // the request's own context: a singleton would share one context between concurrent
+        // deliveries, which is where a duplicate is most likely to arrive.
+        services.AddScoped<AIEnabledRma.Domain.Operations.IWebhookEventLedger, EfWebhookEventLedger>();
+
         return services;
     }
 
