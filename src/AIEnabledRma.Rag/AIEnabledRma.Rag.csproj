@@ -9,6 +9,9 @@
   <ItemGroup>
     <ProjectReference Include="..\AIEnabledRma.Domain\AIEnabledRma.Domain.csproj" />
     <ProjectReference Include="..\AIEnabledRma.Privacy\AIEnabledRma.Privacy.csproj" />
+    <!-- The Production database rule is one implementation in the data layer (P11). The RAG host
+         applies it too, because a vector-store deployment opens the same database. -->
+    <ProjectReference Include="..\AIEnabledRma.Data\AIEnabledRma.Data.csproj" />
     <PackageReference Include="Npgsql" />
   </ItemGroup>
 

@@ -203,6 +203,7 @@
       "aienabledrma.rag": {
         "type": "Project",
         "dependencies": {
+          "AIEnabledRma.Data": "[1.0.0, )",
           "AIEnabledRma.Domain": "[1.0.0, )",
           "AIEnabledRma.Privacy": "[1.0.0, )",
           "Npgsql": "[10.0.3, )"

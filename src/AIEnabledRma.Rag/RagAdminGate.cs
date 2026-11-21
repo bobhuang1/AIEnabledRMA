@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using AIEnabledRma.Domain.Configuration;
 
 namespace AIEnabledRma.Rag;
 
@@ -29,7 +30,9 @@ namespace AIEnabledRma.Rag;
 ///
 /// The loopback fallback is a development convenience, so a keyless host refuses to start
 /// outside Development (<see cref="EnsureStartupAllowed"/>): a proxy on the same machine makes
-/// every caller look like loopback, which would leave all three endpoints open.
+/// every caller look like loopback, which would leave all three endpoints open. A configured but
+/// placeholder key is refused for the same reason: the example value is published in this
+/// repository, so it admits every reader.
 ///
 /// A refusal is a 404 rather than a 401 or 403. The endpoints are not advertised, so a caller
 /// who was not told they exist should not learn that they do.
@@ -48,6 +51,14 @@ public static class RagAdminGate
     /// </summary>
     public static void EnsureStartupAllowed(string? configuredKey, bool isDevelopment)
     {
+        if (!isDevelopment && ProductionSecrets.IsPlaceholder(configuredKey))
+        {
+            // Present but not a secret: the example env file's `replace-with-a-long-random-key`
+            // satisfies a non-empty check and publishes the operational endpoints to anyone who
+            // has read this repository.
+            throw new InvalidOperationException(ProductionSecrets.Problem(ApiKeyConfigurationKey));
+        }
+
         if (!string.IsNullOrEmpty(configuredKey) || isDevelopment)
         {
             return;

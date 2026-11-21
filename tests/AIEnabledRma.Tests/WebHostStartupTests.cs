@@ -26,6 +26,15 @@ public sealed class WebHostStartupTests
         {
             builder.UseEnvironment(production ? "Production" : "Testing");
 
+            // Production refuses the checked-in placeholder database password and the bundled
+            // example model, and the host would stop for those before reaching the guard each test
+            // is about. Synthetic values, nothing here connects to either.
+            builder.UseSetting(
+                "ConnectionStrings:Rma",
+                "Host=db;Database=rmaprod;Username=rma_app;Password=host-startup-synthetic-password");
+            builder.UseSetting("Ai:Provider", "openai-compatible");
+            builder.UseSetting("Ai:OpenAiCompatible:BaseUrl", "https://llm.example.com/v1");
+
             // Production requires an operator identity provider; the host would refuse to boot
             // before reaching the guard each test is about. One test below omits these on purpose.
             if (operatorSignIn)

@@ -68,7 +68,10 @@ services:
       Payments__Provider: stripe
       Payments__Stripe__SecretKey: ${STRIPE_SECRET_KEY:?set STRIPE_SECRET_KEY}
       Payments__Stripe__WebhookSecret: ${STRIPE_WEBHOOK_SECRET:?set STRIPE_WEBHOOK_SECRET}
-      Ai__Provider: ${AI_PROVIDER:-example-local}
+      # Required, with no default: the bundled 'example-local' model answers from canned text and
+      # every host refuses it in Production, so a deployment that forgot to choose a provider would
+      # crash-loop rather than start on the demo model.
+      Ai__Provider: ${AI_PROVIDER:?set AI_PROVIDER}
       Ai__OpenAiCompatible__BaseUrl: ${AI_BASE_URL:-}
       Ai__OpenAiCompatible__ApiKey: ${AI_API_KEY:-}
       Rag__VectorStore__Enabled: ${RAG_VECTOR_STORE:-false}
@@ -90,6 +93,9 @@ services:
     environment:
       <<: *app-env
       Mcp__Transport: http
+      # The tool server's own log level is Warning, so a successful start says nothing at all;
+      # an operator (and scripts/verify-images.sh) needs one line that says it got past startup.
+      Logging__LogLevel__Microsoft.Hosting.Lifetime: Information
       # The owner's Mcp:Http settings (see docs/mcp.md): issuer, audience, scope, client allow-list.
       Mcp__Http__Issuer: ${OIDC_AUTHORITY:?set OIDC_AUTHORITY}
       Mcp__Http__Audience: aienabledrma-mcp

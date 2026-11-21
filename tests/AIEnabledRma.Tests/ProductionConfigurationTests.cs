@@ -1,4 +1,5 @@
 using AIEnabledRma.Data;
+using AIEnabledRma.Domain.Configuration;
 using AIEnabledRma.Mcp;
 using AIEnabledRma.Rag;
 using Microsoft.AspNetCore.Hosting;
@@ -40,6 +41,87 @@ public sealed class ProductionConfigurationTests
         var config = Config(("ConnectionStrings:Rma", $"Host=db;Database=x;Username=u;Password={password}"));
 
         Assert.Contains(ProductionConfiguration.Problems(config), p => p.Contains("password", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The message has always said "default or empty", and the rule used to exclude empty so a test
+    /// host on the checked-in placeholder would still boot. A deployment with no password then
+    /// started cleanly and failed at its first query, which is the failure the check exists to
+    /// prevent. A placeholder fails the same way: it is present, non-empty, and authenticates
+    /// against nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("replace-with-a-long-random-password")]
+    [InlineData("placeholder")]
+    [InlineData("Replace-Me")]
+    public void An_empty_or_placeholder_database_password_is_refused(string password)
+    {
+        var config = Config(("ConnectionStrings:Rma", $"Host=db;Database=x;Username=u;Password={password}"));
+
+        Assert.Contains(ProductionConfiguration.Problems(config), p => p.Contains("password", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The bundled model is the right default for a checkout and the wrong model for a customer. A
+    /// deployment that never chose a provider would look configured, answer every question and never
+    /// ask a model; an absent setting is the same decision, because the provider switch treats blank
+    /// as 'example-local'.
+    /// </summary>
+    [Theory]
+    [InlineData("example-local")]
+    [InlineData("Example-Local")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void The_bundled_example_model_is_refused(string? provider)
+    {
+        var config = Config(
+            ("ConnectionStrings:Rma", SafeConnection),
+            ("Ai:Provider", provider));
+
+        Assert.Contains(
+            ProductionConfiguration.Problems(config),
+            p => p.Contains("Ai:Provider", StringComparison.Ordinal)
+                && p.Contains("example-local", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_placeholder_operator_secret_is_refused()
+    {
+        var config = Config(
+            ("ConnectionStrings:Rma", SafeConnection),
+            ("Ai:Provider", "openai-compatible"),
+            ("Ai:OpenAiCompatible:BaseUrl", "https://llm.example.com/v1"),
+            ("OperatorAuth:Authority", "https://idp.example.com/realms/rma"),
+            ("OperatorAuth:ClientId", "rma-operator"),
+            ("OperatorAuth:ClientSecret", "replace-me"));
+
+        Assert.Contains(
+            ProductionConfiguration.Problems(config, checkOperatorSignIn: true),
+            p => p.Contains("OperatorAuth:ClientSecret", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The example env file ships live-key placeholders. Compose only checks that a value is present,
+    /// so without this rule a deployment copied from the example charges nothing and signs no
+    /// webhook, and the first customer to pay finds out.
+    /// </summary>
+    [Fact]
+    public void Placeholder_stripe_keys_are_refused()
+    {
+        var config = Config(
+            ("ConnectionStrings:Rma", SafeConnection),
+            ("Ai:Provider", "openai-compatible"),
+            ("Ai:OpenAiCompatible:BaseUrl", "https://llm.example.com/v1"),
+            ("Payments:Provider", "stripe"),
+            ("Payments:Stripe:SecretKey", "sk_live_replace-me"),
+            ("Payments:Stripe:WebhookSecret", "whsec_replace-me"));
+
+        var problems = ProductionConfiguration.Problems(config);
+
+        Assert.Contains(problems, p => p.Contains("Payments:Stripe:SecretKey", StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.Contains("Payments:Stripe:WebhookSecret", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -165,8 +247,24 @@ public sealed class ProductionConfigurationTests
         Assert.True(response.IsSuccessStatusCode);
     }
 
+    /// <summary>
+    /// The tool server calls no model, so the example-provider rule must not apply to it; a valid
+    /// Production deployment with a safe database and no <c>Ai</c> section still registers.
+    /// </summary>
+    [Fact]
+    public void The_tool_server_does_not_require_a_model_provider_in_production()
+    {
+        var builder = ToolServerBuilder("Production", SafeConnection);
+
+        builder.Services.AddRmaMcpServices(builder.Configuration, builder.Environment);
+
+        using var host = builder.Build();
+
+        Assert.NotNull(host);
+    }
+
     /// <summary>A tool-server builder with the environment under test and the development connection string.</summary>
-    private static HostApplicationBuilder ToolServerBuilder(string environment)
+    private static HostApplicationBuilder ToolServerBuilder(string environment, string connection = DevelopmentConnection)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
         {
@@ -178,7 +276,7 @@ public sealed class ProductionConfigurationTests
         // case is about.
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["ConnectionStrings:Rma"] = DevelopmentConnection,
+            ["ConnectionStrings:Rma"] = connection,
         });
 
         return builder;

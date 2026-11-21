@@ -35,7 +35,9 @@ public static class McpServices
         // hosted service.
         if (environment.IsProduction())
         {
-            ProductionConfiguration.EnsureSafe(configuration);
+            // No model-provider check: the tool server's tools evaluate stored data and policy and
+            // never call a chat model, so it has no Ai section to configure.
+            ProductionConfiguration.EnsureSafe(configuration, checkAiProvider: false);
         }
 
         services.AddRmaDbContext(configuration);

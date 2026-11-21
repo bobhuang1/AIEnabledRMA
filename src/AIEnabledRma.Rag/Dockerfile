@@ -9,6 +9,7 @@ WORKDIR /src
 COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY AIEnabledRma.slnx ./
 COPY src/AIEnabledRma.Domain/AIEnabledRma.Domain.csproj src/AIEnabledRma.Domain/packages.lock.json src/AIEnabledRma.Domain/
+COPY src/AIEnabledRma.Data/AIEnabledRma.Data.csproj src/AIEnabledRma.Data/packages.lock.json src/AIEnabledRma.Data/
 COPY src/AIEnabledRma.Privacy/AIEnabledRma.Privacy.csproj src/AIEnabledRma.Privacy/packages.lock.json src/AIEnabledRma.Privacy/
 COPY src/AIEnabledRma.Rag/AIEnabledRma.Rag.csproj src/AIEnabledRma.Rag/packages.lock.json src/AIEnabledRma.Rag/
 RUN dotnet restore src/AIEnabledRma.Rag/AIEnabledRma.Rag.csproj --locked-mode

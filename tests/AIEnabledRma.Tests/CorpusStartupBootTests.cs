@@ -27,8 +27,14 @@ public sealed class CorpusStartupBootTests
             builder.UseEnvironment("Production");
 
             // Unrelated Production guards that would fail the boot first, which would make the
-            // assertion below pass for the wrong reason: the operator key, the fake gateway, and the
-            // operator identity provider the host now requires in Production.
+            // assertion below pass for the wrong reason: the database credentials, the model
+            // provider, the operator key, the fake gateway, and the operator identity provider the
+            // host now requires in Production.
+            builder.UseSetting(
+                "ConnectionStrings:Rma",
+                "Host=db;Database=rmaprod;Username=rma_app;Password=corpus-boot-synthetic-password");
+            builder.UseSetting("Ai:Provider", "openai-compatible");
+            builder.UseSetting("Ai:OpenAiCompatible:BaseUrl", "https://llm.example.com/v1");
             builder.UseSetting(RagAdminGate.ApiKeyConfigurationKey, "production-operator-key");
             builder.UseSetting(
                 $"{FakePaymentGatewayOptions.SectionName}:{nameof(FakePaymentGatewayOptions.AllowInProduction)}",

@@ -53,6 +53,22 @@ public sealed class RagAdminGateTests
         Assert.Contains(RagAdminGate.ApiKeyConfigurationKey, thrown.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The example env file's key is published in this repository, so it admits every reader of the
+    /// repository to /diagnostics, /retrieve and /rag/reload. It is present and non-empty, which is
+    /// all the older check required.
+    /// </summary>
+    [Theory]
+    [InlineData("replace-with-a-long-random-key")]
+    [InlineData("Replace-Me")]
+    public void A_placeholder_key_refuses_to_start_outside_development(string configuredKey)
+    {
+        var thrown = Assert.Throws<InvalidOperationException>(
+            () => RagAdminGate.EnsureStartupAllowed(configuredKey, isDevelopment: false));
+
+        Assert.Contains(RagAdminGate.ApiKeyConfigurationKey, thrown.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void A_keyless_host_may_start_in_development() =>
         Assert.Null(Record.Exception(
