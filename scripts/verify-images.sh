@@ -192,6 +192,9 @@ smoke_environment=(
     # only have to be an https URL and a client id.
     -e OperatorAuth__Authority=https://idp.example.com/realms/rma
     -e OperatorAuth__ClientId=rma-operator
+    # The bundled example model is refused in Production, for every host that selects a provider.
+    -e Ai__Provider=openai-compatible
+    -e Ai__OpenAiCompatible__BaseUrl=https://llm.example.com/v1
 )
 
 smoke_cleanup() {
@@ -200,14 +203,33 @@ smoke_cleanup() {
 }
 
 # The production pack is resolved by the CI job on every run, and resolving it proves the file
-# parses, not that a service built from it starts. This is the pack's own web service, started from
-# the example env, on a project name of its own so the check can never adopt, overwrite or tear down
-# a real stack on the machine, and so its database volume cannot survive between runs. Only web is
-# started: the proxy would take ports 80 and 443, and nothing asserted here is behind it.
+# parses, not that a service built from it starts. This is the pack's own three application services,
+# started from the example env, on a project name of its own so the check can never adopt, overwrite
+# or tear down a real stack on the machine, and so its database volume cannot survive between runs.
+# The proxy is left out: it would take ports 80 and 443, and nothing asserted here is behind it.
+#
+# The example env's secrets are placeholders on purpose, and every host now refuses a placeholder
+# rather than starting on one, so the smoke supplies synthetic values for exactly those settings.
+# They are still checked as values: a deployment that copied the example without replacing them
+# fails the same way, which is the behaviour this gate exists to prove.
 PROD_PROJECT=rma-image-smoke-prod
+PROD_PASSWORD=image-smoke-not-a-default
+PROD_OIDC_SECRET=image-smoke-synthetic-client-secret
+PROD_STRIPE_KEY=sk_live_synthetic_smoke_key
+PROD_WEBHOOK_SECRET=whsec_synthetic_smoke_key
+PROD_OPERATIONS_KEY=image-smoke-operator-key
+PROD_AI_BASE_URL=https://llm.example.com/v1
 
 prod_compose() {
-    docker compose -p "$PROD_PROJECT" -f docker-compose.prod.yml --env-file deploy/prod.env.example "$@"
+    POSTGRES_PASSWORD="$PROD_PASSWORD" \
+    OIDC_OPERATOR_CLIENT_SECRET="$PROD_OIDC_SECRET" \
+    STRIPE_SECRET_KEY="$PROD_STRIPE_KEY" \
+    STRIPE_WEBHOOK_SECRET="$PROD_WEBHOOK_SECRET" \
+    RMA_OPERATIONS_KEY="$PROD_OPERATIONS_KEY" \
+    RAG_ADMIN_KEY="$PROD_OPERATIONS_KEY" \
+    AI_PROVIDER=openai-compatible \
+    AI_BASE_URL="$PROD_AI_BASE_URL" \
+        docker compose -p "$PROD_PROJECT" -f docker-compose.prod.yml --env-file deploy/prod.env.example "$@"
 }
 
 prod_cleanup() {
@@ -324,72 +346,91 @@ check_image "RAG" "src/AIEnabledRma.Rag/Dockerfile" "$RAG_IMAGE" corpus
 # from the example env or a service the current host refuses before anyone runs `up` against a real
 # domain. It builds the web image from the same Dockerfile the build above checked, because the
 # service definition is what is under test here, not the image contents twice.
-prod_boot_smoke() {
-    local log container waited=0
+# Waits for one line in one service's log, then quotes the log when it never arrives. The line is
+# the host's own statement that it got past startup, which a running container alone does not prove:
+# a process that is still alive can be waiting on a retry loop, and a process that logged the line
+# and exited is not serving.
+prod_wait_for_line() {
+    local service=$1 text=$2 container waited=0 log=""
 
-    prod_cleanup
-
-    log=$(mktemp)
-
-    if ! prod_compose up -d --build web >"$log" 2>&1; then
-        fail "prod compose web boots" "docker compose up failed; last lines of its output:"
-        tail -12 "$log" | sed 's/^/          /'
-        rm -f "$log"
-        return
-    fi
-
-    rm -f "$log"
-
-    container=$(prod_compose ps -q web)
+    container=$(prod_compose ps -q "$service")
 
     # A service that started and exited is still the thing to read the log from; a failed start is
     # otherwise reported as "no container", which is not a diagnosis.
     if [ -z "$container" ]; then
-        container=$(prod_compose ps -a -q web)
+        container=$(prod_compose ps -a -q "$service")
     fi
 
     if [ -z "$container" ]; then
-        fail "prod compose web boots" "compose reported success but started no web container"
-        prod_cleanup
-        return
+        fail "prod compose $service boots" "compose reported success but started no $service container"
+        return 1
     fi
 
-    while [ "$waited" -lt 60 ]; do
+    while [ "$waited" -lt 90 ]; do
         log=$(docker logs "$container" 2>&1 || true)
 
-        if printf '%s' "$log" | grep -Fq "$expected_articles article(s)"                 && printf '%s' "$log" | grep -Fq "0 problem(s)"; then
-            pass "prod compose web boots with $expected_articles article(s) and 0 problem(s) from the example env"
-            break
+        if printf '%s' "$log" | grep -Fq "$text"; then
+            pass "prod compose $service boots ($text)"
+            return 0
         fi
 
         if [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo false)" != true ]; then
-            fail "prod compose web boots"                 "the service exited before reporting $expected_articles article(s) and 0 problem(s); last lines of its log:"
+            fail "prod compose $service boots" \
+                "the service exited before logging '$text'; last lines of its log:"
             printf '%s\n' "$log" | tail -12 | sed 's/^/          /'
-            prod_cleanup
-            return
+            return 1
         fi
 
         sleep 1
         waited=$((waited + 1))
     done
 
-    if [ "$waited" -ge 60 ]; then
-        fail "prod compose web boots"             "no '$expected_articles article(s)' / '0 problem(s)' line within 60s; last lines of its log:"
-        printf '%s\n' "$log" | tail -12 | sed 's/^/          /'
+    fail "prod compose $service boots" "no '$text' line within 90s; last lines of its log:"
+    printf '%s\n' "$log" | tail -12 | sed 's/^/          /'
+    return 1
+}
+
+prod_boot_smoke() {
+    local log service container
+
+    prod_cleanup
+
+    log=$(mktemp)
+
+    # All three application services, because all three are what a deployment runs: the web host was
+    # the only one this gate started, so a pack whose tool server or RAG host refused its own
+    # configuration looked verified.
+    if ! prod_compose up -d --build web mcp rag >"$log" 2>&1; then
+        fail "prod compose boots" "docker compose up failed; last lines of its output:"
+        tail -12 "$log" | sed 's/^/          /'
+        rm -f "$log"
         prod_cleanup
         return
     fi
 
-    # A container that logs the line and exits a second later has not booted. The pause is short
+    rm -f "$log"
+
+    # The two corpus hosts state the article count they loaded; the tool server serves no corpus, so
+    # its line is ASP.NET's own "Application started".
+    prod_wait_for_line web "$expected_articles article(s)" || { prod_cleanup; return; }
+    prod_wait_for_line rag "$expected_articles article(s)" || { prod_cleanup; return; }
+    prod_wait_for_line mcp "Application started" || { prod_cleanup; return; }
+
+    # A container that logs its line and exits a second later has not booted. The pause is short
     # because the assertion is about the composition starting, not about serving traffic.
     sleep 3
 
-    if [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo false)" != true ]; then
-        fail "prod compose web boots" "the service exited within 3s of reporting its corpus; last lines:"
-        docker logs "$container" 2>&1 | tail -12 | sed 's/^/          /'
-        prod_cleanup
-        return
-    fi
+    for service in web mcp rag; do
+        container=$(prod_compose ps -q "$service")
+
+        if [ -n "$container" ] \
+            && [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo false)" = true ]; then
+            pass "prod compose $service stays running"
+        else
+            fail "prod compose $service stays running" "the service exited within 3s of starting; last lines:"
+            docker logs "$container" 2>&1 | tail -12 | sed 's/^/          /'
+        fi
+    done
 
     prod_cleanup
 }

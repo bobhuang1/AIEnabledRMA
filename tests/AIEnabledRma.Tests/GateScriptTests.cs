@@ -198,20 +198,27 @@ public sealed class GateScriptTests
     }
 
     /// <summary>
-    /// The production web service is brought up from the pack and the example env, not from a hand-
-    /// built container with a throwaway database. The service definition is what a deployment runs,
-    /// so a required value the example forgot or an environment the host now refuses has to fail
-    /// here, before anyone points a domain at it.
+    /// All three application services are brought up from the pack and the example env, not from a
+    /// hand-built container with a throwaway database. The service definitions are what a deployment
+    /// runs, so a required value the example forgot or an environment the host now refuses has to
+    /// fail here, before anyone points a domain at it. Starting only the web service left the tool
+    /// server and the RAG host unverified against their own production settings.
     /// </summary>
     [Fact]
-    public void The_image_gate_starts_the_production_web_service_from_the_example_env()
+    public void The_image_gate_starts_the_production_services_from_the_example_env()
     {
         var script = Script("verify-images.sh");
 
         Assert.Contains("docker-compose.prod.yml", script, StringComparison.Ordinal);
         Assert.Contains("--env-file deploy/prod.env.example", script, StringComparison.Ordinal);
-        Assert.Contains("up -d --build web", script, StringComparison.Ordinal);
-        Assert.Contains("ps -q web", script, StringComparison.Ordinal);
+        Assert.Contains("up -d --build web mcp rag", script, StringComparison.Ordinal);
+
+        // Each service is waited for by name and by the line it prints, and each is asserted to
+        // still be running afterwards: a container that logged and exited has not booted.
+        Assert.Contains("prod_wait_for_line web", script, StringComparison.Ordinal);
+        Assert.Contains("prod_wait_for_line rag", script, StringComparison.Ordinal);
+        Assert.Contains("prod_wait_for_line mcp", script, StringComparison.Ordinal);
+        Assert.Contains("for service in web mcp rag", script, StringComparison.Ordinal);
         Assert.Contains("prod_boot_smoke", script, StringComparison.Ordinal);
 
         // Its own project name and a down that removes the volumes: the check must not adopt a real
