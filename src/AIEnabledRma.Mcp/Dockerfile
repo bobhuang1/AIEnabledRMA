@@ -5,7 +5,9 @@
 # the repositories, nothing in this process reads the corpus, and the startup check that inspects one
 # is registered by AddRag, which this host does not call. Shipping the articles anyway made "the
 # image carries the corpus" a true statement about bytes and a false one about behaviour.
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+# Base images are pinned by digest: a tag names whatever was published most recently, and an
+# image that changes without a commit is not reproducible. Refresh deliberately.
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:bef136a371963aaa46ec97882845ef6f54dec15728bb4b128b1c2a400ffbc9b4 AS build
 WORKDIR /src
 
 COPY global.json Directory.Build.props Directory.Packages.props ./
@@ -23,7 +25,7 @@ RUN dotnet publish src/AIEnabledRma.Mcp -c Release -o /app --no-restore
 # The ASP.NET runtime, not the plain one: the same binary serves the streamable HTTP transport,
 # which needs the shared framework the stdio path never touches. stdio on this image behaves
 # exactly as before — it simply carries a framework it does not use.
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:12b1135f5f8b3c0a214f2a680ff2033dff4f684f445d6c697d9524ceeb303586 AS runtime
 WORKDIR /app
 COPY --from=build /app ./
 

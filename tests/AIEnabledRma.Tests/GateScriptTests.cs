@@ -95,8 +95,27 @@ public sealed class GateScriptTests
         // tool server does not. A test that only said "both carry the corpus" is what made the
         // unused copy look verified.
         Assert.Contains("check_image \"MCP\"", script, StringComparison.Ordinal);
+        Assert.Contains("check_image \"RAG\"", script, StringComparison.Ordinal);
         Assert.Contains("$MCP_IMAGE\" empty", script, StringComparison.Ordinal);
         Assert.Contains("$WEB_IMAGE\" corpus", script, StringComparison.Ordinal);
+        Assert.Contains("$RAG_IMAGE\" corpus", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The production pack has to resolve. It is a compose file whose required values are all
+    /// placeholders in the example env; a renamed variable or a broken anchor turns a deployment into
+    /// a parse error, and nothing else in this repository reads that file.
+    /// </summary>
+    [Fact]
+    public void Ci_resolves_the_production_pack_without_starting_it()
+    {
+        var workflow = File.ReadAllText(
+            Path.Combine(RepositoryRoot(), ".github", "workflows", "ci.yml"));
+
+        Assert.Contains(
+            "docker compose -f docker-compose.prod.yml --env-file deploy/prod.env.example config",
+            workflow,
+            StringComparison.Ordinal);
     }
 
     [Fact]

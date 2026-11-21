@@ -8,7 +8,8 @@
 # in both directions and has: the Web image could not be built at all once because a referenced
 # manifest was missing from that list, and nothing in a checkout showed it.
 #
-# The two images are checked differently on purpose. The Web host reads the corpus from its content
+# The RAG image joined this script with the production pack: the host that reads the corpus most
+# directly was the one image no gate looked inside. The other two are checked differently on purpose. The Web host reads the corpus from its content
 # root, so a missing article is a policy answer that quietly stops happening. The tool server's tools
 # evaluate stored data and never open knowledge-base/, and the startup check that inspects a corpus is
 # registered by AddRag, which that host does not call — so its image must carry none. That absence is
@@ -26,6 +27,7 @@
 # Environment:
 #   MCP_IMAGE  tag for the tool server image (default aienabledrma-mcp-http:corpus-check)
 #   WEB_IMAGE  tag for the web host image    (default aienabledrma-web:corpus-check)
+#   RAG_IMAGE  tag for the RAG host image    (default aienabledrma-rag:corpus-check)
 #   RMA_IMAGE_CACHE=1    push and pull the layer cache through the GitHub Actions cache. Set by CI,
 #                        where the tool server's image is also built by the auth job; unset locally,
 #                        where there is no Actions cache to talk to.
@@ -38,6 +40,7 @@ set -euo pipefail
 
 MCP_IMAGE=${MCP_IMAGE:-aienabledrma-mcp-http:corpus-check}
 WEB_IMAGE=${WEB_IMAGE:-aienabledrma-web:corpus-check}
+RAG_IMAGE=${RAG_IMAGE:-aienabledrma-rag:corpus-check}
 REVISION=${RMA_IMAGE_REVISION:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -154,9 +157,10 @@ check_image() {
 
 check_image "MCP" "src/AIEnabledRma.Mcp/Dockerfile" "$MCP_IMAGE" empty
 check_image "Web" "src/AIEnabledRma.Web/Dockerfile" "$WEB_IMAGE" corpus
+check_image "RAG" "src/AIEnabledRma.Rag/Dockerfile" "$RAG_IMAGE" corpus
 
 if [ "${KEEP_IMAGES:-0}" != 1 ] && [ "$failures" -eq 0 ]; then
-    docker rmi "$MCP_IMAGE" "$WEB_IMAGE" >/dev/null 2>&1 || true
+    docker rmi "$MCP_IMAGE" "$WEB_IMAGE" "$RAG_IMAGE" >/dev/null 2>&1 || true
 fi
 
 if [ "$failures" -ne 0 ]; then

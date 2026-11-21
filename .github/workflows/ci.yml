@@ -183,3 +183,9 @@ jobs:
         env:
           RMA_IMAGE_CACHE: "1"
         run: ./scripts/verify-images.sh
+
+      # The production pack is a compose file, so a typo in it stays invisible until a deployment.
+      # This resolves it — interpolating every required value from the example env file — without
+      # starting a container.
+      - name: The production pack resolves
+        run: docker compose -f docker-compose.prod.yml --env-file deploy/prod.env.example config --quiet
