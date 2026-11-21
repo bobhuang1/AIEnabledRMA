@@ -12,14 +12,24 @@ behaviour regressed.
 
 ## 0. Decision index
 
-Settled choices this plan depends on, and the file that carries the detail. The plan grew by
-appending, so this is the entry point; the sections below still hold the reasoning.
+The engineering choices this plan rests on, and where each one's detail lives. **This file is one
+document, not a decisions/status pair**, so there is no second half to find: the reasoning for a
+decision stays in the section that made it, and each workstream's status stays in its status lines in
+section 5. The two were not separated because they cite each other constantly — a status line names
+the commit that settled a decision, and a decision names the test that proves it — and a second copy
+of status would drift from the one `progress.md` records. `progress.md` is the dated log of what
+landed and the commands that produced the evidence; it is not a copy of this file's status.
+
+The index exists because the plan grew by appending: a later section can restate or narrow an earlier
+decision, so a reader who wants to know what was decided starts here rather than at line 400. Owner
+decisions (D1–D6) are in section 4; this table covers the engineering choices those decisions led to.
 
 | Decision | Why it is not obvious | Where |
 |---|---|---|
 | CI runs on push to `main`, and never cancels a `main` run | A cancelled run reports nothing, which is how one red run became the only evidence a branch had | `.github/workflows/ci.yml`, `CiWorkflowTests` |
 | A failed build re-emits its diagnostics as annotations | The step log needs a token; annotations do not, and the first two failures were unreadable because of it | `.github/workflows/ci.yml`, `CiWorkflowTests` |
 | The three gates run locally as well as in CI | CI's logs are unreadable without authentication, and the same commands answer the same question | `scripts/verify-all.sh`, `GateScriptTests` |
+| The local gate runs CI's whole build-and-test job | The job is more than build and test: the EF model check and the audit fail in CI, and a local pass that skipped them was a pass CI would not give | `scripts/verify-all.sh`, `GateScriptTests` |
 | The Web host owns the corpus; the tool server does not | The tool server's tools read stored data, never `knowledge-base/`, and its startup check never ran | `PublishLayoutTests`, `scripts/verify-images.sh` |
 | A production host refuses a drifted corpus | An empty corpus answers every question as though the policy said nothing | `KnowledgeBaseStartupCheck`, `CorpusStartupBootTests` |
 | Images carry the commit they were built from | "Is this image from before or after the fix" had no answer from the image | both Dockerfiles, `verify-images.sh` |
