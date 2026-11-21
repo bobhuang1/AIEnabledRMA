@@ -4,15 +4,26 @@ Monitor for [plan.md](plan.md). One row per workstream; the log below records wh
 
 ## How the evidence was produced
 
-Local runs use a throwaway PostgreSQL container, because `CREATE DATABASE` on the long-lived
-`aienabledrma-postgres` container takes about two minutes:
+Every number below comes from the gate scripts, not from a hand-run `dotnet test`. They are the same
+commands CI runs, each with the database or containers it needs started as part of the step:
 
-```powershell
-docker run -d --name aienabledrma-testpg -p 127.0.0.1:55432:5432 -e POSTGRES_USER=rmauser -e POSTGRES_PASSWORD=testonly -e POSTGRES_DB=rmadev --tmpfs /var/lib/postgresql/data:rw,size=2g pgvector/pgvector:pg16 -c fsync=off -c full_page_writes=off -c max_connections=300
-$env:RMA_TEST_CONNECTION='Host=localhost;Port=55432;Database=postgres;Username=rmauser;Password=testonly'
-$env:RMA_REQUIRE_LIVE_DB='1'
-dotnet test tests\AIEnabledRma.Tests\AIEnabledRma.Tests.csproj
+```bash
+./scripts/verify-all.sh suite    # restore --locked-mode, build -warnaserror, EF model check, the suite
+                                 # against a throwaway pgvector PostgreSQL, skip guard, audit
+./scripts/verify-all.sh auth     # realm import, client-credentials and PKCE flows, refusals
+./scripts/verify-all.sh images   # the three runtime images, both corpus boots, the production web boot
 ```
+
+`suite` runs in the SDK container pinned by `global.json` and talks to a PostgreSQL on its own Docker
+network; the working tree is copied in without `bin/`, `obj/` or `data/`, so a Windows artefact cannot
+shadow the Linux build. `images` builds the Web, MCP and RAG images, checks the commit label and the
+corpus content of each, boots both hosts that read the corpus in Production, and starts the production
+compose web service from `deploy/prod.env.example`. `auth` runs from a scratch compose project on its
+own ports.
+
+CI runs the same three gates as separate jobs (`build-and-test`, `auth-flows`, `runtime-images`) and,
+after the image gate, resolves the production pack:
+`docker compose -f docker-compose.prod.yml --env-file deploy/prod.env.example config --quiet`.
 
 ## Status
 
@@ -23,7 +34,7 @@ are this branch's work, re-seated on the owner's code. plan.md section 5 carries
 
 | Step | Workstream | Status | Notes |
 |---|---|---|---|
-| 1 | P0 Baseline and CI | Done (owner) | Owner's CI, lock files, SDK pin and the three gates (`scripts/verify-all.sh`). The CI service and the suite gate now use `pgvector/pgvector:pg16`, which P5's suites need. |
+| 1 | P0 Baseline and CI | Done (owner) | Owner's CI, lock files, SDK pin and the three gates (`scripts/verify-all.sh`). CI runs them as `build-and-test`, `auth-flows` and `runtime-images`, then resolves the production compose file. The CI service and the suite gate both use `pgvector/pgvector:pg16`, which P5's suites need. |
 | 2 | P1 MCP data surface | Done (owner) | Owner's masking, audit and PostgreSQL-counted budgets. |
 | 2 | P3 Redact before model calls | Done (owner) | Owner's `AIEnabledRma.Privacy` redactor; P6 now uses it. |
 | 2 | P8 Wizard hardening | Done (owner) | Owner's expiry, rate limits, headers, fake-gateway rule and operator key. |
@@ -34,7 +45,7 @@ are this branch's work, re-seated on the owner's code. plan.md section 5 carries
 | 5 | P7 Retrieval/triage eval | Done (owner) | Owner's `eval/retrieval-golden.json` and measurement history; our evaluation test and `eval.yml` were removed in favour of it. |
 | 6 | P9 Real payment gateway | Done (ours, merged); real payments wait on the owner's Stripe account (D5) | Fake gateway and its rule unchanged unless `Payments:Provider=stripe`. |
 | 6 | P10 Operator view | Done (ours, merged) | Review queue now also takes the owner's re-run policy decisions that send a return to a person. |
-| 6 | P11 Production pack | Done (ours, merged) | Startup checks narrowed to what the owner's Production rules do not already decide. |
+| 6 | P11 Production pack | Done (ours, merged) | Startup checks cover every host that opens the database, and the Web host also requires the operator identity provider. The image gate builds all three images, boots Web and RAG on the corpus, and starts the production web service from the example env; the compose file is resolved in CI. |
 
 ## Log
 
@@ -155,7 +166,7 @@ are this branch's work, re-seated on the owner's code. plan.md section 5 carries
   dropped capabilities and answers `/health`, `/health/ready` and the wizard; the same image in Production with
   development defaults refuses to start and lists the problems. Full suite 328 passed, 1 skipped.
 
-## Final state (2026-11-20)
+## Final state (updated 2026-11-21)
 
 All twelve workstreams are done and all six owner decisions are recorded as decided (plan.md section 4). Two
 parts wait only on the owner supplying accounts:
@@ -168,9 +179,14 @@ parts wait only on the owner supplying accounts:
 The identity provider (D2) and the embedding model (D4) are configuration only. The real-model evaluation
 workflow (`eval.yml`) runs once `RMA_EVAL_*` secrets and `RMA_EVAL_ENABLED` are set.
 
-Everything else runs locally on synthetic data. Last full run: `dotnet test` 328 passed, 1 skipped (the
-symlink test, which needs Windows Developer Mode and runs on Linux CI), 0 failed, with
-`RMA_REQUIRE_LIVE_DB=1` against the throwaway pgvector container. CI has not run yet: nothing has been pushed.
+Everything else runs locally on synthetic data, and the merged tree is green in CI. Every push to `main`
+since the merge has run and passed all three jobs; the most recent is run `44932712009` at `6b2ee20`
+(2026-11-21), after `44931366309` (`f1a7d16`), `44929693971` (`0907fab`), `44926917839` (`7129ad4`),
+`44923753946` (`6aba449`) and `44921464800` (`537e4db`). The last local run of `./scripts/verify-all.sh
+suite` at `6b2ee20` was **478 passed, 0 skipped, 0 failed** (437 s), with the EF model check clean and the
+audit clean for all nine projects. The last local run of `./scripts/verify-all.sh images` (at `42b5708`) was
+**16 ok, 0 fail**, including both corpus boots and the production compose web boot; the Dockerfile and
+smoke-environment changes since then ran in CI's `runtime-images` job on those pushes.
 
 Notes for the owner:
 - The next `docker compose up` recreates `aienabledrma-postgres` on the pgvector image (same PG 16, data kept).
@@ -225,3 +241,51 @@ Notes for the owner:
   removed afterwards); `verify-all.sh images`: all checks passed; the RAG image builds with the corpus and its
   manifest; the production compose validates.
 - A local backup of the pre-merge branch is kept as `backup/pre-merge-2026-11-20` (local only).
+
+### 2026-11-21 (hardening after the merge)
+
+All of the following is pushed to `origin/main`, and each commit has a green CI run.
+
+- **`7b3fe85` — the retrieval measurement names its corpus.** `RetrievalGoldenSetTests` now asserts the
+  latest measurement's `corpusFingerprint` and `reviewedCorpusHash` match the corpus being scored before any
+  score is compared. Mutation-checked: editing an article and changing only the manifest both fail it.
+- **`83d5021` — one Production database-password rule for every host.** `ProductionDatabaseCredentials`
+  (the known development/CI passwords and the two problem sentences) and `ProductionConfigurationGuard`
+  (the refusal) live in Domain, which the Web, MCP and RAG hosts already reference; the RAG host parses the
+  connection string with Npgsql directly, so the rule is shared without adding a Data/EF reference. The RAG
+  host applies it only when a database is configured, because the production compose runs the lexical-only
+  RAG host without one. README records the behaviour.
+- **`3532859` — the RAG image is booted, not just counted.** `boot_smoke` is parameterised by host, image,
+  entry point and container; the RAG host boots in Production on the shipped corpus (19 articles, 0 problems)
+  and the removed-article case must exit non-zero and name `REVIEWED.sha256`. `SMOKE_ASSEMBLY` was fixed so
+  the drift case runs the right entry point inside `sh -c`.
+- **`42b5708` — the production pack is started, not only resolved.** `prod_boot_smoke` starts the prod
+  compose `web` service from `deploy/prod.env.example` under its own project name (`rma-image-smoke-prod`),
+  waits for the host's own `19 article(s)` / `0 problem(s)` lines, checks it is still running, and tears the
+  stack down with `down -v --rmi local`.
+- **`537e4db` — every image restores in locked mode.** Both older Dockerfiles copy every referenced
+  project's `packages.lock.json` and restore with `--locked-mode`; `PublishLayoutTests` asserts the COPY list
+  covers each lock file for Web, MCP and Rag. Mutation-checked by deleting a lock-file `COPY` line.
+- **`6aba449` — the tool server refuses at registration.** The Production check moved from a hosted service
+  into `AddRmaMcpServices(configuration, environment)`, which both transports call, so an unsafe host cannot
+  be constructed and no transport can skip the check by never starting the host.
+- **`7129ad4` — the local suite no longer stalls at the publish tests.** The `dotnet publish` child left
+  MSBuild nodes (`nodeReuse:true`) holding its redirected stdout/stderr pipes, so `ReadToEndAsync` waited for
+  the nodes' fifteen-minute idle timeout; reproduced by the test host's pipe fds. The publish now disables node
+  reuse, the CLI MSBuild server and the shared compiler, and the whole wait has a ten-minute deadline.
+- **`0907fab` — the tool server's acceptance case covers Development.** The registration test refuses in
+  Production and accepts the same password in Development and Testing; making the check unconditional fails
+  the Development case.
+- **`f1a7d16` — the dev compose can serve the default embedding model.** `ollama` is a service behind the
+  `ollama` profile on `127.0.0.1:11434` (the default `Embeddings:BaseUrl`) with a kept volume, and the
+  one-time `nomic-embed-text` pull is in the compose file and the README. An unreachable embedding model is
+  now its own exception: the retriever logs a warning naming the model, that retrieval fell back to the
+  lexical index, and both ways to fix it. Mutation-checked (profile removed; warning made unreachable).
+- **`6b2ee20` — Production requires the operator identity provider.** The Web host passes
+  `checkOperatorSignIn: true`, so a deployment without `OperatorAuth:Authority`/`ClientId` refuses to start
+  instead of serving an `/Operator` sign-in that can never complete. The Production boot tests and the web
+  image smoke supply synthetic OIDC settings so they still reach the guard they are about; the new refusal
+  test fails when the flag is removed.
+- **Gate at `6b2ee20`:** `suite` 478 passed, 0 skipped, 0 failed (437 s), EF model check clean, audit clean
+  for all nine projects; CI's `build-and-test`, `auth-flows` and `runtime-images` jobs all passed, and the
+  production compose resolution step passed.
