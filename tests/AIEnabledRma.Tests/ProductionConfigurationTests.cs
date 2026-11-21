@@ -102,9 +102,26 @@ public sealed class ProductionConfigurationTests
     }
 
     /// <summary>
-    /// The same credentials in a Testing host are accepted: the rule is about the environment the
+    /// The same credentials in a Development host are accepted: the rule is about the environment the
     /// process runs in, not about the password on its own, and a rule that ignored the environment
-    /// would break every test host in this repository.
+    /// would refuse every developer's local run of the tool server.
+    /// </summary>
+    [Fact]
+    public void The_tool_server_accepts_a_development_password_in_development()
+    {
+        var builder = ToolServerBuilder("Development");
+
+        builder.Services.AddRmaMcpServices(builder.Configuration, builder.Environment);
+
+        // Registered, not merely unrefused: the host both transports build is still constructible.
+        using var host = builder.Build();
+
+        Assert.NotNull(host);
+    }
+
+    /// <summary>
+    /// Testing is not Production either, and the rule has to say so: an implementation that refused
+    /// everywhere except Development would take a test or staging deployment down at startup.
     /// </summary>
     [Fact]
     public void The_tool_server_accepts_a_development_password_in_testing()
@@ -113,7 +130,6 @@ public sealed class ProductionConfigurationTests
 
         builder.Services.AddRmaMcpServices(builder.Configuration, builder.Environment);
 
-        // Registered, not merely unrefused: the host both transports build is still constructible.
         using var host = builder.Build();
 
         Assert.NotNull(host);
