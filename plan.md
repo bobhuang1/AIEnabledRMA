@@ -32,7 +32,7 @@ decisions (D1–D6) are in section 4; this table covers the engineering choices 
 | The local gate runs CI's whole build-and-test job | The job is more than build and test: the EF model check and the audit fail in CI, and a local pass that skipped them was a pass CI would not give | `scripts/verify-all.sh`, `GateScriptTests` |
 | The Web host owns the corpus; the tool server does not | The tool server's tools read stored data, never `knowledge-base/`, and its startup check never ran | `PublishLayoutTests`, `scripts/verify-images.sh` |
 | A production host refuses a drifted corpus | An empty corpus answers every question as though the policy said nothing | `KnowledgeBaseStartupCheck`, `CorpusStartupBootTests` |
-| Images carry the commit they were built from | "Is this image from before or after the fix" had no answer from the image | both Dockerfiles, `verify-images.sh` |
+| Images carry the commit they were built from | "Is this image from before or after the fix" had no answer from the image | both Dockerfiles, `scripts/verify-images.sh` |
 | Every image is digest-pinned and gated | A tag is whatever was published last, and the RAG image — the host that reads the corpus most directly — was the one image no check looked inside | both older Dockerfiles, `src/AIEnabledRma.Rag/Dockerfile`, `scripts/verify-images.sh` |
 | The production pack is resolved in CI | A compose typo is otherwise invisible until a deployment | `.github/workflows/ci.yml`, `GateScriptTests` |
 | The SDK is pinned in `global.json` | The runner image ships a newer SDK, and the CLI prefers it: `setup-dotnet` installed 10.0.x and the build ran 11.0.100 | `global.json`, `CiWorkflowTests` |
