@@ -208,13 +208,33 @@ public sealed class PublishLayoutTests
     }
 
     /// <summary>
-    /// Publishes one project into <paramref name="output"/> and fails with the tool's own output.
+    /// The publish's output is read to EOF, so a child that outlives the publish and inherits its
+    /// redirected handles keeps that read open. MSBuild node reuse and the shared compiler are the
+    /// two that do that, and this pins the settings that keep the read bounded.
     /// </summary>
-    private static async Task PublishAsync(
-        string project,
-        string root,
-        string output,
-        CancellationToken cancellationToken)
+    [Fact]
+    public void A_publish_does_not_leave_a_child_holding_its_output_pipe()
+    {
+        var publish = PublishStartInfo("AIEnabledRma.Web", root: ".", output: "out");
+
+        Assert.True(publish.RedirectStandardOutput);
+        Assert.True(publish.RedirectStandardError);
+        Assert.Equal("1", publish.Environment["MSBUILDDISABLENODEREUSE"]);
+        Assert.Equal("0", publish.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"]);
+        Assert.Contains("-p:UseSharedCompilation=false", publish.ArgumentList);
+    }
+
+    /// <summary>
+    /// A publish that leaves an MSBuild node behind leaves its output pipes open as well: the node
+    /// inherits the redirected handles and outlives the process whose output is being read. The
+    /// parent exits, the node does not, and the read below waits for an EOF that arrives only when
+    /// the node reaches its idle timeout. That is a silent quarter of an hour on a workstation with
+    /// the test host alive and idle, and it is the local-only shape of the stall: the same suite on
+    /// a fresh CI runner passes, which made it look like a flake rather than a leaked child. Reuse
+    /// is therefore off, the shared compiler server (the same kind of child) is off for this build,
+    /// and the CLI is told not to start a server that would survive the publish for the same reason.
+    /// </summary>
+    private static ProcessStartInfo PublishStartInfo(string project, string root, string output)
     {
         var publish = new ProcessStartInfo("dotnet")
         {
@@ -235,22 +255,63 @@ public sealed class PublishLayoutTests
             "-c", "Release",
             "-o", output,
             "--no-restore",
+            "-p:UseSharedCompilation=false",
         })
         {
             publish.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(publish)
+        publish.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+        publish.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
+
+        return publish;
+    }
+
+    /// <summary>
+    /// A cold Release build of every referenced project fits comfortably; a publish that has not
+    /// finished by then is failing the gate anyway, and it must fail with a message rather than
+    /// hold the run open until a leaked child decides to exit.
+    /// </summary>
+    private static readonly TimeSpan PublishTimeout = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Publishes one project into <paramref name="output"/> and fails with the tool's own output.
+    /// </summary>
+    private static async Task PublishAsync(
+        string project,
+        string root,
+        string output,
+        CancellationToken cancellationToken)
+    {
+        using var process = Process.Start(PublishStartInfo(project, root, output))
             ?? throw new InvalidOperationException("could not start dotnet publish");
 
         // Both streams read concurrently: a build that fills one pipe buffer while the test waits on
         // the other deadlocks instead of failing.
-        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdout = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
 
-        await process.WaitForExitAsync(cancellationToken);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(PublishTimeout);
 
-        var log = await stdout + await stderr;
+        string log;
+        try
+        {
+            await process.WaitForExitAsync(deadline.Token);
+            log = await stdout.WaitAsync(deadline.Token) + await stderr.WaitAsync(deadline.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            throw new InvalidOperationException(
+                $"dotnet publish {project} did not finish within {PublishTimeout.TotalMinutes:0} minutes. "
+                + "A child that outlives the publish keeps the redirected output pipe open, so the log "
+                + "never reaches EOF; node reuse and the shared compiler are disabled to prevent that.");
+        }
 
         Assert.True(process.ExitCode == 0, $"dotnet publish {project} failed:{Environment.NewLine}{log}");
     }
