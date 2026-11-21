@@ -162,6 +162,52 @@ public sealed class PublishLayoutTests
     }
 
     /// <summary>
+    /// A locked restore reads every project's lock file from the COPY list, so a missing one fails
+    /// the image build; without `--locked-mode` the build resolves whatever the feed offers, which is
+    /// a set of packages the suite never tested.
+    /// </summary>
+    /// <remarks>
+    /// The RAG image did this from the start and the other two did not, which is the kind of
+    /// difference a README sentence hides: all three images claimed to build the same committed
+    /// graph, and only one enforced it. The project itself is included because its own lock file is
+    /// part of the restore, not only its references'.
+    /// </remarks>
+    [Theory]
+    [InlineData("AIEnabledRma.Mcp")]
+    [InlineData("AIEnabledRma.Web")]
+    [InlineData("AIEnabledRma.Rag")]
+    public void The_dockerfile_restores_in_locked_mode_from_the_committed_lock_files(string project)
+    {
+        var root = RepositoryRoot();
+        var dockerfile = File.ReadAllText(Path.Combine(root, "src", project, "Dockerfile"));
+
+        var copied = dockerfile
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.StartsWith("COPY ", StringComparison.Ordinal))
+            .SelectMany(line => line.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var projects = ReferencedProjects(Path.Combine(root, "src", project, project + ".csproj"))
+            .Prepend(project);
+
+        foreach (var dependency in projects)
+        {
+            var lockFile = $"src/{dependency}/packages.lock.json";
+
+            Assert.True(
+                copied.Contains(lockFile),
+                $"{project}'s Dockerfile restores in locked mode without {lockFile}, so `docker build` "
+                + "fails before the publish step runs. Copy the lock file beside the manifest.");
+        }
+
+        Assert.Contains(
+            $"dotnet restore src/{project}/{project}.csproj --locked-mode",
+            dockerfile,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Publishes one project into <paramref name="output"/> and fails with the tool's own output.
     /// </summary>
     private static async Task PublishAsync(

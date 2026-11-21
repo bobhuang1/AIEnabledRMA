@@ -7,16 +7,18 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:bef136a371963aaa46ec97882845ef6f54dec15728bb4b128b1c2a400ffbc9b4 AS build
 WORKDIR /src
 
-# Restore against the manifests alone first, so a source-only change does not re-resolve.
+# Restore against the manifests and their lock files first, so a source-only change does not
+# re-resolve. --locked-mode makes a dependency change that was not committed fail this build: without
+# it the image resolved whatever the feed offered, which is a set of packages the suite never tested.
 COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY AIEnabledRma.slnx ./
-COPY src/AIEnabledRma.Domain/AIEnabledRma.Domain.csproj src/AIEnabledRma.Domain/
-COPY src/AIEnabledRma.Data/AIEnabledRma.Data.csproj src/AIEnabledRma.Data/
-COPY src/AIEnabledRma.Ai/AIEnabledRma.Ai.csproj src/AIEnabledRma.Ai/
-COPY src/AIEnabledRma.Privacy/AIEnabledRma.Privacy.csproj src/AIEnabledRma.Privacy/
-COPY src/AIEnabledRma.Rag/AIEnabledRma.Rag.csproj src/AIEnabledRma.Rag/
-COPY src/AIEnabledRma.Web/AIEnabledRma.Web.csproj src/AIEnabledRma.Web/
-RUN dotnet restore src/AIEnabledRma.Web/AIEnabledRma.Web.csproj
+COPY src/AIEnabledRma.Domain/AIEnabledRma.Domain.csproj src/AIEnabledRma.Domain/packages.lock.json src/AIEnabledRma.Domain/
+COPY src/AIEnabledRma.Data/AIEnabledRma.Data.csproj src/AIEnabledRma.Data/packages.lock.json src/AIEnabledRma.Data/
+COPY src/AIEnabledRma.Ai/AIEnabledRma.Ai.csproj src/AIEnabledRma.Ai/packages.lock.json src/AIEnabledRma.Ai/
+COPY src/AIEnabledRma.Privacy/AIEnabledRma.Privacy.csproj src/AIEnabledRma.Privacy/packages.lock.json src/AIEnabledRma.Privacy/
+COPY src/AIEnabledRma.Rag/AIEnabledRma.Rag.csproj src/AIEnabledRma.Rag/packages.lock.json src/AIEnabledRma.Rag/
+COPY src/AIEnabledRma.Web/AIEnabledRma.Web.csproj src/AIEnabledRma.Web/packages.lock.json src/AIEnabledRma.Web/
+RUN dotnet restore src/AIEnabledRma.Web/AIEnabledRma.Web.csproj --locked-mode
 
 COPY . .
 RUN dotnet publish src/AIEnabledRma.Web -c Release -o /app --no-restore

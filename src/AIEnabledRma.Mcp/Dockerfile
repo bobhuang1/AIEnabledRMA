@@ -10,14 +10,17 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:bef136a371963aaa46ec97882845ef6f54dec15728bb4b128b1c2a400ffbc9b4 AS build
 WORKDIR /src
 
+# The manifests and their lock files, restored in locked mode: an uncommitted dependency change
+# fails this build instead of resolving packages the suite never tested (the RAG image already did
+# this; these two did not).
 COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY AIEnabledRma.slnx ./
-COPY src/AIEnabledRma.Domain/AIEnabledRma.Domain.csproj src/AIEnabledRma.Domain/
-COPY src/AIEnabledRma.Data/AIEnabledRma.Data.csproj src/AIEnabledRma.Data/
-COPY src/AIEnabledRma.Ai/AIEnabledRma.Ai.csproj src/AIEnabledRma.Ai/
-COPY src/AIEnabledRma.Rag/AIEnabledRma.Rag.csproj src/AIEnabledRma.Rag/
-COPY src/AIEnabledRma.Mcp/AIEnabledRma.Mcp.csproj src/AIEnabledRma.Mcp/
-RUN dotnet restore src/AIEnabledRma.Mcp/AIEnabledRma.Mcp.csproj
+COPY src/AIEnabledRma.Domain/AIEnabledRma.Domain.csproj src/AIEnabledRma.Domain/packages.lock.json src/AIEnabledRma.Domain/
+COPY src/AIEnabledRma.Data/AIEnabledRma.Data.csproj src/AIEnabledRma.Data/packages.lock.json src/AIEnabledRma.Data/
+COPY src/AIEnabledRma.Ai/AIEnabledRma.Ai.csproj src/AIEnabledRma.Ai/packages.lock.json src/AIEnabledRma.Ai/
+COPY src/AIEnabledRma.Rag/AIEnabledRma.Rag.csproj src/AIEnabledRma.Rag/packages.lock.json src/AIEnabledRma.Rag/
+COPY src/AIEnabledRma.Mcp/AIEnabledRma.Mcp.csproj src/AIEnabledRma.Mcp/packages.lock.json src/AIEnabledRma.Mcp/
+RUN dotnet restore src/AIEnabledRma.Mcp/AIEnabledRma.Mcp.csproj --locked-mode
 
 COPY . .
 RUN dotnet publish src/AIEnabledRma.Mcp -c Release -o /app --no-restore
