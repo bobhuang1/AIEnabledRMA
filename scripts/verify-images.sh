@@ -21,6 +21,10 @@
 # that label is compared with this checkout. After a fix had been pushed, "is this image from before or
 # after it" was a question this repository could not answer from the image.
 #
+# The last check starts the production compose's own web service from deploy/prod.env.example. That
+# file was otherwise only resolved, and a stack that parses but does not start is the failure a
+# deployment finds first.
+#
 # Usage:
 #   scripts/verify-images.sh
 #   KEEP_IMAGES=1 scripts/verify-images.sh     # leave the images behind after a passing run
@@ -190,7 +194,22 @@ smoke_cleanup() {
     docker network rm "$SMOKE_NETWORK" >/dev/null 2>&1 || true
 }
 
-trap smoke_cleanup EXIT
+# The production pack is resolved by the CI job on every run, and resolving it proves the file
+# parses, not that a service built from it starts. This is the pack's own web service, started from
+# the example env, on a project name of its own so the check can never adopt, overwrite or tear down
+# a real stack on the machine, and so its database volume cannot survive between runs. Only web is
+# started: the proxy would take ports 80 and 443, and nothing asserted here is behind it.
+PROD_PROJECT=rma-image-smoke-prod
+
+prod_compose() {
+    docker compose -p "$PROD_PROJECT" -f docker-compose.prod.yml --env-file deploy/prod.env.example "$@"
+}
+
+prod_cleanup() {
+    prod_compose down -v --rmi local --remove-orphans >/dev/null 2>&1 || true
+}
+
+trap 'smoke_cleanup; prod_cleanup' EXIT
 
 # Both hosts that read the corpus, parameterised by the entry point that reads it. The RAG host is
 # the other one: it loads the corpus from its content root and, outside Development, refuses a
@@ -296,9 +315,84 @@ check_image "MCP" "src/AIEnabledRma.Mcp/Dockerfile" "$MCP_IMAGE" empty
 check_image "Web" "src/AIEnabledRma.Web/Dockerfile" "$WEB_IMAGE" corpus
 check_image "RAG" "src/AIEnabledRma.Rag/Dockerfile" "$RAG_IMAGE" corpus
 
+# The deployment's own composition, booted: this is the check that catches a required value missing
+# from the example env or a service the current host refuses before anyone runs `up` against a real
+# domain. It builds the web image from the same Dockerfile the build above checked, because the
+# service definition is what is under test here, not the image contents twice.
+prod_boot_smoke() {
+    local log container waited=0
+
+    prod_cleanup
+
+    log=$(mktemp)
+
+    if ! prod_compose up -d --build web >"$log" 2>&1; then
+        fail "prod compose web boots" "docker compose up failed; last lines of its output:"
+        tail -12 "$log" | sed 's/^/          /'
+        rm -f "$log"
+        return
+    fi
+
+    rm -f "$log"
+
+    container=$(prod_compose ps -q web)
+
+    # A service that started and exited is still the thing to read the log from; a failed start is
+    # otherwise reported as "no container", which is not a diagnosis.
+    if [ -z "$container" ]; then
+        container=$(prod_compose ps -a -q web)
+    fi
+
+    if [ -z "$container" ]; then
+        fail "prod compose web boots" "compose reported success but started no web container"
+        prod_cleanup
+        return
+    fi
+
+    while [ "$waited" -lt 60 ]; do
+        log=$(docker logs "$container" 2>&1 || true)
+
+        if printf '%s' "$log" | grep -Fq "$expected_articles article(s)"                 && printf '%s' "$log" | grep -Fq "0 problem(s)"; then
+            pass "prod compose web boots with $expected_articles article(s) and 0 problem(s) from the example env"
+            break
+        fi
+
+        if [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo false)" != true ]; then
+            fail "prod compose web boots"                 "the service exited before reporting $expected_articles article(s) and 0 problem(s); last lines of its log:"
+            printf '%s\n' "$log" | tail -12 | sed 's/^/          /'
+            prod_cleanup
+            return
+        fi
+
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    if [ "$waited" -ge 60 ]; then
+        fail "prod compose web boots"             "no '$expected_articles article(s)' / '0 problem(s)' line within 60s; last lines of its log:"
+        printf '%s\n' "$log" | tail -12 | sed 's/^/          /'
+        prod_cleanup
+        return
+    fi
+
+    # A container that logs the line and exits a second later has not booted. The pause is short
+    # because the assertion is about the composition starting, not about serving traffic.
+    sleep 3
+
+    if [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo false)" != true ]; then
+        fail "prod compose web boots" "the service exited within 3s of reporting its corpus; last lines:"
+        docker logs "$container" 2>&1 | tail -12 | sed 's/^/          /'
+        prod_cleanup
+        return
+    fi
+
+    prod_cleanup
+}
+
 if [ "$failures" -eq 0 ]; then
     boot_smoke "Web" "$WEB_IMAGE" "AIEnabledRma.Web.dll" "$SMOKE_WEB"
     boot_smoke "RAG" "$RAG_IMAGE" "AIEnabledRma.Rag.dll" "$SMOKE_RAG"
+    prod_boot_smoke
 fi
 
 if [ "${KEEP_IMAGES:-0}" != 1 ] && [ "$failures" -eq 0 ]; then

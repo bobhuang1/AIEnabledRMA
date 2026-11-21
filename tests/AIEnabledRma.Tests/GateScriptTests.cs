@@ -172,10 +172,11 @@ public sealed class GateScriptTests
     /// <summary>
     /// The production pack has to resolve. It is a compose file whose required values are all
     /// placeholders in the example env; a renamed variable or a broken anchor turns a deployment into
-    /// a parse error, and nothing else in this repository reads that file.
+    /// a parse error, and nothing else in this repository reads that file. Resolving and starting are
+    /// different claims, so the second is asserted below.
     /// </summary>
     [Fact]
-    public void Ci_resolves_the_production_pack_without_starting_it()
+    public void Ci_resolves_the_production_pack_and_the_image_gate_starts_it()
     {
         var workflow = File.ReadAllText(
             Path.Combine(RepositoryRoot(), ".github", "workflows", "ci.yml"));
@@ -184,6 +185,34 @@ public sealed class GateScriptTests
             "docker compose -f docker-compose.prod.yml --env-file deploy/prod.env.example config",
             workflow,
             StringComparison.Ordinal);
+
+        // The boot lives in the image gate, which this job runs: a resolve step that nobody follows
+        // with a start is the gap this pair closes.
+        Assert.Contains("./scripts/verify-images.sh", workflow, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The production web service is brought up from the pack and the example env, not from a hand-
+    /// built container with a throwaway database. The service definition is what a deployment runs,
+    /// so a required value the example forgot or an environment the host now refuses has to fail
+    /// here, before anyone points a domain at it.
+    /// </summary>
+    [Fact]
+    public void The_image_gate_starts_the_production_web_service_from_the_example_env()
+    {
+        var script = Script("verify-images.sh");
+
+        Assert.Contains("docker-compose.prod.yml", script, StringComparison.Ordinal);
+        Assert.Contains("--env-file deploy/prod.env.example", script, StringComparison.Ordinal);
+        Assert.Contains("up -d --build web", script, StringComparison.Ordinal);
+        Assert.Contains("ps -q web", script, StringComparison.Ordinal);
+        Assert.Contains("prod_boot_smoke", script, StringComparison.Ordinal);
+
+        // Its own project name and a down that removes the volumes: the check must not adopt a real
+        // stack on the machine, and a database left between runs would make the next boot quieter
+        // than a deployment's first one.
+        Assert.Contains("PROD_PROJECT=rma-image-smoke-prod", script, StringComparison.Ordinal);
+        Assert.Contains("down -v --rmi local", script, StringComparison.Ordinal);
     }
 
     [Fact]

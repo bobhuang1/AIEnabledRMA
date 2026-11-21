@@ -175,7 +175,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Check what each runtime image carries, and boot the web host on its corpus
+      - name: Check what each runtime image carries, boot both corpus hosts, and start the production web service
         # The tool server's image is built by auth-flows as well, on another machine, so the layers
         # cannot be handed over — but the buildx cache keyed on the image name means a rerun of either
         # job reuses what the other already compiled, and a Dockerfile change invalidates only its
@@ -184,8 +184,10 @@ jobs:
           RMA_IMAGE_CACHE: "1"
         run: ./scripts/verify-images.sh
 
-      # The production pack is a compose file, so a typo in it stays invisible until a deployment.
-      # This resolves it — interpolating every required value from the example env file — without
-      # starting a container.
+      # The step above starts the pack's web service from the example env; this is the cheaper half,
+      # and it is kept separate so a file that does not parse fails by itself rather than inside a
+      # build-and-boot log. The production pack is a compose file, so a typo in it stays invisible
+      # until a deployment; this resolves it — interpolating every required value from the example
+      # env file — without starting a container.
       - name: The production pack resolves
         run: docker compose -f docker-compose.prod.yml --env-file deploy/prod.env.example config --quiet

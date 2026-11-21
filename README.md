@@ -574,6 +574,9 @@ required value is missing.
   web and tool-server images restore without them, so their package resolution is not lock-checked at build time.
 - App containers run as non-root with a read-only root filesystem, `no-new-privileges` and no capabilities.
 - Caddy routes web traffic only while `/health/ready` (database reachable) answers.
+- `scripts/verify-images.sh` starts this file's web service from `deploy/prod.env.example` (under its own
+  project name, then removes it), so a value the example forgot, or a service the current host refuses, fails
+  the gate instead of a deployment.
 - In Production every host refuses a development database password (`ProductionConfiguration`). The tool
   server applies that rule from the services its stdio and HTTP transports share, and the RAG host applies it
   whenever a database is configured, so a lexical-only RAG host still starts. The web host additionally

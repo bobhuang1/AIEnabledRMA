@@ -127,7 +127,7 @@ auth() {
 }
 
 images() {
-    step "images: build both, check what each host reads and the commit label"
+    step "images: build all three, boot both corpus hosts, start the production web service"
     ./scripts/verify-images.sh
 }
 
