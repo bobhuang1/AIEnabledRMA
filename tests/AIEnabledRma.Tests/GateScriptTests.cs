@@ -104,14 +104,26 @@ public sealed class GateScriptTests
     }
 
     [Fact]
-    public void The_image_gate_boots_the_web_host_on_its_corpus()
+    public void The_image_gate_boots_both_corpus_hosts_on_their_corpus()
     {
         var script = Script("verify-images.sh");
 
-        // Counting files proves the COPY list, not the load. The gate starts the web image through its
-        // own entrypoint in Production — the environment where a drifted corpus is a startup failure —
-        // and reads the count the host logs.
-        Assert.Contains("boot_smoke \"$WEB_IMAGE\"", script, StringComparison.Ordinal);
+        // Counting files proves the COPY list, not the load. The gate starts each image that reads
+        // the corpus through its own entrypoint in Production — the environment where a drifted
+        // corpus is a startup failure — and reads the count the host logs. The RAG host is the
+        // second reader: leaving it out let its corpus be present and unusable with nothing
+        // noticing, which is the state the image file checks cannot see.
+        Assert.Contains("boot_smoke \"Web\" \"$WEB_IMAGE\"", script, StringComparison.Ordinal);
+        Assert.Contains("boot_smoke \"RAG\" \"$RAG_IMAGE\"", script, StringComparison.Ordinal);
+        Assert.Contains("AIEnabledRma.Web.dll", script, StringComparison.Ordinal);
+        Assert.Contains("AIEnabledRma.Rag.dll", script, StringComparison.Ordinal);
+
+        // The entry point reaches the container as an environment variable, because the drift case
+        // runs inside a single-quoted `sh -c`: a `$assembly` there expands to nothing, and the host
+        // runs `dotnet` with no argument — which exits non-zero, so the assertion below passes for
+        // the wrong reason while never loading a corpus at all.
+        Assert.Contains("-e \"SMOKE_ASSEMBLY=$assembly\"", script, StringComparison.Ordinal);
+        Assert.Contains("exec dotnet \"$SMOKE_ASSEMBLY\"", script, StringComparison.Ordinal);
         Assert.Contains("ASPNETCORE_ENVIRONMENT=Production", script, StringComparison.Ordinal);
         Assert.Contains("\"$expected_articles article(s)\"", script, StringComparison.Ordinal);
         Assert.Contains("0 problem(s)", script, StringComparison.Ordinal);
