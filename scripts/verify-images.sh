@@ -187,6 +187,11 @@ smoke_environment=(
     -e "ConnectionStrings__Rma=Host=$SMOKE_PG;Port=5432;Database=rmadev;Username=rmauser;Password=$SMOKE_PASSWORD"
     -e Rag__Admin__ApiKey=image-smoke-operator-key
     -e Payments__Fake__AllowInProduction=true
+    # The web image boots in Production, where the host refuses to start without the operator
+    # identity provider; the RAG image ignores these. Nothing here challenges it, so the values
+    # only have to be an https URL and a client id.
+    -e OperatorAuth__Authority=https://idp.example.com/realms/rma
+    -e OperatorAuth__ClientId=rma-operator
 )
 
 smoke_cleanup() {

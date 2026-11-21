@@ -125,6 +125,12 @@ public sealed class GateScriptTests
         Assert.Contains("-e \"SMOKE_ASSEMBLY=$assembly\"", script, StringComparison.Ordinal);
         Assert.Contains("exec dotnet \"$SMOKE_ASSEMBLY\"", script, StringComparison.Ordinal);
         Assert.Contains("ASPNETCORE_ENVIRONMENT=Production", script, StringComparison.Ordinal);
+
+        // The web image boots in Production, where an operator identity provider is required. A
+        // smoke environment without it would exercise a host that cannot start, and the count the
+        // gate reads would never appear.
+        Assert.Contains("-e OperatorAuth__Authority=", script, StringComparison.Ordinal);
+        Assert.Contains("-e OperatorAuth__ClientId=", script, StringComparison.Ordinal);
         Assert.Contains("\"$expected_articles article(s)\"", script, StringComparison.Ordinal);
         Assert.Contains("0 problem(s)", script, StringComparison.Ordinal);
 

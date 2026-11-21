@@ -26,12 +26,15 @@ public sealed class CorpusStartupBootTests
         {
             builder.UseEnvironment("Production");
 
-            // Both are unrelated Production guards that would fail the boot first, which would make
-            // the assertion below pass for the wrong reason.
+            // Unrelated Production guards that would fail the boot first, which would make the
+            // assertion below pass for the wrong reason: the operator key, the fake gateway, and the
+            // operator identity provider the host now requires in Production.
             builder.UseSetting(RagAdminGate.ApiKeyConfigurationKey, "production-operator-key");
             builder.UseSetting(
                 $"{FakePaymentGatewayOptions.SectionName}:{nameof(FakePaymentGatewayOptions.AllowInProduction)}",
                 "true");
+            builder.UseSetting("OperatorAuth:Authority", "https://idp.example.com/realms/rma");
+            builder.UseSetting("OperatorAuth:ClientId", "rma-operator");
 
             builder.UseSetting(
                 $"{RagOptions.SectionName}:{nameof(RagOptions.KnowledgeBasePath)}",

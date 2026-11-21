@@ -19,11 +19,20 @@ namespace AIEnabledRma.Tests;
 /// </remarks>
 public sealed class WebHostStartupTests
 {
-    private sealed class HostFactory(bool production, string? adminKey) : WebApplicationFactory<global::WebAppAnchor>
+    private sealed class HostFactory(bool production, string? adminKey, bool operatorSignIn = true)
+        : WebApplicationFactory<global::WebAppAnchor>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment(production ? "Production" : "Testing");
+
+            // Production requires an operator identity provider; the host would refuse to boot
+            // before reaching the guard each test is about. One test below omits these on purpose.
+            if (operatorSignIn)
+            {
+                builder.UseSetting("OperatorAuth:Authority", "https://idp.example.com/realms/rma");
+                builder.UseSetting("OperatorAuth:ClientId", "rma-operator");
+            }
 
             // The bundled accept-everything gateway refuses to register outside Development, and
             // the host registers it whether or not a test exercises it. Without this the boot would
@@ -37,6 +46,26 @@ public sealed class WebHostStartupTests
                 builder.UseSetting(RagAdminGate.ApiKeyConfigurationKey, adminKey);
             }
         }
+    }
+
+    /// <summary>
+    /// The operator area is OpenID Connect only in Production: the dev sign-in refuses every other
+    /// environment, so a host without Authority and ClientId has no way to sign an operator in. It
+    /// serves a sign-in page that cannot complete, which is worse than not starting — nothing in the
+    /// response says the deployment is unusable. The refusal names both settings.
+    /// </summary>
+    [Fact]
+    public void A_production_host_refuses_to_start_without_operator_sign_in()
+    {
+        using var factory = new HostFactory(
+            production: true,
+            adminKey: "production-operator-key",
+            operatorSignIn: false);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
+
+        Assert.Contains("OperatorAuth:Authority", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("OperatorAuth:ClientId", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

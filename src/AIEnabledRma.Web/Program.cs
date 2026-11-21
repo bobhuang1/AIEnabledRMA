@@ -133,11 +133,14 @@ if (builder.Environment.IsDevelopment()
 }
 
 // Production refuses a development database password and plain-http model or embedding
-// endpoints (P11). The fake gateway and the operator key keep the owner's own startup rules, and
-// an operator area without OpenID Connect stays closed (its dev sign-in refuses Production).
+// endpoints, and it refuses to start without the operator identity provider (P11). The last one is
+// required rather than optional: the dev sign-in cannot run outside Development, so a deployment
+// without OperatorAuth:Authority and ClientId serves an /Operator area whose sign-in can never
+// complete — a security surface that looks deployed and answers nobody. The fake gateway and the
+// operator key keep the owner's own startup rules.
 if (builder.Environment.IsProduction())
 {
-    ProductionConfiguration.EnsureSafe(builder.Configuration);
+    ProductionConfiguration.EnsureSafe(builder.Configuration, checkOperatorSignIn: true);
 }
 
 var app = builder.Build();

@@ -417,7 +417,9 @@ dotnet run --project tools\DbAdmin -- kb-cases --file cases.json --publish --rev
 Sign-in is OpenID Connect (`OperatorAuth:Authority`, `ClientId`, `ClientSecret` from the environment) and the
 token must carry the `rma:operator` role or scope. For local development only, set
 `OperatorAuth:DevSignIn=true` in `appsettings.Development.json` for a one-click `dev-operator` sign-in; the app
-refuses to start with it in any other environment.
+refuses to start with it in any other environment. In Production the host also refuses to start when
+`OperatorAuth:Authority` and `ClientId` are missing: the dev sign-in is unavailable there, so `/Operator` would
+otherwise be a sign-in page that can never complete.
 
 ## Why the AI is advisory
 
