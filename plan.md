@@ -596,7 +596,7 @@ bullets stay as requirements.
   reviewed hash held still is an article edited without a re-review, which the loader then refuses, so the served
   corpus changed even though no reviewer acted; both moving is an edit that was re-reviewed. With one hash alone
   neither case can be told from the retriever behaving differently, which was the gap this closes. The check is in
-  the acceptance test beside the fingerprint check, and `The_reviewed_corpus_hash_ignores_order_and_line_endings`
+  `The_latest_measurement_names_the_corpus_it_was_taken_on` before anything is scored, and again in the acceptance test beside the retriever; `The_reviewed_corpus_hash_ignores_order_and_line_endings`
   pins the normalisation with a manifest rewritten in reverse order and CRLF.
 - **The floor-moving rules are in the data**, in `floorRules`, so a change to them is a reviewable diff beside the
   numbers: never lower a floor in the same commit that changes scoring code (land and measure the change, append

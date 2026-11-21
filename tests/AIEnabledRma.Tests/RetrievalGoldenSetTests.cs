@@ -354,6 +354,67 @@ public sealed class RetrievalGoldenSetTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// The recorded scores belong to one corpus, and this pins it before anything is scored: an
+    /// article edited without re-running retrieval fails here, by hash, instead of quietly comparing
+    /// today's retriever against yesterday's articles.
+    /// </summary>
+    /// <remarks>
+    /// The acceptance test above makes the same comparison where it belongs — beside the retriever —
+    /// but only after the corpus loads and every question is asked, so a changed article can surface
+    /// as a load error or a recall miss first and leave the reader looking for a retrieval regression
+    /// that is not there. This test reads the directory hashes and stops: no index, no questions, no
+    /// database. Only the latest entry is held to today's bytes, because <c>measurements</c> is
+    /// append-only and older entries were taken on corpora that no longer exist; holding those would
+    /// make the corpus impossible to edit at all.
+    /// </remarks>
+    [Fact]
+    public void The_latest_measurement_names_the_corpus_it_was_taken_on()
+    {
+        var root = RepositoryRoot();
+        var golden = RetrievalGoldenSet.Load(Path.Combine(root, "eval", "retrieval-golden.json"));
+
+        Assert.True(
+            golden.Measurements.Count > 0,
+            "eval/retrieval-golden.json has no measurements, so there is no score to tie to a corpus.");
+
+        var latest = golden.Latest!;
+        var knowledgeBase = Path.Combine(root, "knowledge-base");
+
+        // Both hashes, because they answer different questions: the fingerprint covers the bytes on
+        // disk, the reviewed hash covers the bytes a reviewer signed off. An article edited without
+        // a re-review moves only the first; a reviewed edit moves both, and the pair is what tells a
+        // stale number apart from a regression.
+        var corpus = RetrievalGoldenSet.CorpusFingerprint(knowledgeBase);
+        var reviewed = RetrievalGoldenSet.ReviewedCorpusHash(knowledgeBase);
+
+        Assert.True(
+            latest.CorpusFingerprint is not null,
+            $"the latest measurement ({latest.MeasuredOn}) records no corpusFingerprint, so a number "
+            + "that moved cannot be attributed to the corpus or to the retriever. Append an entry that "
+            + $"records it: {corpus}.");
+
+        Assert.True(
+            string.Equals(latest.CorpusFingerprint, corpus, StringComparison.Ordinal),
+            $"the corpus is {corpus} but the latest measurement was taken on "
+            + $"{latest.CorpusFingerprint} ({latest.MeasuredOn}). An article was added, removed or "
+            + "edited since that run, so its scores no longer describe this corpus: append a new "
+            + "measurement taken on this corpus instead of editing the old one.");
+
+        Assert.True(
+            latest.ReviewedCorpusHash is not null,
+            $"the latest measurement ({latest.MeasuredOn}) records no reviewedCorpusHash, so a score "
+            + "change cannot be told apart from a re-review. Append an entry that records it: "
+            + $"{reviewed}.");
+
+        Assert.True(
+            string.Equals(latest.ReviewedCorpusHash, reviewed, StringComparison.Ordinal),
+            $"the reviewed corpus is {reviewed} (REVIEWED.sha256) but the latest measurement was "
+            + $"taken on {latest.ReviewedCorpusHash} ({latest.MeasuredOn}). The signed-off bytes moved, "
+            + "so the recorded scores were measured on a corpus this checkout no longer serves: append "
+            + "a new measurement rather than editing the old one.");
+    }
+
+    /// <summary>
     /// The ablation behind the synonym map: the registered retriever is the expanding one and clears
     /// the floor, and turning the map off measures exactly what the lexical index scored before it
     /// existed. The difference between the two is the map's contribution, measured.
