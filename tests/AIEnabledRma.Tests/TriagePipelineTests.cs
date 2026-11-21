@@ -1,6 +1,7 @@
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Rules;
 using AIEnabledRma.Domain.Triage;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -14,6 +15,18 @@ namespace AIEnabledRma.Tests;
 /// </summary>
 public sealed class TriagePipelineTests
 {
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Entries.Add(formatter(state, exception));
+    }
+
     private const string RealArticle = "kb-0001";
 
     private static TriageRequest Request(
@@ -51,7 +64,8 @@ public sealed class TriagePipelineTests
     private static (TriagePipeline Pipeline, StubChatModel Model) Build(
         string? modelOutput = null,
         IReadOnlyList<RetrievedArticle>? articles = null,
-        Exception? throwFromModel = null)
+        Exception? throwFromModel = null,
+        ILogger<TriagePipeline>? logger = null)
     {
         var model = throwFromModel is not null
             ? new StubChatModel(throwFromModel)
@@ -75,7 +89,7 @@ public sealed class TriagePipelineTests
                 HumanReviewConfidenceThreshold = 0.45,
             }),
             Microsoft.Extensions.Options.Options.Create(new TriagePipelineOptions()),
-            NullLogger<TriagePipeline>.Instance);
+            logger ?? NullLogger<TriagePipeline>.Instance);
 
         return (pipeline, model);
     }
@@ -97,6 +111,26 @@ public sealed class TriagePipelineTests
           "article_ids": [{{string.Join(",", (articleIds ?? [RealArticle]).Select(a => $"\"{a}\""))}}]
         }
         """;
+
+    /// <summary>
+    /// Which retriever answered is the first question when a triage cites nothing, and the host
+    /// registers one of three: the lexical index, the synonym-expanding wrapper, or the hybrid store
+    /// that falls back to the lexical one when its database is unreachable. The retriever's own log
+    /// only speaks when it falls back, so without this line a lexical-only answer and a vector-backed
+    /// one are indistinguishable from the pipeline's log.
+    /// </summary>
+    [Fact]
+    public async Task The_retriever_that_answered_is_named_in_the_log()
+    {
+        var logger = new RecordingLogger<TriagePipeline>();
+        var (pipeline, _) = Build(logger: logger);
+
+        await pipeline.TriageAsync(Request(), TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            logger.Entries,
+            entry => entry.Contains("Retrieval answered 1 article(s) through FakeRetriever.", StringComparison.Ordinal));
+    }
 
     // ---------- scope guard runs before the model ----------
 

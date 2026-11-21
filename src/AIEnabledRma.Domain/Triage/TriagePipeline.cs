@@ -236,7 +236,19 @@ public sealed partial class TriagePipeline(
 
         try
         {
-            return await retriever.RetrieveAsync(query, cancellationToken);
+            var result = await retriever.RetrieveAsync(query, cancellationToken);
+
+            // Which retriever answered is the first question when retrieval looks wrong: the host
+            // registers a lexical index, a synonym-expanding wrapper or the hybrid store, and the
+            // hybrid falls back to the lexical one when its store is unreachable. Without this line
+            // a triage that cited nothing looks the same whichever of those happened, and the
+            // fallback is only visible from inside the retriever's own log.
+            logger.LogInformation(
+                "Retrieval answered {ArticleCount} article(s) through {Retriever}.",
+                result.Articles.Count,
+                retriever.GetType().Name);
+
+            return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
