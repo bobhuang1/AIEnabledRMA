@@ -12,19 +12,6 @@
     <PackageReference Include="Npgsql" />
   </ItemGroup>
 
-  <ItemGroup>
-    <None Include="..\..\knowledge-base\**\*.md"
-          Link="knowledge-base\%(RecursiveDir)%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest"
-          CopyToPublishDirectory="PreserveNewest" />
-    <!-- The reviewed hashes travel with the articles they pin. Without this the deployed
-         corpus has no manifest, and a Production host refuses to start on it. -->
-    <None Include="..\..\knowledge-base\REVIEWED.sha256"
-          Link="knowledge-base\REVIEWED.sha256"
-          CopyToOutputDirectory="PreserveNewest"
-          CopyToPublishDirectory="PreserveNewest" />
-  </ItemGroup>
-
   <!--
     This project is both a runnable diagnostic host and a library referenced by the Web app.
     A referenced project copies its CopyToOutputDirectory content into the consumer's output,

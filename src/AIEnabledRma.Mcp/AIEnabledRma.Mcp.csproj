@@ -57,6 +57,7 @@
        repositories; nothing in this host opens knowledge-base/, and the startup check that inspects a
        corpus is registered by AddRag, which this host does not call. The image used to carry nineteen
        articles and the reviewed manifest anyway, which made "the tool server's image carries the
-       corpus" true and meaningless. The projects that read the corpus declare it; PublishLayoutTests
-       asserts that this one publishes none, so a later change is a decision rather than an accident. -->
+       corpus" true and meaningless. The corpus is declared once, in Directory.Build.props, for the
+       hosts that read it; PublishLayoutTests asserts that this one publishes none, so a later change
+       is a decision rather than an accident. -->
 </Project>

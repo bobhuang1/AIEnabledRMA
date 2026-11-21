@@ -20,4 +20,27 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <!-- The reviewed corpus, declared once for the two hosts that read it. A project that declares the
+       same files again publishes them twice and drifts from this list; PublishLayoutTests fails when
+       one does. $(MSBuildThisFileDirectory) is the repository root, so the glob does not depend on how
+       deep a project sits.
+
+       The Web host registers the same RAG services and reads the corpus from its content root, so a
+       deployment that forgot to copy it would start cleanly and treat every question as "no evidence".
+       The RAG host reads the same files directly. The ingest tool reads them next to itself by default.
+       The tool server reads none of it, and carries none — PublishLayoutTests asserts that absence on
+       purpose. -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'AIEnabledRma.Web' or '$(MSBuildProjectName)' == 'AIEnabledRma.Rag' or '$(MSBuildProjectName)' == 'AIEnabledRma.Tools.DbAdmin'">
+    <None Include="$(MSBuildThisFileDirectory)knowledge-base/**/*.md"
+          Link="knowledge-base/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <!-- The reviewed hashes travel with the articles they pin: without the manifest a Production host
+         refuses to start on a corpus it cannot verify. -->
+    <None Include="$(MSBuildThisFileDirectory)knowledge-base/REVIEWED.sha256"
+          Link="knowledge-base/REVIEWED.sha256"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

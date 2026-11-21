@@ -24,12 +24,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="..\..\knowledge-base\**\*.md"
-          Link="knowledge-base\%(RecursiveDir)%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-
-  <ItemGroup>
     <Using Include="Microsoft.Extensions.DependencyInjection" />
     <Using Include="Microsoft.Extensions.Hosting" />
     <Using Include="Microsoft.Extensions.Configuration" />

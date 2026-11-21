@@ -22,20 +22,4 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
   </ItemGroup>
 
-  <!-- The knowledge corpus ships with the site. A deployment that forgot to copy it would
-       otherwise start cleanly and then treat every question as "no evidence", which reads as
-       a working assistant that happens to know nothing. -->
-  <ItemGroup>
-    <None Include="..\..\knowledge-base\**\*.md"
-          Link="knowledge-base\%(RecursiveDir)%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest"
-          CopyToPublishDirectory="PreserveNewest" />
-    <!-- The reviewed hashes travel with the articles they pin: the Web host registers the same
-         RAG services, and a Production host refuses a corpus with no manifest. -->
-    <None Include="..\..\knowledge-base\REVIEWED.sha256"
-          Link="knowledge-base\REVIEWED.sha256"
-          CopyToOutputDirectory="PreserveNewest"
-          CopyToPublishDirectory="PreserveNewest" />
-  </ItemGroup>
-
 </Project>

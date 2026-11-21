@@ -19,6 +19,47 @@ namespace AIEnabledRma.Tests;
 /// </remarks>
 public sealed class PublishLayoutTests
 {
+    /// <summary>
+    /// The corpus is declared once, in <c>Directory.Build.props</c>, for the hosts that read it. A
+    /// project that declares the same files again publishes them twice and drifts from that one list.
+    /// </summary>
+    /// <remarks>
+    /// The declaration moved out of the Rag and Web projects because the two copies were identical and
+    /// only one of them was ever updated with the manifest. This fails on a project that declares an
+    /// <c>Include</c> under <c>knowledge-base</c>, not on one that mentions it: the tool server's
+    /// project explains at length why it carries none, and that comment is the record, not a duplicate.
+    /// </remarks>
+    [Fact]
+    public void The_corpus_is_declared_once_for_the_hosts_that_read_it()
+    {
+        var root = RepositoryRoot();
+        var props = File.ReadAllText(Path.Combine(root, "Directory.Build.props"));
+
+        Assert.Contains("knowledge-base/**/*.md", props, StringComparison.Ordinal);
+        Assert.Contains("knowledge-base/REVIEWED.sha256", props, StringComparison.Ordinal);
+
+        // Named in the condition, so the set of consumers is visible where the declaration is: the
+        // two hosts that read the corpus at startup, and the ingest tool that reads it next to itself.
+        Assert.Contains("'$(MSBuildProjectName)' == 'AIEnabledRma.Web'", props, StringComparison.Ordinal);
+        Assert.Contains("'$(MSBuildProjectName)' == 'AIEnabledRma.Rag'", props, StringComparison.Ordinal);
+        Assert.Contains("'$(MSBuildProjectName)' == 'AIEnabledRma.Tools.DbAdmin'", props, StringComparison.Ordinal);
+
+        var offenders = Directory
+            .EnumerateFiles(root, "*.csproj", SearchOption.AllDirectories)
+            .Where(project => !project.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                              && !project.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(project => File.ReadAllLines(project).Any(line =>
+                line.Contains("knowledge-base", StringComparison.OrdinalIgnoreCase)
+                && line.Contains("Include=", StringComparison.OrdinalIgnoreCase)))
+            .Select(project => Path.GetRelativePath(root, project))
+            .ToList();
+
+        Assert.True(
+            offenders.Count == 0,
+            "these projects declare knowledge-base content of their own: " + string.Join(", ", offenders)
+            + ". Declare it once in Directory.Build.props, which copies it for the Web and RAG hosts.");
+    }
+
     [Fact]
     public async Task The_published_web_host_carries_the_corpus()
     {
