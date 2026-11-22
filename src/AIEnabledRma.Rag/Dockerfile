@@ -24,7 +24,14 @@ RUN test -f /app/knowledge-base/REVIEWED.sha256 \
     || (echo "knowledge-base is missing from /app: the publish output carried no corpus" >&2; exit 1)
 
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:12b1135f5f8b3c0a214f2a680ff2033dff4f684f445d6c697d9524ceeb303586 AS runtime
+# Chiseled runtime: no shell, no package manager, no debugger. This host opens one database and reads
+# one corpus, so every one of those is surface a compromise gets and nothing this process uses. The
+# digest is the linux/amd64 entry for 10.0-noble-chiseled — a tag would move under the next pull, and
+# a digest for another architecture would not run here at all.
+#
+# The absence of a shell is why scripts/verify-images.sh reads the corpus with `docker cp` and mounts a
+# damaged one instead of deleting a file inside the image.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled@sha256:7c625e44e5d588b4d7b2a913e94ca4bd5098ce47442da404829e4c7936a764e1 AS runtime
 WORKDIR /app
 COPY --from=build /app ./
 

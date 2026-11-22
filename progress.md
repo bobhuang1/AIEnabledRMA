@@ -404,6 +404,31 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   `COPY /app` layer, index 7) and `/app` 10 -> 4 assemblies; the whole-image compressed sum reads
   106,883,242 -> 104,856,897, whose -2,026,345 delta is 7 bytes from the -2,026,338 recorded above, the
   totals differing because the hand run summed one more blob.
+- **The RAG image runs on a chiseled base, and the pull is little more than half what it was.** Its
+  runtime stage was the full `dotnet/aspnet:10.0` image: a shell, a package manager and a debugger for
+  a host that opens one database and reads one corpus. It now pins
+  `mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled@sha256:7c625e44e5d588b4d7b2a913e94ca4bd5098ce47442da404829e4c7936a764e1`,
+  the linux/amd64 entry — a tag moves under the next pull and a digest for another architecture would
+  not run here at all — and the pull falls from 104,856,897 to **57,555,499 bytes**. That figure is
+  counted the same way as the entry above: the image's own layer blobs from `docker save`, not the
+  rounded `docker images` column. A local rebuild of the new image sums to 57,555,014 bytes of layer
+  and config blobs, 485 bytes short of the registry figure, which is the manifest blobs a registry
+  counts and a local save does not. The host still loads all 19 articles with 0 problems on the
+  chiseled base: no ICU, no shell and no extra packages turned out to be needed by anything it does.
+- **A base without a shell changes what the image gate can do, so the gate stopped doing it.** The
+  corpus count used to come from `docker run --entrypoint sh -c`; it is now `docker create` plus
+  `docker cp` of `/app/knowledge-base`, counted on the host — which is also the stronger claim, since
+  it reads the files the image shipped rather than what a process chose to report about them. The
+  drift case copies the corpus out, deletes the manifest's first article and mounts the result
+  read-only over `/app/knowledge-base`, which is what a drifted deployment actually looks like: the
+  files are wrong, the image is not. The entry point is read from the image's own config instead of
+  being repeated in a shell one-liner, and `check_no_shell` fails the gate if the image has `/bin/sh`
+  at all — the property the other two checks were rewritten around, asserted rather than assumed.
+- **Tests:** `GateScriptTests` pins the chiseled linux/amd64 digest and the absence of both the old
+  full-runtime digest and the bare chiseled tag, plus the `docker cp` count, the bind mount, the
+  entrypoint assertion and the no-shell check
+  (`The_rag_runtime_is_a_pinned_chiseled_linux_amd64_base`), and fails if `SMOKE_ASSEMBLY` comes
+  back.
 - **Two writers on one return no longer both win.** `RmaRequest` gained `RowVersion`, mapped to
   PostgreSQL's `xmin` system column (`IsRowVersion()`), so every update carries `WHERE xmin = <the
   value that was read>` and a write built from a stale read is refused instead of silently

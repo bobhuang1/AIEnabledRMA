@@ -17,6 +17,13 @@
 # asserted here rather than left for the next reader to wonder about, because the image used to carry
 # the corpus and the check that said so was true and told nobody anything.
 #
+# The RAG runtime is chiseled: no shell, no package manager, no debugger. That is why its corpus is
+# read out with `docker cp` and counted here instead of by a process reporting a number, why its drift
+# case mounts a damaged corpus over the image's own instead of deleting a file inside it, and why the
+# entry point is read from the image config instead of repeated in a command line. The absence of a
+# shell is asserted as well, so a base that drifted back to the full runtime fails this gate instead of
+# passing every other check while carrying 45 MB of tooling into a corpus host.
+#
 # All three images carry the commit they were built from as org.opencontainers.image.revision, and
 # that label is compared with this checkout. After a fix had been pushed, "is this image from before or
 # after it" was a question this repository could not answer from the image.
@@ -53,6 +60,12 @@ REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_ROOT"
 
 failures=0
+
+# docker.exe reads host paths, not the shell's /c/... form, and the drift check below mounts a
+# directory from this machine into the container.
+hostpath() {
+    if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
+}
 
 pass() { printf 'ok    %s\n' "$1"; }
 
@@ -98,23 +111,40 @@ build() {
     return 1
 }
 
-# One run per image: prints the article count, whether the manifest is there, and whether the
-# directory exists at all. The last of the three is what distinguishes "the corpus was never copied"
-# from "the corpus was copied empty", which fail for different reasons.
+# One container per image: docker cp pulls /app/knowledge-base out and the counting happens here, on
+# the host. The shell version (`docker run --entrypoint sh -c`) cannot work against the chiseled
+# runtime, which has no /bin/sh — and docker cp is the stronger check anyway, because it reads the
+# files the image actually shipped rather than what a process chose to report about them.
+#
+# A path that is not there is a failed copy, which is the difference between "the corpus was never
+# copied" and "the corpus was copied empty" the three fields below are there to keep apart.
 inspect() {
-    docker run --rm --entrypoint sh "$1" -c '
-        directory=no
-        [ -d /app/knowledge-base ] && directory=yes
-        count=0
-        if [ "$directory" = yes ]; then
-            count=$(find /app/knowledge-base -name "*.md" -type f | wc -l | tr -d " ")
+    local tag=$1 out created count=0 manifest=no directory=no
+
+    out=$(mktemp -d)
+
+    if created=$(docker create "$tag" 2>&1); then
+        if docker cp "$created:/app/knowledge-base" "$out/knowledge-base" >/dev/null 2>&1; then
+            directory=yes
+            count=$(find "$out/knowledge-base" -name '*.md' -type f | wc -l | tr -d ' ')
+            [ -f "$out/knowledge-base/REVIEWED.sha256" ] && manifest=yes
         fi
-        manifest=no
-        [ -f /app/knowledge-base/REVIEWED.sha256 ] && manifest=yes
-        printf "%s %s %s\n" "$count" "$manifest" "$directory"
-    ' 2>&1
+
+        docker rm -f "$created" >/dev/null 2>&1 || true
+    else
+        printf '%s
+' "$created"
+        rm -rf "$out"
+        return 1
+    fi
+
+    rm -rf "$out"
+    printf '%s %s %s
+' "$count" "$manifest" "$directory"
 }
 
+# The commit an image was built from, read back from its own label: "is this image from before or after
+# the fix" has to be answerable from the image, not from a shell history.
 label() {
     docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$1" 2>/dev/null \
         || printf 'unknown'
@@ -313,34 +343,67 @@ boot_smoke() {
 
     docker rm -f "$container" >/dev/null 2>&1 || true
 
-    # The same image with one article removed must refuse to start. In Production the startup check
-    # throws on any problem, so the exit code is the assertion; the log is quoted because "exited 1"
-    # alone could be any failure, including the one this test is not about.
-    # Removed by the manifest's own first line, not by the glob: the first .md alphabetically is
-    # knowledge-base/README.md, which the loader ignores, and deleting it would leave the reviewed
-    # corpus intact and the host starting normally. Root, because the image runs as $APP_UID and /app
-    # is root-owned: without it the delete fails silently and the host starts on an intact corpus,
-    # which is a passing test of nothing. The timeout turns "the host started anyway" into a failed
-    # check instead of a gate that never returns.
-    log=$(timeout 90 docker run --rm --user root --network "$SMOKE_NETWORK" "${smoke_environment[@]}"             -e "SMOKE_ASSEMBLY=$assembly" --entrypoint sh "$tag" -c '
-        article=$(head -1 /app/knowledge-base/REVIEWED.sha256 | cut -d" " -f3)
-        rm "/app/knowledge-base/$article"
-        exec dotnet "$SMOKE_ASSEMBLY"
-    ' 2>&1) && rc=0 || rc=$?
+    # Which binary the image runs is now read from its config: the drift case used to spell it out in
+    # a shell one-liner, and a chiseled image has no shell to spell anything in.
+    entrypoint=$(docker image inspect -f '{{json .Config.Entrypoint}}' "$tag")
 
-    if [ "$rc" -ne 0 ]             && printf '%s' "$log" | grep -Fq "REVIEWED.sha256"             && printf '%s' "$log" | grep -Fq "does not match"; then
+    if printf '%s' "$entrypoint" | grep -Fq "$assembly"; then
+        pass "$host image entrypoint runs $assembly"
+    else
+        fail "$host image entrypoint" "expected $assembly in the entrypoint, image says $entrypoint"
+    fi
+
+    # ... and it must refuse it from a damaged corpus mounted over its own. The corpus is copied out and
+    # damaged on the host because the chiseled runtime has no shell to delete a file with, and a bind
+    # mount is also what a drifted deployment looks like: the files are wrong, the image is not. The
+    # article is the manifest's own first line, not the first .md alphabetically — that is
+    # knowledge-base/README.md, which the loader ignores, so deleting it would leave the reviewed corpus
+    # intact and the host starting normally, a passing test of nothing.
+    damaged=$(mktemp -d)
+    created=$(docker create "$tag")
+    docker cp "$created:/app/knowledge-base" "$damaged/knowledge-base" >/dev/null 2>&1 \
+        || fail "$host image refuses a drifted corpus" "could not copy the corpus out of $tag"
+    docker rm -f "$created" >/dev/null 2>&1 || true
+
+    article=$(head -1 "$damaged/knowledge-base/REVIEWED.sha256" | cut -d' ' -f3)
+    rm -f "$damaged/knowledge-base/$article"
+
+    # In Production the startup check throws on any problem, so the exit code is the assertion; the log
+    # is quoted because "exited 1" alone could be any failure, including the one this is not about.
+    log=$(timeout 90 docker run --rm --network "$SMOKE_NETWORK" "${smoke_environment[@]}" \
+        -v "$(hostpath "$damaged/knowledge-base"):/app/knowledge-base:ro" "$tag" 2>&1) && rc=0 || rc=$?
+    rm -rf "$damaged" >/dev/null 2>&1 || true
+
+    if [ "$rc" -ne 0 ] \
+            && printf '%s' "$log" | grep -Fq "REVIEWED.sha256" \
+            && printf '%s' "$log" | grep -Fq "does not match"; then
         pass "$host image refuses to start when an article is removed (exit $rc)"
     else
-        fail "$host image refuses a drifted corpus"             "expected a non-zero exit quoting REVIEWED.sha256 and 'does not match', got exit $rc; last lines:"
+        fail "$host image refuses a drifted corpus" \
+            "expected a non-zero exit quoting REVIEWED.sha256 and 'does not match', got exit $rc; last lines:"
         printf '%s
 ' "$log" | tail -12 | sed 's/^/          /'
     fi
 
     smoke_cleanup
 }
+# The chiseled base is the reason the two checks above read files instead of running a shell, so it is
+# asserted too: an image that drifted back to the full runtime would pass every other check here while
+# quietly carrying a shell, a package manager and a debugger into a corpus host that needs none.
+check_no_shell() {
+    local name=$1 tag=$2
+
+    if docker run --rm --entrypoint sh "$tag" -c true >/dev/null 2>&1; then
+        fail "$name image is chiseled" "$tag has /bin/sh, so it is not built on a chiseled runtime"
+    else
+        pass "$name image carries no shell"
+    fi
+}
+
 check_image "MCP" "src/AIEnabledRma.Mcp/Dockerfile" "$MCP_IMAGE" empty
 check_image "Web" "src/AIEnabledRma.Web/Dockerfile" "$WEB_IMAGE" corpus
 check_image "RAG" "src/AIEnabledRma.Rag/Dockerfile" "$RAG_IMAGE" corpus
+check_no_shell "RAG" "$RAG_IMAGE"
 
 # The deployment's own composition, booted: this is the check that catches a required value missing
 # from the example env or a service the current host refuses before anyone runs `up` against a real

@@ -126,12 +126,14 @@ public sealed class GateScriptTests
         Assert.Contains("AIEnabledRma.Web.dll", script, StringComparison.Ordinal);
         Assert.Contains("AIEnabledRma.Rag.dll", script, StringComparison.Ordinal);
 
-        // The entry point reaches the container as an environment variable, because the drift case
-        // runs inside a single-quoted `sh -c`: a `$assembly` there expands to nothing, and the host
-        // runs `dotnet` with no argument — which exits non-zero, so the assertion below passes for
-        // the wrong reason while never loading a corpus at all.
-        Assert.Contains("-e \"SMOKE_ASSEMBLY=$assembly\"", script, StringComparison.Ordinal);
-        Assert.Contains("exec dotnet \"$SMOKE_ASSEMBLY\"", script, StringComparison.Ordinal);
+        // The drift case is a bind mount now, not a shell one-liner: the RAG image is chiseled and has
+        // no /bin/sh to delete a file in. The entry point is asserted from the image's own config
+        // instead of repeated in a command line, which also removes the way that command could name
+        // an assembly the image does not run.
+        Assert.Contains("docker image inspect -f '{{json .Config.Entrypoint}}'", script, StringComparison.Ordinal);
+        Assert.Contains("entrypoint runs $assembly", script, StringComparison.Ordinal);
+        Assert.Contains(":/app/knowledge-base:ro", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("SMOKE_ASSEMBLY", script, StringComparison.Ordinal);
         Assert.Contains("ASPNETCORE_ENVIRONMENT=Production", script, StringComparison.Ordinal);
 
         // The web image boots in Production, where an operator identity provider is required. A
@@ -144,10 +146,39 @@ public sealed class GateScriptTests
 
         // The second case is the one that makes the first meaningful: the same image, one article
         // removed, must exit non-zero and say which manifest it does not match.
-        Assert.Contains("head -1 /app/knowledge-base/REVIEWED.sha256", script, StringComparison.Ordinal);
+        // The article to remove is picked from the copy taken out of the image, which is the only copy
+        // the host can edit now that the image has no shell.
+        Assert.Contains("head -1 \"$damaged/knowledge-base/REVIEWED.sha256\"", script, StringComparison.Ordinal);
         Assert.Contains("REVIEWED.sha256", script, StringComparison.Ordinal);
         Assert.Contains("does not match", script, StringComparison.Ordinal);
         Assert.Contains("if [ \"$rc\" -ne 0 ]", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The RAG image runs on a chiseled runtime: no shell, no package manager, no debugger. That is
+    /// what forced the gate's two file-based checks, so the base is pinned here rather than left to a
+    /// comment — a tag would move under the next pull, and a digest for another architecture would not
+    /// run here at all.
+    /// </summary>
+    [Fact]
+    public void The_rag_runtime_is_a_pinned_chiseled_linux_amd64_base()
+    {
+        var dockerfile = File.ReadAllText(
+            Path.Combine(RepositoryRoot(), "src", "AIEnabledRma.Rag", "Dockerfile"));
+
+        Assert.Contains(
+            "mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled@sha256:7c625e44e5d588b4d7b2a913e94ca4bd5098ce47442da404829e4c7936a764e1",
+            dockerfile,
+            StringComparison.Ordinal);
+
+        // The full runtime this image used before, and the bare chiseled tag that would replace the
+        // pinned digest with whatever is published next: either one puts tens of megabytes back into
+        // the pull, silently.
+        Assert.DoesNotContain("aspnet:10.0@sha256:12b1135f", dockerfile, StringComparison.Ordinal);
+        Assert.DoesNotContain("aspnet:10.0-noble-chiseled AS runtime", dockerfile, StringComparison.Ordinal);
+
+        // The absence of a shell is checked against the built image rather than assumed from the digest.
+        Assert.Contains("check_no_shell \"RAG\"", Script("verify-images.sh"), StringComparison.Ordinal);
     }
 
     /// <summary>
