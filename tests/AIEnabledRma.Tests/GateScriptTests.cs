@@ -351,6 +351,34 @@ public sealed class GateScriptTests
         Assert.DoesNotContain("KEYCLOAK_ADMIN_PASSWORD:-admin", script, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The drill also runs on every push, which is exactly the day a backup path does not break. This
+    /// schedule is the copy that runs when nobody pushed, and the parts pinned here are the ones that
+    /// make it a report rather than a step: the cron, the command the runbook documents, a manual
+    /// trigger, a timeout, and a run-page summary so a red night says what broke without a reviewer.
+    /// </summary>
+    [Fact]
+    public void A_schedule_runs_the_restore_drill_without_a_push()
+    {
+        var workflow = File.ReadAllText(Path.Combine(
+            RepositoryRoot(), ".github", "workflows", "restore-drill-scheduled.yml"));
+
+        Assert.Contains("cron: \"17 3 * * *\"", workflow, StringComparison.Ordinal);
+        Assert.Contains("./scripts/verify-all.sh restore", workflow, StringComparison.Ordinal);
+        Assert.Contains("workflow_dispatch:", workflow, StringComparison.Ordinal);
+        Assert.Contains("timeout-minutes:", workflow, StringComparison.Ordinal);
+        Assert.Contains("GITHUB_STEP_SUMMARY", workflow, StringComparison.Ordinal);
+
+        // Not the direct script: the schedule has to run what a person runs, or it can stay green
+        // while the documented command is broken.
+        Assert.DoesNotContain("./scripts/restore-drill.sh", workflow, StringComparison.Ordinal);
+
+        // Not a second copy on every merge: ci.yml's restore-drill job already pays for that, and a
+        // schedule that also fired there would double the cost of the slowest gate.
+        Assert.DoesNotContain("push:", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("pull_request:", workflow, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("AIEnabledRma.Mcp")]
     [InlineData("AIEnabledRma.Web")]

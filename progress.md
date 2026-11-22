@@ -635,3 +635,13 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   test; changing one condition to `service_started` fails three. Live: `docker compose up -d proxy`
   recreated the container and it reached healthy in 20s, probe exit 0, with web reported Healthy
   before the proxy started.
+- **The drill runs at 03:17 whether or not anyone pushed.** `restore-drill` already ran on every
+  merge, which is the day a backup path least often breaks: it breaks from outside — a republished
+  base image, a dump format change, a migration the dump cannot carry — on a day nobody edits
+  anything. `.github/workflows/restore-drill-scheduled.yml` runs `./scripts/verify-all.sh restore`
+  nightly and on demand: the command the runbook documents rather than the script it calls, with a
+  timeout, a concurrency group that queues instead of cancelling, `contents: read`, and a run-page
+  summary that states the verdict either way, so a red night says what failed without a reviewer.
+- **Gate:** `suite` 575 passed, 0 skipped, 0 failed, and `./scripts/verify-all.sh restore` ran the
+  command the schedule uses: 7 checks, exit 0. Mutation: pointing the schedule at
+  `./scripts/restore-drill.sh` instead of the documented command fails the new test.

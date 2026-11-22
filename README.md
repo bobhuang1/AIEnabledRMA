@@ -224,7 +224,11 @@ It is the last step of `scripts/verify-all.sh` and the `restore-drill` job in CI
 are forward-only and `reset --force` drops the database rather than restoring it — a dump that cannot
 be restored into a scratch database is the failure with no other way back. It costs minutes rather
 than seconds (it publishes `DbAdmin` and moves a dump through two containers), so it runs last;
-`KEEP=1` leaves the container and the dump behind for inspection. The production pack's
+`KEEP=1` leaves the container and the dump behind for inspection. It also runs from
+`.github/workflows/restore-drill-scheduled.yml` every night at 03:17 UTC and on demand, because a
+backup path breaks from outside the repository — a republished base image, a dump format change — on a
+day nobody edits anything; the run's summary carries the verdict, so a red night does not need a
+reviewer to say what failed. The production pack's
 `web`, `mcp` and `rag` services carry a readiness check that asks their own `/health` for an HTTP 200,
 and `proxy` waits for `service_healthy` before it fronts them. The probe uses bash's `/dev/tcp`
 rather than curl, because none of these images ships curl and a package installed into three

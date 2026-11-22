@@ -1,0 +1,58 @@
+name: restore-drill-scheduled
+
+# The drill runs on every push in ci.yml. This is the copy that runs when nobody pushed: a backup path
+# breaks from outside the repository — a base image is republished, a dump format changes, the schema
+# grows a migration the dump cannot carry — and nobody edits anything on the day that happens. It is
+# the failure with no other way back, so it cannot be the step that depends on somebody remembering.
+
+on:
+  schedule:
+    # 03:17 UTC. Not on the hour: GitHub's scheduler queues the top of the hour first, and a drill that
+    # starts late is the same drill.
+    - cron: "17 3 * * *"
+  # A person can ask for it without waiting for the night.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Not cancelled by its own successor: a drill stopped halfway leaves containers behind and answers
+  # nothing. Queue, do not cancel.
+  group: restore-drill-scheduled
+  cancel-in-progress: false
+
+jobs:
+  restore-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The command the runbook documents, not the script directly: a schedule that checks a different
+      # entry point can stay green while the command a person types is broken.
+      - name: Dump a seeded database, restore it into a scratch one, migrate it and query it
+        run: ./scripts/verify-all.sh restore
+
+      # A scheduled run has no reviewer, so the run page has to carry the verdict. Green says the
+      # backups are a recovery path; red says they are a claim.
+      - name: Record the outcome on the run page
+        if: always()
+        run: |
+          {
+            if [ "${{ job.status }}" = "success" ]; then
+              echo "## Restore drill passed"
+              echo
+              echo "A dump of this schema restored into a scratch database, migrated with nothing left"
+              echo "pending, and every row count read back matched the source."
+            else
+              echo "## Restore drill failed"
+              echo
+              echo "A dump of this schema could not be turned back into a database this application can"
+              echo "migrate and read. The failing step above names the part that broke: the dump, the"
+              echo "restore, the migration, or the row counts read back."
+              echo
+              echo "Until this is green, the backups are a claim rather than a recovery path."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
