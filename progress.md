@@ -339,3 +339,14 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   description longer than Keycloak's 255-character column stopped the import, and an imported realm has no
   built-in profile scope, so `preferred_username` had to be mapped explicitly or the operator audit trail
   would have recorded a UUID.
+
+- **The Web host operator policy reads the claim the realm emits.** `OperatorPolicyTests` asks the host's
+  registered `operator` policy about principals shaped like the operator cookie: a flat `roles` claim
+  carrying `rma:operator` is admitted, an authenticated principal without it is denied, and Keycloak's
+  nested `realm_access.roles` alone does not count, so a missing `operator-roles` mapper is caught. The
+  same file pins the token half (`MapInboundClaims` off, `RoleClaimType` `roles`, `RequiredRole` equal to
+  the realm role) and that `/Operator` is guarded by the policy the tests exercise. Mutation-checked:
+  dropping the role requirement fails the denial test, and removing `roles` from the claim check fails the
+  admission test.
+- **Gate for this change:** `suite` 502 passed, 0 skipped, 0 failed; EF model check clean ("No changes have
+  been made to the model since the last migration"); vulnerability audit clean for all nine projects.
