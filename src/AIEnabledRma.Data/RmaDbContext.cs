@@ -318,6 +318,12 @@ public sealed class ReviewItemConfiguration : IEntityTypeConfiguration<ReviewIte
         builder.Property(r => r.Status).HasMaxLength(16).IsRequired();
         builder.Property(r => r.ResolvedBy).HasMaxLength(256);
         builder.Property(r => r.Resolution).HasMaxLength(2000);
+
+        // Same token, same reason as RmaRequest: the status guard reads the row and then writes it,
+        // so two operators resolving one item both pass the guard. xmin costs no column and covers
+        // every writer of the table, including one this service does not know about.
+        builder.Property(r => r.RowVersion).IsRowVersion();
+
         builder.HasIndex(r => new { r.Status, r.CreatedAtUtc }).HasDatabaseName("ix_review_items_status_created");
     }
 }

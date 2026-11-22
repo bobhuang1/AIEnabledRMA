@@ -575,6 +575,12 @@ namespace AIEnabledRma.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("rma_request_id");
 
+                    b.Property<uint>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.Property<string>("Serials")
                         .HasMaxLength(1000)
                         .HasColumnType("character varying(1000)")

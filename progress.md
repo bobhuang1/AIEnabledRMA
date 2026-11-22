@@ -516,3 +516,24 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
 - **Gates for this change:** `suite` 547 passed, 0 skipped, 0 failed; the command run end to end
   against a seeded database — clean run says so and exits 0, one stale row the gateway has never
   heard of is reported as unanswered and exits 2 with nothing filed.
+
+- **Two operators cannot both resolve one review item.** Resolving was a read followed by a write:
+  `ResolveReviewItemAsync` loaded the item, checked that its status was Open and wrote the resolution,
+  so two operators who both had the item on screen passed that check and were both told "Resolved." —
+  the second silently replacing the first one's name and explanation, with an audit trail showing two
+  successes and nothing to say which one stands. `ReviewItem` now carries `RowVersion`, mapped to
+  PostgreSQL's `xmin` (`IsRowVersion()`), the same token `RmaRequest` already had; the migration for it
+  is deliberately empty because `xmin` is the server's own system column and the model mapping, not DDL,
+  is what enforces it. The service catches `ConcurrencyConflictException` the way the request actions
+  do — the resolution and its action row roll back together, the attempt is written again with
+  `Succeeded = false` and `refused: the return changed since it was read`, and the operator is told to
+  reload the queue rather than that the item is still open.
+- **Test:** `Two_operators_resolving_one_review_item_leave_the_first_resolution_standing` holds two
+  contexts on one open item, resolves it from the first, then submits from the second and asserts it is
+  refused, that the stored row still names the first operator and their explanation, and that the ledger
+  has two `resolve-review` rows with exactly one success. **Mutation-checked:** deleting the refusal
+  handler makes that test fail with the escaped `ConcurrencyConflictException` while the other three
+  concurrency tests still pass; restoring it returns all four to green. Removing the mapping instead is
+  caught by the suite's `ef migrations has-pending-model-changes` step, which is how a token that stopped
+  being enforced would surface first.
+- **Gates:** `suite` 557 passed, 0 skipped, 0 failed.

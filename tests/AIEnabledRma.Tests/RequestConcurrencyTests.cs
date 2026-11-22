@@ -169,6 +169,66 @@ public sealed class RequestConcurrencyTests
         Assert.Equal(Now, stored.UpdatedAtUtc);
     }
 
+    [Fact]
+    public async Task Two_operators_resolving_one_review_item_leave_the_first_resolution_standing()
+    {
+        await using var database = new LiveDatabase("rma_concurrency");
+        await database.InitializeAsync();
+
+        var item = new ReviewItem
+        {
+            Id = Guid.NewGuid(),
+            CreatedAtUtc = Now,
+            Source = ReviewSources.PaymentFailed,
+            Reason = "authorisation refused",
+        };
+
+        await using (var seed = database.CreateContext())
+        {
+            await seed.Database.MigrateAsync(Ct);
+            seed.ReviewItems.Add(item);
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        await using var first = database.CreateContext();
+        await using var second = database.CreateContext();
+
+        // Both operators opened the queue while the item was still open. The status guard reads the
+        // copy this context tracks, so for the second one it still says Open.
+        Assert.NotNull(await new EfOperationsRepository(second).GetReviewItemAsync(item.Id, Ct));
+
+        var resolved = await OperatorServiceFor(first).ResolveReviewItemAsync(
+            item.Id, "operator-one", "refunded by hand", Ct);
+        Assert.True(resolved.Succeeded);
+
+        // The second submission. Without a token on review_items both are told "Resolved." and the
+        // second silently replaces the first operator's name and explanation.
+        var stale = await OperatorServiceFor(second).ResolveReviewItemAsync(
+            item.Id, "operator-two", "nothing to refund", Ct);
+
+        Assert.False(stale.Succeeded);
+        Assert.Contains("changed", stale.Message, StringComparison.OrdinalIgnoreCase);
+
+        await using var check = database.CreateContext();
+
+        var stored = await check.ReviewItems.SingleAsync(r => r.Id == item.Id, Ct);
+
+        // The first resolution stands, so the record says who actually decided this and why.
+        Assert.Equal(ReviewStatuses.Resolved, stored.Status);
+        Assert.Equal("operator-one", stored.ResolvedBy);
+        Assert.Equal("refunded by hand", stored.Resolution);
+
+        var actions = await check.OperatorActions
+            .Where(a => a.Action == "resolve-review")
+            .ToListAsync(Ct);
+
+        // Two attempts, one success: the stale one is the refusal it was, not a second resolution.
+        Assert.Equal(2, actions.Count);
+        Assert.Single(actions, a => a.Succeeded);
+        var refused = Assert.Single(actions, a => !a.Succeeded);
+        Assert.Contains("changed since it was read", refused.Detail, StringComparison.Ordinal);
+    }
+
     private static RmaRequest Request(RmaRequestStatus status) => new()
     {
         Id = Guid.NewGuid(),

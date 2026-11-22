@@ -37,6 +37,14 @@ public sealed class ReviewItem
     public DateTimeOffset? ResolvedAtUtc { get; set; }
 
     public string? Resolution { get; set; }
+
+    /// <summary>
+    /// Optimistic concurrency token, mapped to PostgreSQL's <c>xmin</c> system column. Resolving an
+    /// item is a read followed by a write, so without it two operators who both have the item on
+    /// screen are both told they resolved it and the second quietly replaces the first one's name
+    /// and explanation — an outcome nothing in the audit trail would show.
+    /// </summary>
+    public uint RowVersion { get; set; }
 }
 
 public static class ReviewSources
@@ -209,8 +217,34 @@ public sealed class OperatorService(
             result = new OperatorResult(true, "Resolved.");
         }
 
-        operations.AddAction(Action(operatorName, "resolve-review", itemId.ToString(), resolution, result.Succeeded));
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        var recorded = Action(operatorName, "resolve-review", itemId.ToString(), resolution, result.Succeeded);
+        operations.AddAction(recorded);
+
+        try
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (ConcurrencyConflictException)
+        {
+            // Both operators held the open item, so the status guard on the stale copy still said
+            // Open and only the token can tell them apart. The resolution and this action row were
+            // rolled back together; the attempt is recorded again as the refusal it was, and the
+            // message must not suggest the item is unresolved when the other operator's write stands.
+            recorded.Succeeded = false;
+            recorded.Detail = resolution is null
+                ? ConflictDetail
+                : Truncate(resolution + " " + ConflictDetail, 2000);
+
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+
+            logger.LogWarning(
+                "Operator {Operator} resolve-review {Item}: refused, the item changed since it was read",
+                operatorName,
+                itemId);
+
+            return new OperatorResult(false, ConflictReviewMessage);
+        }
+
         return result;
     }
 
@@ -298,6 +332,11 @@ public sealed class OperatorService(
         "Another person changed this return while you were working on it, so nothing was recorded. "
         + "The payment provider may already hold the capture for this authorisation, so check the "
         + "transaction before trying again.";
+
+    /// <summary>What the operator reads when another one resolved the item first.</summary>
+    private const string ConflictReviewMessage =
+        "Another person changed this item while you were looking at it, so nothing was saved. "
+        + "Reload the queue and check its current state before trying again.";
 
     private const string ConflictDetail = "refused: the return changed since it was read";
 
