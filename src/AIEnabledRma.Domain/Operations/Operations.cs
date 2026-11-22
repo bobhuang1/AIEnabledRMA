@@ -232,8 +232,36 @@ public sealed class OperatorService(
             request.UpdatedAtUtc = clock.UtcNow;
         }
 
-        operations.AddAction(Action(operatorName, action, request.RmaNumber, detail, result.Succeeded));
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        var recorded = Action(operatorName, action, request.RmaNumber, detail, result.Succeeded);
+        operations.AddAction(recorded);
+
+        try
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (ConcurrencyConflictException)
+        {
+            // The row changed after this request loaded it. The status write and the action row
+            // were rolled back together, so the attempt is recorded again — as a refusal. An
+            // audit trail that showed this one as successful would be the exact defect the
+            // token is here to close.
+            recorded.Succeeded = false;
+            recorded.Detail = detail is null
+                ? ConflictDetail
+                : Truncate(detail + " " + ConflictDetail, 2000);
+
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+
+            logger.LogWarning(
+                "Operator {Operator} {Action} {Rma}: refused, the return changed since it was read",
+                operatorName,
+                action,
+                request.RmaNumber);
+
+            return new OperatorResult(
+                false,
+                action == "capture" ? ConflictCaptureMessage : ConflictMessage);
+        }
 
         logger.LogInformation("Operator {Operator} {Action} {Rma}: {Outcome}", operatorName, action, request.RmaNumber, result.Succeeded ? "ok" : "refused");
         return result;
@@ -249,6 +277,22 @@ public sealed class OperatorService(
         Detail = detail is null ? null : Truncate(detail, 2000),
         Succeeded = succeeded,
     };
+
+    /// <summary>What the operator reads when another writer got there first.</summary>
+    private const string ConflictMessage =
+        "Another person changed this return while you were working on it, so nothing was saved. "
+        + "Reload the return and check its current state before trying again.";
+
+    /// <summary>
+    /// Capturing is the one action that talks to the payment provider before it writes the row, so
+    /// a refusal there cannot promise the money did not move.
+    /// </summary>
+    private const string ConflictCaptureMessage =
+        "Another person changed this return while you were working on it, so nothing was recorded. "
+        + "The payment provider may already hold the capture for this authorisation, so check the "
+        + "transaction before trying again.";
+
+    private const string ConflictDetail = "refused: the return changed since it was read";
 
     private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];
 }

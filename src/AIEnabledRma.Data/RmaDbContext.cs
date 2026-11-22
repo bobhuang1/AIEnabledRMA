@@ -196,6 +196,11 @@ public sealed class RmaRequestConfiguration : IEntityTypeConfiguration<RmaReques
         builder.Property(r => r.PolicyRuleTrace).HasMaxLength(2000);
         builder.Property(r => r.TroubleshootingSummary).HasMaxLength(2000);
 
+        // The token is PostgreSQL's own xmin: the id of the transaction that last wrote the row.
+        // Mapping it costs no column and no trigger, and it covers every writer of this table
+        // rather than only the two the services happen to know about.
+        builder.Property(r => r.RowVersion).IsRowVersion();
+
         builder.HasIndex(r => r.RmaNumber).IsUnique().HasDatabaseName("ux_rma_requests_number");
         builder.HasIndex(r => new { r.Status, r.CreatedAtUtc }).HasDatabaseName("ix_rma_status_created");
 

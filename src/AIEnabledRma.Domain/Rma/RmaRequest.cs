@@ -82,6 +82,14 @@ public sealed class RmaRequest
 
     public DateTimeOffset UpdatedAtUtc { get; set; }
 
+    /// <summary>
+    /// Optimistic concurrency token, mapped to PostgreSQL's <c>xmin</c> system column, which the
+    /// server rewrites on every update. A write that was built from a stale read is refused
+    /// instead of overwriting the newer state, so two operators acting on the same return — or
+    /// one operator submitting the same page twice — cannot both be recorded as having acted.
+    /// </summary>
+    public uint RowVersion { get; set; }
+
     public ICollection<RmaLine> Lines { get; set; } = new List<RmaLine>();
 
     public ICollection<RmaExclusion> Exclusions { get; set; } = new List<RmaExclusion>();

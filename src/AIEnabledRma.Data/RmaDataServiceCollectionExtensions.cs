@@ -1,4 +1,5 @@
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Common;
 using AIEnabledRma.Domain.Rules;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -10,8 +11,29 @@ namespace AIEnabledRma.Data;
 /// <summary>Commits the tracked changes as one transaction.</summary>
 public sealed class EfUnitOfWork(RmaDbContext db) : IUnitOfWork
 {
-    public Task<int> SaveChangesAsync(CancellationToken cancellationToken) =>
-        db.SaveChangesAsync(cancellationToken);
+    public async Task<int> SaveChangesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            // The row was rewritten between the read and this write — a second operator, or the
+            // same page submitted twice — and the provider has rolled the whole batch back. The
+            // stale entries stay tracked as Modified, so leaving them there would make the next
+            // save fail identically, including the audit row that has to record this refusal.
+            // Detaching them lets the caller reload the row and write that one row.
+            foreach (var entry in ex.Entries)
+            {
+                entry.State = EntityState.Detached;
+            }
+
+            throw new ConcurrencyConflictException(
+                "The row was changed by another writer since it was read, so this write was refused.",
+                ex);
+        }
+    }
 }
 
 public static class RmaDataServiceCollectionExtensions

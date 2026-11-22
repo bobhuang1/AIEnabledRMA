@@ -395,3 +395,25 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   PDB), `Microsoft.EntityFrameworkCore.Abstractions.dll` (34,616) and `EFCore.NamingConventions.dll` (29,184).
   `Npgsql.dll` stays because the host opens PostgreSQL directly, `AIEnabledRma.Domain.dll` grew 11,264 bytes as
   the moved rule compiled into it, and the corpus is unchanged at 19 articles plus README and `REVIEWED.sha256`.
+- **Two writers on one return no longer both win.** `RmaRequest` gained `RowVersion`, mapped to
+  PostgreSQL's `xmin` system column (`IsRowVersion()`), so every update carries `WHERE xmin = <the
+  value that was read>` and a write built from a stale read is refused instead of silently
+  overwriting the newer state. `EfUnitOfWork` translates the provider's
+  `DbUpdateConcurrencyException` into `ConcurrencyConflictException` and detaches the stale entry,
+  because a row still tracked as Modified would make the refusal's own audit insert fail the same
+  way. `OperatorService` records the attempted action again with `Succeeded = false` and returns a
+  refusal (capture's wording says the provider may already hold the capture, since the gateway is
+  called before the row is written). The wizard's confirmation and every other step that writes the
+  row go through `TryCommitAsync`, which reports `InvalidTransition` with the status now stored:
+  without it the new exception would have escaped as a 500 on triage, problems, shipping and payment
+  as well. `AddRmaRequestConcurrency` is deliberately empty, because the scaffolder emits an
+  `AddColumn` for `xmin` and PostgreSQL refuses a user column of that name.
+- **Tests:** `RequestConcurrencyTests` runs against PostgreSQL and holds the same row in two contexts,
+  which is what two browser sessions have — a stale `VoidAsync` after another session's
+  `MarkReceivedAsync` is refused, the row stays `Received`, exactly two action rows exist and the
+  second is the refusal; a confirmation from a stale page is refused and reports the stored
+  `AwaitingShipment` rather than what the page meant to write. Mutation-checked: removing the
+  `IsRowVersion` mapping fails both tests.
+- **Gate for this change:** `suite` 518 passed, 0 skipped, 0 failed; EF model check clean ("No
+  changes have been made to the model since the last migration"); vulnerability audit clean for all
+  nine projects.

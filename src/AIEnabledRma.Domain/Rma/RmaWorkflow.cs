@@ -1,5 +1,6 @@
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Catalog;
+using AIEnabledRma.Domain.Common;
 using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Operations;
 using AIEnabledRma.Domain.Rma;
@@ -442,7 +443,10 @@ public sealed partial class RmaWorkflow(
             request.Status = RmaRequestStatus.Cancelled;
             request.CancellationReason = "Resolved during automated troubleshooting.";
 
-            await CommitAsync(cancellationToken);
+            if (await TryCommitAsync(request, "triage", cancellationToken) is { } resolvedConflict)
+            {
+                return resolvedConflict;
+            }
 
             return new StepResult
             {
@@ -458,13 +462,16 @@ public sealed partial class RmaWorkflow(
         // exactly why the excluded-cause rules could never fire: intake evaluates a device, not
         // a statement. The same deterministic policy runs again here, with that statement as its
         // input, before the request is allowed to continue.
-        if (await ApplyPolicyDecisionAsync(request, _ => customerStatement, cancellationToken)
+        if (await ApplyPolicyDecisionAsync(request, _ => customerStatement, "triage", cancellationToken)
             is { } refusedTriage)
         {
             return refusedTriage;
         }
 
-        await CommitAsync(cancellationToken);
+        if (await TryCommitAsync(request, "triage", cancellationToken) is { } triageConflict)
+        {
+            return triageConflict;
+        }
 
         if (triage.UsedFallback || triage.Verdict.Confidence < _policy.HumanReviewConfidenceThreshold)
         {
@@ -546,6 +553,7 @@ public sealed partial class RmaWorkflow(
     private async Task<StepResult?> ApplyPolicyDecisionAsync(
         RmaRequest request,
         Func<RmaLine, string?> statementOf,
+        string step,
         CancellationToken cancellationToken)
     {
         var decision = ReEvaluate(request, statementOf);
@@ -557,7 +565,7 @@ public sealed partial class RmaWorkflow(
 
         if (!decision.AllowsRmaCreation)
         {
-            return await RefuseAsync(request, decision, cancellationToken);
+            return await RefuseAsync(request, decision, step, cancellationToken);
         }
 
         // A cause the deployment prices as a paid repair (cosmetic wear, say) changes what the
@@ -588,6 +596,7 @@ public sealed partial class RmaWorkflow(
     private async Task<StepResult> RefuseAsync(
         RmaRequest request,
         RmaEligibilityDecision decision,
+        string step,
         CancellationToken cancellationToken)
     {
         // One flag, because the status and the outcome are the same decision told twice: a rule
@@ -610,7 +619,10 @@ public sealed partial class RmaWorkflow(
 
         request.UpdatedAtUtc = clock.UtcNow;
 
-        await CommitAsync(cancellationToken);
+        if (await TryCommitAsync(request, step, cancellationToken) is { } conflict)
+        {
+            return conflict;
+        }
 
         if (!rejected)
         {
@@ -679,14 +691,18 @@ public sealed partial class RmaWorkflow(
         // The same excluded-cause rules, now against what the customer wrote here. Leaving this
         // to triage alone let a customer dodge them by describing a screen fault in the triage
         // statement and the spilled drink only in the per-line description below it.
-        if (await ApplyPolicyDecisionAsync(request, line => line.ProblemDescription, cancellationToken)
+        if (await ApplyPolicyDecisionAsync(request, line => line.ProblemDescription, "problem", cancellationToken)
             is { } refusedProblems)
         {
             return refusedProblems;
         }
 
         request.UpdatedAtUtc = clock.UtcNow;
-        await CommitAsync(cancellationToken);
+
+        if (await TryCommitAsync(request, "problem", cancellationToken) is { } problemsConflict)
+        {
+            return problemsConflict;
+        }
 
         return new StepResult
         {
@@ -744,7 +760,11 @@ public sealed partial class RmaWorkflow(
             : RmaRequestStatus.Approved;
 
         request.UpdatedAtUtc = clock.UtcNow;
-        await CommitAsync(cancellationToken);
+
+        if (await TryCommitAsync(request, "shipping", cancellationToken) is { } shippingConflict)
+        {
+            return shippingConflict;
+        }
 
         return new StepResult
         {
@@ -828,7 +848,11 @@ public sealed partial class RmaWorkflow(
 
         request.Status = RmaRequestStatus.Approved;
         request.UpdatedAtUtc = clock.UtcNow;
-        await CommitAsync(cancellationToken);
+
+        if (await TryCommitAsync(request, "payment", cancellationToken) is { } paymentConflict)
+        {
+            return paymentConflict;
+        }
 
         return new StepResult
         {
@@ -872,13 +896,37 @@ public sealed partial class RmaWorkflow(
                         RmaDecisionReason.DuplicateOpenRequest,
                         "Another return for this item is already on its way to us, so a specialist "
                         + "will confirm which one to use."),
+                    "confirmation",
                     cancellationToken);
             }
         }
 
         request.Status = RmaRequestStatus.AwaitingShipment;
         request.UpdatedAtUtc = clock.UtcNow;
-        await CommitAsync(cancellationToken);
+
+        try
+        {
+            await CommitAsync(cancellationToken);
+        }
+        catch (ConcurrencyConflictException)
+        {
+            // Another confirmation (a double-clicked or replayed page) or an operator changed the
+            // row between the read above and this write. The status guard cannot see that: both
+            // confirmations read the same Approved row. Report where the row actually is now, not
+            // where this attempt meant to put it — the save was rolled back and nothing of this
+            // attempt was written.
+            var current = await LoadAsync(rmaId, cancellationToken);
+
+            return new StepResult
+            {
+                Outcome = StepOutcome.InvalidTransition,
+                RmaId = rmaId,
+                RmaNumber = request.RmaNumber,
+                Message = "This return was changed by someone else while you were confirming it, "
+                    + "so nothing was saved. Open it again to see where it stands.",
+                Status = current?.Status ?? request.Status,
+            };
+        }
 
         return new StepResult
         {
@@ -1040,6 +1088,42 @@ public sealed partial class RmaWorkflow(
         string.IsNullOrEmpty(value) || value.Length <= max
             ? value ?? string.Empty
             : string.Concat(value.AsSpan(0, max - 1), "…");
+
+    /// <summary>
+    /// Commits one step, turning a lost race into the refusal the wizard already renders.
+    /// </summary>
+    /// <remarks>
+    /// The token sits on the row, so it covers every step that writes one — not only the steps it
+    /// was added for. Without this, a conflicting triage, problems, shipping or payment step would
+    /// escape to the host as an unhandled fault, where every other stale page is a message.
+    /// </remarks>
+    private async Task<StepResult?> TryCommitAsync(
+        RmaRequest request,
+        string step,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await CommitAsync(cancellationToken);
+            return null;
+        }
+        catch (ConcurrencyConflictException)
+        {
+            // Where the row actually is now, not where this attempt meant to put it: the save was
+            // rolled back, so the caller's copy is the stale one.
+            var current = await LoadAsync(request.Id, cancellationToken);
+
+            return new StepResult
+            {
+                Outcome = StepOutcome.InvalidTransition,
+                RmaId = request.Id,
+                RmaNumber = request.RmaNumber,
+                Message = $"This return was changed by someone else while you were completing the "
+                    + $"{step} step, so nothing was saved. Open it again to see where it stands.",
+                Status = current?.Status ?? request.Status,
+            };
+        }
+    }
 
     /// <summary>
     /// Commits the changes staged on the context this request's repositories share.

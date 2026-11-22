@@ -779,6 +779,12 @@ namespace AIEnabledRma.Data.Migrations
                         .HasColumnType("character varying(32)")
                         .HasColumnName("rma_number");
 
+                    b.Property<uint>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.Property<Guid?>("ShipToAddressId")
                         .HasColumnType("uuid")
                         .HasColumnName("ship_to_address_id");
