@@ -186,6 +186,28 @@ Against the bundled fake gateway every process starts with an empty authorisatio
 development run reports those transactions as unanswered rather than as disagreements — that is the
 fake's memory, not the command's judgement; against Stripe the same run is the real check.
 
+### Audit payments
+
+`audit-payments` is the sweep that finds a capture or a void the two sides disagree about, whichever
+side is wrong. It compares every return carrying a transaction with the provider and has no staleness
+window, because the shape it exists for is a capture whose row write lost a race: the money moved, the
+row still says `Received`, and that row was written seconds ago — the one case `reconcile-payments`
+skips on purpose, since its window is what tells a lost delivery from a slow one.
+
+```bash
+dotnet run --project tools/DbAdmin -- audit-payments            # every return carrying a transaction
+dotnet run --project tools/DbAdmin -- audit-payments --take 50  # the first 50, and the report says so
+```
+
+Each drifting line starts with the side that holds the capture or void. `provider only` means the
+money moved and this database never recorded it; `row only` means the return claims a capture the
+provider never took, which is a customer told they paid when they did not; `mismatch` means both hold
+one and they are not the same. It files nothing and changes nothing — `reconcile-payments` is the
+command that files review items — so exit code 3 means drift was found, 2 means the provider could not
+be asked about something, and 0 means every transaction agreed. Against the bundled fake gateway every
+process starts with an empty authorisation book, so a development run reports those transactions as
+unanswered rather than as drift; against Stripe it is the real comparison.
+
 ### Restore drill
 
 A dump is a backup only if it can be restored into a database this application can migrate and read
