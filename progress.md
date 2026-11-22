@@ -485,3 +485,34 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
 - **Gates for this change:** `./scripts/verify-all.sh suite restore` end to end — suite 537 passed,
   0 skipped, 0 failed, EF model check and vulnerability audit clean; then the drill: 38,265-byte
   dump, scratch database at the current schema, every row count matched, "all requested gates passed".
+- **`DbAdmin reconcile-payments` asks the provider what became of a stale authorisation.** Webhook
+  dedupe stopped a delivery being handled twice; nothing compared this database with the provider,
+  so a delivery that was lost, rejected or never configured left a return "authorised" forever while
+  the money had already moved, and no row recorded that anybody had looked. `IPaymentGateway` gained
+  the one read-only call it was missing (`GetAsync`) implemented for Stripe (a GET of the
+  PaymentIntent: succeeded → Captured, requires_capture → Authorized, canceled → Voided, anything
+  else → Failed) and for the bundled fake; `IRmaRepository` gained the query that names the
+  candidates, untouched rows carrying a transaction. `PaymentReconciler` derives the expected state
+  from the return's own status — captured for InRepair and beyond, voided for a cancelled one,
+  authorised before that — files a `payment-mismatch` review item where the provider disagrees, and
+  never writes the return itself. One open item per return keeps a nightly run from burying the
+  queue; resolving it lets a later run file again. A provider that cannot answer is reported, not
+  filed: an unanswered question is not a disagreement. Exit code 2 says exactly that.
+- **The fake gateway keeps a voided record instead of forgetting it.** `VoidAsync` removed the
+  authorisation, so the one provider in the repository answered "unknown" for a transaction it had
+  just cancelled; a real provider still reports `canceled`. The fake now marks the record Voided and
+  keeps it, which is what made the disagreement path testable at all.
+- **DbAdmin honours `ASPNETCORE_ENVIRONMENT`.** The generic host only reads `DOTNET_ENVIRONMENT`, so
+  every script here that sets the ASP.NET variable was running the tool as Production: `reset
+  --force` and the bundled payment gateway both refused for a reason unrelated to the request.
+  `DOTNET_ENVIRONMENT` still wins.
+- **Tests:** `PaymentReconciliationTests` runs against the bundled fake gateway and PostgreSQL — a
+  capture the webhook never reported is filed for review, an authorisation that still matches files
+  nothing, a provider-side void is filed while the row looks active, an unanswerable transaction is
+  reported and not filed, rows inside the window are not asked about, a second run does not file the
+  same item twice, and a resolved item lets it be filed again. `DbAdminReconcileReportTests` pins the
+  printed output. Mutation-checked: making the comparison always agree and dropping the dedupe fails
+  four of them.
+- **Gates for this change:** `suite` 547 passed, 0 skipped, 0 failed; the command run end to end
+  against a seeded database — clean run says so and exits 0, one stale row the gateway has never
+  heard of is reported as unanswered and exits 2 with nothing filed.

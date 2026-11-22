@@ -128,11 +128,45 @@ public sealed class StripePaymentGateway(
         return Result<PaymentReceipt>.Success(new PaymentReceipt
         {
             TransactionId = authorizationId,
-            Purpose = Enum.TryParse<PaymentPurpose>(
-                intent.TryGetProperty("metadata", out var meta) && meta.TryGetProperty("purpose", out var p) ? p.GetString() : null,
-                out var purpose) ? purpose : PaymentPurpose.Deposit,
+            Purpose = PurposeOf(intent),
             Amount = amount,
             Status = PaymentStatus.Captured,
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+        });
+    }
+
+    /// <summary>
+    /// Reads the intent back. This is the only call here that changes nothing, and the only one that
+    /// can find a delivery Stripe sent and this application never received.
+    /// </summary>
+    public async Task<Result<PaymentReceipt>> GetAsync(string transactionId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(transactionId);
+
+        var (ok, body, error) = await GetJsonAsync(
+            $"v1/payment_intents/{Uri.EscapeDataString(transactionId)}", cancellationToken);
+        if (!ok)
+        {
+            return Result<PaymentReceipt>.Failure("stripe_error", error);
+        }
+
+        var intent = body!.RootElement;
+        var currency = intent.GetProperty("currency").GetString()!.ToUpperInvariant();
+
+        return Result<PaymentReceipt>.Success(new PaymentReceipt
+        {
+            TransactionId = transactionId,
+            Purpose = PurposeOf(intent),
+            Amount = FromMinorUnits(intent.GetProperty("amount").GetInt64(), currency),
+            Status = intent.GetProperty("status").GetString() switch
+            {
+                "succeeded" => PaymentStatus.Captured,
+                "requires_capture" => PaymentStatus.Authorized,
+                "canceled" => PaymentStatus.Voided,
+                // requires_action, processing, requires_payment_method: an intent that will not
+                // settle on its own, which reconciliation reports rather than repairs.
+                _ => PaymentStatus.Failed,
+            },
             CreatedAtUtc = DateTimeOffset.UtcNow,
         });
     }
@@ -158,6 +192,11 @@ public sealed class StripePaymentGateway(
     public static Money FromMinorUnits(long minor, string currency) =>
         new(ZeroDecimalCurrencies.Contains(currency) ? minor : minor / 100m, currency);
 
+    private static PaymentPurpose PurposeOf(JsonElement intent) =>
+        Enum.TryParse<PaymentPurpose>(
+            intent.TryGetProperty("metadata", out var meta) && meta.TryGetProperty("purpose", out var p) ? p.GetString() : null,
+            out var purpose) ? purpose : PaymentPurpose.Deposit;
+
     private static PaymentReceipt Receipt(string id, PaymentAuthorizationRequest request, PaymentStatus status) => new()
     {
         TransactionId = id,
@@ -166,6 +205,25 @@ public sealed class StripePaymentGateway(
         Status = status,
         CreatedAtUtc = DateTimeOffset.UtcNow,
     };
+
+    private async Task<(bool Ok, JsonDocument? Body, string Error)> GetJsonAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.Value.SecretKey);
+
+        using var response = await http.SendAsync(request, cancellationToken);
+        var text = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (response.IsSuccessStatusCode)
+        {
+            return (true, JsonDocument.Parse(text), string.Empty);
+        }
+
+        logger.LogWarning("Stripe {Path} failed with {Status}.", path, (int)response.StatusCode);
+        return (false, null, ErrorMessage(text));
+    }
 
     private async Task<(bool Ok, JsonDocument? Body, string Error)> PostAsync(
         string path,
@@ -185,23 +243,28 @@ public sealed class StripePaymentGateway(
             return (true, JsonDocument.Parse(text), string.Empty);
         }
 
-        // Stripe's error message is shown to an operator or turned into a refusal; it never
-        // contains the card number.
-        string message;
+        logger.LogWarning("Stripe {Path} failed with {Status}.", path, (int)response.StatusCode);
+        return (false, null, ErrorMessage(text));
+    }
+
+    /// <summary>
+    /// Stripe's message, shown to an operator or turned into a refusal. It never contains the card
+    /// number, and a body that is not the documented shape falls back to one sentence rather than
+    /// throwing out of a reconciliation run.
+    /// </summary>
+    private static string ErrorMessage(string text)
+    {
         try
         {
             using var error = JsonDocument.Parse(text);
-            message = error.RootElement.GetProperty("error").TryGetProperty("message", out var m)
-                ? m.GetString() ?? "The payment provider refused the request."
+            return error.RootElement.GetProperty("error").TryGetProperty("message", out var message)
+                ? message.GetString() ?? "The payment provider refused the request."
                 : "The payment provider refused the request.";
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {
-            message = "The payment provider refused the request.";
+            return "The payment provider refused the request.";
         }
-
-        logger.LogWarning("Stripe {Path} failed with {Status}.", path, (int)response.StatusCode);
-        return (false, null, message);
     }
 }
 

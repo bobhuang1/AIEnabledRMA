@@ -26,6 +26,23 @@ public sealed class RmaRepository(RmaDbContext db) : IRmaRepository
             .OrderByDescending(r => r.CreatedAtUtc)
             .ToListAsync(cancellationToken);
 
+    /// <summary>
+    /// Untracked on purpose: reconciliation reports on the row and files its own review item, so a
+    /// tracked aggregate would invite a status write from a run that is only supposed to look.
+    /// </summary>
+    public async Task<IReadOnlyList<RmaRequest>> StalePaymentAuthorisationsAsync(
+        DateTimeOffset unchangedSince,
+        int take,
+        CancellationToken cancellationToken) =>
+        await _db.RmaRequests
+            .AsNoTracking()
+            .Where(r => r.PaymentTransactionId != null && r.UpdatedAtUtc <= unchangedSince)
+            // A draft has no transaction yet; a rejected return never reached the payment step.
+            .Where(r => r.Status != RmaRequestStatus.Draft && r.Status != RmaRequestStatus.Rejected)
+            .OrderBy(r => r.UpdatedAtUtc)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+
     public async Task<IReadOnlyList<RmaRequest>> GetOpenForDeviceAsync(
         Guid deviceId,
         CancellationToken cancellationToken) =>

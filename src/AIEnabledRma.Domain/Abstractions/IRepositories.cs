@@ -195,6 +195,18 @@ public interface IRmaRepository
 
     /// <summary>Allocates the next human-facing reference. Implementations must be retry-safe.</summary>
     Task<string> NextRmaNumberAsync(DateOnly today, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Returns holding a payment transaction whose row has not been written since
+    /// <paramref name="unchangedSince"/>: what a reconciliation run looks at. A webhook that arrived
+    /// would have touched the row, so an untouched row carrying an authorisation is the shape of a
+    /// delivery that was lost. Untracked, because reconciliation reads the row and writes only its
+    /// own review item.
+    /// </summary>
+    Task<IReadOnlyList<RmaRequest>> StalePaymentAuthorisationsAsync(
+        DateTimeOffset unchangedSince,
+        int take,
+        CancellationToken cancellationToken);
 }
 
 public interface IUnitOfWork

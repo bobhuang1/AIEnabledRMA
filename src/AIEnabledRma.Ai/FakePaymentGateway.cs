@@ -102,16 +102,47 @@ public sealed class FakePaymentGateway(
         }
     }
 
+    /// <summary>
+    /// What the fake gateway would tell a reconciliation run. Its state is the in-memory record of
+    /// what was authorised, captured or voided here, so a test can move money at the gateway without
+    /// writing the application's row — which is exactly the state a lost webhook leaves behind.
+    /// </summary>
+    public Task<Result<PaymentReceipt>> GetAsync(string transactionId, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            return Task.FromResult(_authorizations.TryGetValue(transactionId, out var known)
+                ? Result<PaymentReceipt>.Success(known.Receipt)
+                : Result<PaymentReceipt>.Failure(
+                    "unknown_authorization",
+                    "That authorisation could not be found."));
+        }
+    }
+
+    /// <summary>
+    /// Releases an authorisation and keeps the record, marked voided.
+    /// </summary>
+    /// <remarks>
+    /// A real provider still answers for a cancelled intent, and reconciliation depends on that: a
+    /// release the application never heard about is found by asking. Removing the row instead made
+    /// the fake the one provider that forgets a void, which turned a reportable disagreement into an
+    /// unanswerable question.
+    /// </remarks>
     public Task<Result> VoidAsync(string authorizationId, CancellationToken cancellationToken)
     {
         lock (_gate)
         {
-            if (_authorizations.Remove(authorizationId))
+            if (_authorizations.TryGetValue(authorizationId, out var existing)
+                && existing.Receipt.Status != PaymentStatus.Voided)
             {
+                _authorizations[authorizationId] = existing
+                    with { Receipt = existing.Receipt with { Status = PaymentStatus.Voided } };
+
                 return Task.FromResult(Result.Success());
             }
         }
 
+        // Already voided, or never known: releasing twice is not a second release.
         return Task.FromResult(Result.Failure(
             "unknown_authorization",
             "That authorisation could not be found."));

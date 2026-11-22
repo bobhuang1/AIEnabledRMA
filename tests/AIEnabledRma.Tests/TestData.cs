@@ -270,6 +270,14 @@ internal sealed class FakeRmaRepository : IRmaRepository
 
     public Task<string> NextRmaNumberAsync(DateOnly on, CancellationToken cancellationToken = default) =>
         Task.FromResult($"RMA-{on.Year}-99999");
+
+    public Task<IReadOnlyList<RmaRequest>> StalePaymentAuthorisationsAsync(
+        DateTimeOffset unchangedSince, int take, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<RmaRequest>>(
+            Requests
+                .Where(r => r.PaymentTransactionId is not null && r.UpdatedAtUtc <= unchangedSince)
+                .Take(take)
+                .ToList());
 }
 
 /// <summary>A stub model that returns a canned completion, for pipeline tests.</summary>
@@ -362,6 +370,15 @@ internal sealed class FakePaymentGateway : IPaymentGateway
 
     public Task<Result> VoidAsync(string authorizationId, CancellationToken cancellationToken = default) =>
         Task.FromResult(Result.Success());
+
+    /// <summary>What this double's provider would answer a reconciliation run with.</summary>
+    public Dictionary<string, PaymentReceipt> ProviderState { get; } = new(StringComparer.Ordinal);
+
+    public Task<Result<PaymentReceipt>> GetAsync(
+        string transactionId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(ProviderState.TryGetValue(transactionId, out var receipt)
+            ? Result<PaymentReceipt>.Success(receipt)
+            : Result<PaymentReceipt>.Failure("unknown_authorization", "That authorisation could not be found."));
 }
 
 /// <summary>Forces a specific decision, so workflow tests can exercise paths the real policy

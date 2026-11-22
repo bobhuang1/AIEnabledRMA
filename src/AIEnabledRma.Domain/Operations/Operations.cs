@@ -45,6 +45,13 @@ public static class ReviewSources
     public const string PolicyHumanReview = "policy-human-review";
     public const string TriageLowConfidence = "triage-low-confidence";
     public const string PaymentFailed = "payment-failed";
+
+    /// <summary>
+    /// The provider and this database disagree about a transaction that already exists. Different
+    /// from <see cref="PaymentFailed"/>, which is an authorisation the provider refused: nothing
+    /// moved there, while here something may have moved unrecorded.
+    /// </summary>
+    public const string PaymentMismatch = "payment-mismatch";
 }
 
 public static class ReviewStatuses

@@ -161,6 +161,31 @@ it deletes the row that was just written. Raising `RmaPolicy:ReturnWindowDays` i
 not move the retention window with it; the two are equal at their defaults, and moving one without the
 other is a decision for whoever changes it.
 
+### Reconcile payments
+
+A webhook is the fast path: the provider reports a capture and the return moves. A delivery that was
+lost, rejected or never configured leaves the opposite state — the money has moved at the provider,
+the row still says the deposit is only authorised, and nothing records that anybody asked.
+`reconcile-payments` asks.
+
+```bash
+# returns carrying a transaction, untouched for the six-hour default window
+dotnet run --project tools/DbAdmin -- reconcile-payments
+dotnet run --project tools/DbAdmin -- reconcile-payments --older-than 24 --take 50
+```
+
+It reads those returns, asks the gateway what each transaction became, and files a `payment-mismatch`
+review item where the answer is not what the return's own status implies: captured for a return in
+repair or beyond, voided for a cancelled one, still authorised before that. It never changes a
+return — the operator reads the item and decides — and it files at most one open item per return, so
+a nightly run does not bury the queue in the same sentence; resolving the item lets a later run file
+it again. Exit code 2 means the provider could not be asked about something and nothing was filed for
+it, which is a different answer from "nothing was wrong".
+
+Against the bundled fake gateway every process starts with an empty authorisation book, so a
+development run reports those transactions as unanswered rather than as disagreements — that is the
+fake's memory, not the command's judgement; against Stripe the same run is the real check.
+
 ### Restore drill
 
 A dump is a backup only if it can be restored into a database this application can migrate and read

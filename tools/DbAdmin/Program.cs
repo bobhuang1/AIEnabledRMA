@@ -29,6 +29,9 @@ using Microsoft.Extensions.Options;
 //                                chunk, embed and publish the knowledge base to the pgvector store
 //   DbAdmin kb-cases --file <cases.json> [--report <path>] [--publish --reviewed-by <name>]
 //                                redact resolved CRM cases; dry run by default (report only)
+//   DbAdmin reconcile-payments [--older-than <hours>] [--take <n>]
+//                                ask the provider about stale authorisations and file a review item
+//                                where its answer disagrees with the stored return
 
 // The content root defaults to the current working directory, which would make the tool
 // fail with a bare "ConnectionStrings:Rma is not configured" when it is run as
@@ -41,12 +44,34 @@ var options = new HostApplicationBuilderSettings
 };
 
 var builder = Host.CreateApplicationBuilder(options);
+
+// The generic host reads DOTNET_ENVIRONMENT; the hosts in this repository and every script that
+// drives this tool set ASPNETCORE_ENVIRONMENT. Left alone, a run that says Development is
+// Production here, which refuses `reset --force` and the bundled payment gateway for a reason that
+// has nothing to do with what was asked for. DOTNET_ENVIRONMENT still wins, because it is the
+// variable this builder actually documents.
+builder.Environment.EnvironmentName =
+    Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT")
+    ?? Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+    ?? builder.Environment.EnvironmentName;
 builder.Services.AddRmaDbContext(builder.Configuration);
 builder.Services.AddEmbeddingModel(builder.Configuration);
 builder.Services.AddSingleton(_ => Npgsql.NpgsqlDataSource.Create(
     builder.Configuration.GetConnectionString("Rma")
     ?? throw new InvalidOperationException("ConnectionStrings:Rma is not configured.")));
 builder.Services.AddSingleton<PgVectorKnowledgeStore>();
+
+// What reconciliation needs: the read boundary, the unit of work, the review queue and the
+// provider. The gateway comes from the same registration the hosts use, so a deployment runs this
+// against Stripe and a developer runs it against the bundled fake.
+builder.Services.AddScoped<AIEnabledRma.Domain.Abstractions.IRmaRepository, RmaRepository>();
+builder.Services.AddScoped<AIEnabledRma.Domain.Abstractions.IUnitOfWork, EfUnitOfWork>();
+builder.Services.AddScoped<IOperationsRepository, EfOperationsRepository>();
+builder.Services.AddSingleton<IReviewQueue, EfReviewQueue>();
+builder.Services.AddSingleton<IClock, SystemClock>();
+builder.Services.AddScoped<PaymentReconciler>();
+builder.Services.AddPaymentGateway(
+    builder.Configuration, builder.Environment.IsDevelopment(), builder.Environment.IsProduction());
 builder.Services.AddOptions<ChunkingOptions>().Bind(builder.Configuration.GetSection(ChunkingOptions.SectionName));
 builder.Services.AddOptions<KnowledgeBaseOptions>().Bind(builder.Configuration.GetSection(KnowledgeBaseOptions.SectionName));
 
@@ -258,8 +283,58 @@ switch (command)
         return report.Published is { Activated: false } ? 2 : 0;
     }
 
+    case "reconcile-payments":
+    {
+        var olderThanHours = PaymentReconciler.DefaultStaleAfter.TotalHours;
+        var take = PaymentReconciler.DefaultTake;
+
+        for (var i = 1; i < args.Length; i++)
+        {
+            var flag = args[i].ToLowerInvariant();
+            var value = i + 1 < args.Length ? args[i + 1] : null;
+
+            if (flag == "--older-than" && value is not null
+                && double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var hours)
+                && hours > 0)
+            {
+                olderThanHours = hours;
+                i++;
+                continue;
+            }
+
+            if (flag == "--take" && value is not null
+                && int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var count)
+                && count > 0)
+            {
+                take = count;
+                i++;
+                continue;
+            }
+
+            // A mistyped flag must not fall back to the default window: reconciling the wrong set of
+            // returns looks exactly like reconciling the right one, and reports nothing wrong.
+            Console.Error.WriteLine(
+                $"reconcile-payments does not understand '{args[i]}'. Use --older-than <hours> and/or --take <count>.");
+            return 1;
+        }
+
+        var report = await scope.ServiceProvider.GetRequiredService<PaymentReconciler>()
+            .RunAsync(TimeSpan.FromHours(olderThanHours), take, CancellationToken.None);
+
+        foreach (var line in ReconcilePaymentsReport.Format(report))
+        {
+            Console.WriteLine(line);
+        }
+
+        Console.WriteLine(ReconcilePaymentsReport.Summary(report));
+
+        // 2, not 1: nothing crashed, the provider simply could not answer everything, and a
+        // scheduler should treat that as "ask again" rather than "the command is broken".
+        return report.Unanswered.Count > 0 ? 2 : 0;
+    }
+
     default:
-        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats|prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events]|kb-ingest [--rebuild] [--path <dir>]|kb-cases --file <json> [--report <path>] [--publish --reviewed-by <name>]>");
+        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats|reconcile-payments [--older-than <hours>] [--take <n>]|prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events]|kb-ingest [--rebuild] [--path <dir>]|kb-cases --file <json> [--report <path>] [--publish --reviewed-by <name>]>");
         return 1;
 }
 

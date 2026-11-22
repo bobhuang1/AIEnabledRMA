@@ -26,6 +26,13 @@ public interface IPaymentGateway
 
     /// <summary>Releases an authorisation without taking money. Used on RMA cancellation.</summary>
     Task<Result> VoidAsync(string authorizationId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Asks the provider what a transaction's state is now. Every other call on this interface is
+    /// a request to change something; this one is how a lost webhook is found, because a delivery
+    /// that never arrived leaves the local row saying Authorised for as long as nobody asks.
+    /// </summary>
+    Task<Result<PaymentReceipt>> GetAsync(string transactionId, CancellationToken cancellationToken);
 }
 
 /// <summary>
