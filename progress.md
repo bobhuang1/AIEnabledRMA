@@ -417,3 +417,27 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
 - **Gate for this change:** `suite` 518 passed, 0 skipped, 0 failed; EF model check clean ("No
   changes have been made to the model since the last migration"); vulnerability audit clean for all
   nine projects.
+- **A restore drill, and readiness a proxy can act on.** `scripts/restore-drill.sh` (also
+  `scripts/verify-all.sh restore`) starts a throwaway PostgreSQL from the pack's own image, seeds it
+  through `DbAdmin seed`, dumps it with `pg_dump -Fc`, copies the file out of the container and back,
+  restores it into a second database with `pg_restore --exit-on-error`, migrates that database and
+  requires nothing left pending, then reads every row count back through `DbAdmin stats` and diffs
+  them against the source. `--exit-on-error` is there because `pg_restore` otherwise reports a skipped
+  object and exits zero — the failure that turns a half-restored backup into a green drill. The drill
+  refuses to pass on an empty source, so a seeder that stopped writing cannot make it prove nothing.
+- **Readiness, not liveness.** `web`, `mcp` and `rag` share one `x-http-readiness` healthcheck that
+  asks `/health` for an HTTP 200, and `proxy` now waits for `service_healthy` on both services it
+  fronts. The probe is bash `/dev/tcp` because no image carries curl and installing it into three
+  production images to answer one question is a cost this repository declined. The MCP host gained an
+  unauthenticated `/health` that answers only `{"status":"ok"}`: a probe cannot present a token,
+  and unlike the web host's endpoint there is no corpus or model name to withhold behind a key.
+- **Tests:** `ProductionPackReadinessTests` asserts the probe on all three services, that it asks for
+  200 rather than a port, that it needs no package the images lack, that all three hosts map the path
+  it calls, and that the proxy waits on health; `RestoreDrillScriptTests` pins the dump/restore/migrate/
+  compare steps and the empty-source refusal; `McpHttpTransportTests` proves `/health` answers without
+  a token and exposes exactly one property. Mutation-checked twice: removing the web service's probe
+  fails the pack test, and pointing `pg_restore` at the seeded database instead of the scratch one
+  makes the drill fail on the count comparison (0 rows restored, 2 checks failed).
+- **Gates for this change:** `suite` 533 passed, 0 skipped, 0 failed; EF model check clean;
+  vulnerability audit clean for all nine projects. `restore` end to end: 38,265-byte dump, scratch
+  database at the current schema, every row count matched.

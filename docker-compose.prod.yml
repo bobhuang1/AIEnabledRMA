@@ -19,6 +19,22 @@ x-app-env: &app-env
   ASPNETCORE_ENVIRONMENT: Production
   ConnectionStrings__Rma: Host=postgres;Port=5432;Database=${POSTGRES_DB:-rmaprod};Username=${POSTGRES_USER:?set POSTGRES_USER};Password=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
 
+# Readiness for the three application services: an HTTP 200 from /health, not "the container is
+# running". A process that is alive but still loading, or one stuck on a dependency, is exactly the
+# state a proxy should not route to, and `depends_on`'s default condition cannot tell it apart.
+#
+# Deliberately not curl: none of these images carries curl, and installing it to run a probe would
+# add a package to three production images to answer one question. bash and grep are in the Debian
+# base, and bash's /dev/tcp is enough to send the request and read the status line back.
+x-http-readiness: &http-readiness
+  test: ["CMD", "bash", "-c", 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && grep -q "^HTTP/1.1 200" <&3']
+  interval: 10s
+  timeout: 5s
+  retries: 6
+  # Generous, because a host that is still loading its corpus is not broken and a restart loop in
+  # the first seconds would report it as one.
+  start_period: 20s
+
 services:
   proxy:
     image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
@@ -33,7 +49,11 @@ services:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
-    depends_on: [web, mcp]
+    depends_on:
+      web:
+        condition: service_healthy
+      mcp:
+        condition: service_healthy
     restart: unless-stopped
 
   postgres:
@@ -84,6 +104,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck: *http-readiness
 
   mcp:
     <<: *hardening
@@ -104,6 +125,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck: *http-readiness
 
   # Local embedding model (D4). Internal only; pull the model once:
   #   docker compose -f docker-compose.prod.yml exec ollama ollama pull nomic-embed-text
@@ -121,6 +143,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       Rag__Admin__ApiKey: ${RAG_ADMIN_KEY:?set RAG_ADMIN_KEY}
+    healthcheck: *http-readiness
 
 volumes:
   ollama:

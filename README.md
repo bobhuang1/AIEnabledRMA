@@ -157,6 +157,27 @@ it deletes the row that was just written. Raising `RmaPolicy:ReturnWindowDays` i
 not move the retention window with it; the two are equal at their defaults, and moving one without the
 other is a decision for whoever changes it.
 
+### Restore drill
+
+A dump is a backup only if it can be restored into a database this application can migrate and read
+back. `scripts/restore-drill.sh` proves that end to end: throwaway PostgreSQL, seeded through
+`DbAdmin seed`, dumped with `pg_dump -Fc`, the file copied out of the container and back, restored
+into a second database with `pg_restore --exit-on-error`, migrated with nothing left pending, and
+every row count read back through the application's own context and compared with the source.
+
+```bash
+scripts/restore-drill.sh            # or: scripts/verify-all.sh restore
+```
+
+It is not in the default gate because it publishes `DbAdmin` and moves a dump through two
+containers; `KEEP=1` leaves the container and the dump behind for inspection. The production pack's
+`web`, `mcp` and `rag` services carry a readiness check that asks their own `/health` for an HTTP 200,
+and `proxy` waits for `service_healthy` before it fronts them. The probe uses bash's `/dev/tcp`
+rather than curl, because none of these images ships curl and a package installed into three
+production images to answer one question is a cost already declined. The MCP host's `/health` is
+unauthenticated and answers only `{"status":"ok"}`: a probe cannot present a token, and that host
+has no corpus or model detail to name.
+
 ## Run the web wizard
 
 ```bash

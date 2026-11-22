@@ -10,6 +10,11 @@
 # Usage:
 #   scripts/verify-all.sh                # all three, build-and-test first
 #   scripts/verify-all.sh suite auth     # a subset, in the order given
+#   scripts/verify-all.sh restore        # the backup drill: dump, restore, migrate, read back
+#
+# `restore` is not in the default set and is not in CI yet: it publishes DbAdmin and moves a dump
+# through a container, which is minutes rather than seconds. It is here so the drill runs the same
+# way every other gate does, from this script, rather than from someone's memory of a README.
 #
 # Environment:
 #   SDK_IMAGE  container the suite runs in (default mcr.microsoft.com/dotnet/sdk:10.0). There is no
@@ -131,6 +136,11 @@ images() {
     ./scripts/verify-images.sh
 }
 
+restore() {
+    step "restore: dump a seeded database, restore it into a scratch one, migrate and query it"
+    ./scripts/restore-drill.sh
+}
+
 if [ "$#" -eq 0 ]; then
     set -- suite auth images
 fi
@@ -140,7 +150,8 @@ for requested in "$@"; do
         suite) suite ;;
         auth) auth ;;
         images) images ;;
-        *) fail "unknown step" "$requested (expected suite, auth or images)" ;;
+        restore) restore ;;
+        *) fail "unknown step" "$requested (expected suite, auth, images or restore)" ;;
     esac
 done
 

@@ -205,6 +205,31 @@ public sealed class McpHttpTransportTests
     }
 
     /// <summary>
+    /// The readiness probe a deployment runs has no token to present, so <c>/health</c> has to
+    /// answer without one, and it has to say nothing beyond liveness: it is the one route on this
+    /// host that anyone who can reach the port may read.
+    /// </summary>
+    [Fact]
+    public async Task The_health_endpoint_answers_without_a_token_and_says_nothing_else()
+    {
+        using var app = await BuildHostAsync();
+        using var client = app.GetTestClient();
+
+        using var response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var json = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal("ok", json.RootElement.GetProperty("status").GetString());
+
+        // Exactly one property: a probe that named tools, issuers or allowed clients would be an
+        // anonymous inventory of the deployment.
+        Assert.Single(json.RootElement.EnumerateObject());
+    }
+
+    /// <summary>
     /// The audit row's caller as it reaches the table: a real <c>tools/call</c> over HTTP, a token
     /// naming a client and a subject, and the row read back from <c>mcp_tool_calls</c>.
     /// </summary>

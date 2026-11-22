@@ -88,6 +88,13 @@ public static class McpHttpHost
         app.UseAuthentication();
         app.UseAuthorization();
 
+        // Readiness, before the token check and with nothing behind it. A compose health probe runs
+        // inside the container with no token to present, and this host has no corpus or model detail
+        // worth protecting — unlike the web host's /health, which names both behind an operator key.
+        // It answers 200 from the moment the pipeline is serving, which is the thing a proxy should
+        // wait for before it sends traffic here.
+        app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
         app.MapMcp(http.Path).RequireAuthorization(McpHttpAuthentication.PolicyName);
 
         // RFC 9728 discovery, served without a token because it describes how to get one. Both
