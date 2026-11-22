@@ -395,6 +395,15 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   PDB), `Microsoft.EntityFrameworkCore.Abstractions.dll` (34,616) and `EFCore.NamingConventions.dll` (29,184).
   `Npgsql.dll` stays because the host opens PostgreSQL directly, `AIEnabledRma.Domain.dll` grew 11,264 bytes as
   the moved rule compiled into it, and the corpus is unchanged at 19 articles plus README and `REVIEWED.sha256`.
+  Recheck the whole comparison with one command: `scripts/rag-image-diff.sh 05f80b5 8e74e61` builds both
+  trees from `git archive` through each commit's own Dockerfile, sums the image's layer blobs (a saved
+  layer is a compressed blob, so the uncompressed figure is the layer decompressed) and prints the
+  app-layer and whole-image deltas plus the assembly diff. Re-run on 2026-11-22 it reproduces the app
+  layer exactly (8,396,288 -> 2,346,496, -72.1%; 2,915,899 -> 889,554), the same six removed assemblies at
+  the same byte sizes, the same +11,264 on `AIEnabledRma.Domain.dll`, exactly one differing layer (the
+  `COPY /app` layer, index 7) and `/app` 10 -> 4 assemblies; the whole-image compressed sum reads
+  106,883,242 -> 104,856,897, whose -2,026,345 delta is 7 bytes from the -2,026,338 recorded above, the
+  totals differing because the hand run summed one more blob.
 - **Two writers on one return no longer both win.** `RmaRequest` gained `RowVersion`, mapped to
   PostgreSQL's `xmin` system column (`IsRowVersion()`), so every update carries `WHERE xmin = <the
   value that was read>` and a write built from a stale read is refused instead of silently

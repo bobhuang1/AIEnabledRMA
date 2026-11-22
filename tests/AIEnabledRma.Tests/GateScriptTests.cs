@@ -184,6 +184,47 @@ public sealed class GateScriptTests
     }
 
     /// <summary>
+    /// The image comparison that answered "what did the ORM move actually buy" was made by hand, so
+    /// the answer lived in somebody's shell history. This pins the script that reproduces it and the
+    /// progress entry that points at it: a number nobody can rerun is a number about the last time
+    /// somebody remembered the commands.
+    /// </summary>
+    [Fact]
+    public void The_rag_image_comparison_is_one_command_and_the_progress_entry_names_it()
+    {
+        var script = Script("rag-image-diff.sh");
+
+        // Two revisions, each built from its own archived tree. A script that compared a revision
+        // against the working tree would measure uncommitted work as well, which is the failure this
+        // replaces.
+        Assert.Contains("[ \"$#\" -eq 2 ]", script, StringComparison.Ordinal);
+        Assert.Contains("git archive --format=tar", script, StringComparison.Ordinal);
+        Assert.Contains("src/AIEnabledRma.Rag/Dockerfile", script, StringComparison.Ordinal);
+
+        // The bytes come from the image's own layers, not from the size docker prints rounded: the
+        // move this measures was just under 2% of the pull, which that column cannot show at all.
+        Assert.Contains("docker save", script, StringComparison.Ordinal);
+
+        // A saved layer is the compressed blob itself, so the uncompressed figure has to come from
+        // decompressing it. Summing the blobs and calling that "uncompressed" puts the compression
+        // number on both lines and makes two measurements of one quantity look like a saving.
+        Assert.Contains("gzip.decompress", script, StringComparison.Ordinal);
+        // The whole label, not the words "app layer": the header comment carries those too, and a
+        // mutation that deleted the printed line passed every assertion when it was matched that way.
+        Assert.Contains("app layer (COPY --from=build /app", script, StringComparison.Ordinal);
+        Assert.Contains("whole image", script, StringComparison.Ordinal);
+        Assert.Contains("AIEnabledRma.Rag.dll", script, StringComparison.Ordinal);
+
+        // A differing layer outside the app layer means the app-layer delta is not the whole story,
+        // and the script says so rather than printing a tidy number.
+        Assert.Contains("a layer outside it changed", script, StringComparison.Ordinal);
+
+        var progress = File.ReadAllText(Path.Combine(RepositoryRoot(), "progress.md"));
+
+        Assert.Contains("scripts/rag-image-diff.sh 05f80b5 8e74e61", progress, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The production pack has to resolve. It is a compose file whose required values are all
     /// placeholders in the example env; a renamed variable or a broken anchor turns a deployment into
     /// a parse error, and nothing else in this repository reads that file. Resolving and starting are
