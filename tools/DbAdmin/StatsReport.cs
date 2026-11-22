@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using AIEnabledRma.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -67,6 +68,34 @@ public static class StatsReport
             .Select(count => Line(count, AuditWidth)));
 
         return lines;
+    }
+
+    /// <summary>
+    /// The same counts as one JSON object, for a monitor rather than a person.
+    /// </summary>
+    /// <remarks>
+    /// The two groups stay apart here for the reason the blank line separates them in the text: the
+    /// audit tables are the ones that grow between prune runs, and a flat map would make every scraper
+    /// carry the list of four names to find them. An empty group is still written as <c>{}</c>, so a
+    /// monitor's path to <c>audit.webhook_events</c> exists on a fresh database as well as a busy one.
+    /// Compact and single-line on purpose: this is the form a line-based collector reads, and the text
+    /// view above is the one meant for eyes.
+    /// </remarks>
+    public static string ToJson(IReadOnlyList<TableRowCount> counts)
+    {
+        var business = new JsonObject();
+        var audit = new JsonObject();
+
+        foreach (var count in counts)
+        {
+            (IsAudit(count.Table) ? audit : business)[count.Table] = count.Rows;
+        }
+
+        return new JsonObject
+        {
+            ["business"] = business,
+            ["audit"] = audit,
+        }.ToJsonString();
     }
 
     public static bool IsAudit(string table) => AuditTables.Contains(table, StringComparer.Ordinal);

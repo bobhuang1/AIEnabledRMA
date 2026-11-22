@@ -645,3 +645,13 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
 - **Gate:** `suite` 575 passed, 0 skipped, 0 failed, and `./scripts/verify-all.sh restore` ran the
   command the schedule uses: 7 checks, exit 0. Mutation: pointing the schedule at
   `./scripts/restore-drill.sh` instead of the documented command fails the new test.
+- **`DbAdmin stats --json` for a monitor, the table left alone.** The counts were readable only by a
+  person: a monitor had to parse padded lines. `--json` writes the same counts as one compact object,
+  grouped the same way (`{"business":{…},"audit":{…}}`), so growth between prune runs is a field
+  rather than a substring; the text view is byte-for-byte what it was, and the drill's regex over it
+  is untouched. An unknown flag exits 1 rather than falling back to text, because a collector that
+  asked for JSON and got padding parses nothing, or parses a number out of the padding.
+- **Gate:** `suite` 577 passed, 0 skipped, 0 failed. The stats tests are 4/4; against a seeded
+  database the command prints the pinned table unchanged, `stats --json` prints one line and exits 0,
+  and `stats --bogus` writes to stderr and exits 1. Mutation: putting every count in the `business`
+  group fails both new tests.

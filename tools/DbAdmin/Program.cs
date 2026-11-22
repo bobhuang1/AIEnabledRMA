@@ -22,7 +22,8 @@ using Microsoft.Extensions.Options;
 //   DbAdmin migrations          list discovered, applied and pending migrations
 //   DbAdmin seed                 apply migrations, then insert demo data if the catalog is empty
 //   DbAdmin reset --force        drop every table, then migrate and seed
-//   DbAdmin stats                row counts per table, including the four audit tables
+//   DbAdmin stats [--json]       row counts per table, including the four audit tables; --json
+//                                writes the same counts as one object, for a monitor
 //   DbAdmin prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events]
 //                                delete audit rows past their retention window; dry run by default
 //   DbAdmin kb-ingest [--rebuild] [--path <dir>]
@@ -159,8 +160,40 @@ switch (command)
         break;
 
     case "stats":
-        await PrintStatsAsync(db);
+    {
+        var asJson = false;
+
+        foreach (var arg in args.Skip(1))
+        {
+            if (arg.Equals("--json", StringComparison.OrdinalIgnoreCase))
+            {
+                asJson = true;
+                continue;
+            }
+
+            // A mistyped flag must not fall back to the text report: a monitor that asked for JSON and
+            // got padded lines parses nothing, or parses a number out of the padding.
+            Console.Error.WriteLine(
+                $"stats does not understand '{arg}'. Use --json for the counts as one object, or nothing for the table.");
+            return 1;
+        }
+
+        var counts = await StatsReport.ReadAsync(db, CancellationToken.None);
+
+        if (asJson)
+        {
+            Console.WriteLine(StatsReport.ToJson(counts));
+        }
+        else
+        {
+            foreach (var line in StatsReport.Format(counts))
+            {
+                Console.WriteLine(line);
+            }
+        }
+
         break;
+    }
 
     case "prune":
     {
@@ -376,7 +409,7 @@ switch (command)
     }
 
     default:
-        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats|reconcile-payments [--older-than <hours>] [--take <n>]|audit-payments [--take <n>]|prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events]|kb-ingest [--rebuild] [--path <dir>]|kb-cases --file <json> [--report <path>] [--publish --reviewed-by <name>]>");
+        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats [--json]|reconcile-payments [--older-than <hours>] [--take <n>]|audit-payments [--take <n>]|prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events]|kb-ingest [--rebuild] [--path <dir>]|kb-cases --file <json> [--report <path>] [--publish --reviewed-by <name>]>");
         return 1;
 }
 

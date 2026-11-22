@@ -136,10 +136,14 @@ delete production data.
 | `webhook_events` | 90 days | the delivery (`received_at_utc`) |
 
 `DbAdmin stats` prints these four tables after the business ones, because the number an operator wants
-before a prune run is how much has accumulated, not only how many returns exist.
+before a prune run is how much has accumulated, not only how many returns exist. `--json` writes the
+same counts as one object, in the same two groups (`{"business":{…},"audit":{…}}`, one line), so a
+monitor can scrape how fast the audit tables fill between prune runs instead of parsing the padding;
+the text view is unchanged, and is still the one to read.
 
 ```bash
 dotnet run --project tools/DbAdmin -- stats                              # row counts, business and audit
+dotnet run --project tools/DbAdmin -- stats --json                       # the same counts, one JSON object
 dotnet run --project tools/DbAdmin -- prune                              # dry run: counts only
 dotnet run --project tools/DbAdmin -- prune --apply                      # delete what the dry run counted
 dotnet run --project tools/DbAdmin -- prune --webhook-events --apply     # one table at a time
