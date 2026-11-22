@@ -620,3 +620,18 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   healthcheck) fails the script with `proxy waits for ollama to be healthy, but ollama has no
   healthcheck` and fails the two pack tests; the resolve still exits 0 for that file, which is the
   gap the new check closes.
+- **The edge has a probe, and nothing starts without health.** The proxy was the one service `docker
+  compose ps` reported as running while nothing asked whether it could serve. It now probes Caddy's
+  admin endpoint on `127.0.0.1:2019/config/` — up only when the process is up with a configuration
+  loaded — rather than a published port: :80 answers a redirect that a client follows into a
+  certificate handshake, and :443 cannot answer before ACME has issued a certificate, so either
+  probe calls a working edge dead exactly when a deployment is least able to look. Measured on the
+  running pack: that URL exits 0, the same request to a closed port exits 1, and the :80 probe exits
+  1 with the TLS error. Nothing in the pack starts after the proxy today; the rule that makes the
+  next dependent safe is enforced instead — every `depends_on` in the pack must name
+  `condition: service_healthy`, read from the file so a bare list (which inherits `service_started`)
+  fails.
+- **Gate:** `suite` 574 passed, 0 skipped, 0 failed. Mutations: deleting the proxy probe fails the new
+  test; changing one condition to `service_started` fails three. Live: `docker compose up -d proxy`
+  recreated the container and it reached healthy in 20s, probe exit 0, with web reported Healthy
+  before the proxy started.

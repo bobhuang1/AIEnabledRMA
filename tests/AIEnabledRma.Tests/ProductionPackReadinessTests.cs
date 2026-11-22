@@ -84,12 +84,101 @@ public sealed class ProductionPackReadinessTests
         // checked-in file would parse as a pack with no services and this test would pass on nothing.
         var compose = RepositoryFile(Pack).ReplaceLineEndings("\n");
 
-        var waits = new List<(string From, string To)>();
+        var waits = Dependencies(compose)
+            .Where(dependency => dependency.Condition == "condition: service_healthy")
+            .ToList();
 
-        foreach (Match service in Regex.Matches(compose, @"^  ([\w-]+):$", RegexOptions.Multiline))
+        // Four today — proxy waits for web and mcp, and each of those waits for postgres — and the
+        // count is pinned so a parse that stops finding them fails here instead of reporting a pack
+        // with no waits.
+        Assert.Equal(4, waits.Count);
+
+        foreach (var (_, to, _) in waits)
+        {
+            Assert.Contains(
+                "healthcheck:",
+                ServiceBlock(compose, to),
+                StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The edge had no probe: `docker compose ps` showed it running while nothing asked whether Caddy
+    /// could serve. The probe is the admin endpoint on localhost, not a published port — port 80
+    /// answers a redirect that a client follows into a certificate handshake, and port 443 cannot
+    /// answer before that certificate exists, so probing either calls a working edge dead while ACME
+    /// is still working.
+    /// </summary>
+    [Fact]
+    public void The_proxy_has_a_readiness_probe_of_its_own()
+    {
+        var proxy = ServiceBlock(RepositoryFile(Pack), "proxy");
+
+        Assert.Contains("healthcheck:", proxy, StringComparison.Ordinal);
+        Assert.Contains(
+            "http://127.0.0.1:2019/config/",
+            proxy,
+            StringComparison.Ordinal);
+
+        // Not the ports it publishes: neither answers for the reason a probe exists.
+        Assert.DoesNotContain("127.0.0.1:80", proxy, StringComparison.Ordinal);
+        Assert.DoesNotContain("https://", proxy, StringComparison.Ordinal);
+
+        // A start period, so a certificate fetch in progress is not a restart loop.
+        Assert.Contains("start_period:", proxy, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every dependency in the pack names a condition, and it is the healthy one. Nothing starts at
+    /// "container created", which is the state the probes exist to tell apart from serving; with the
+    /// edge now having a probe of its own, anything added behind it can wait for it the same way.
+    /// </summary>
+    [Fact]
+    public void Every_dependency_in_the_pack_waits_for_health()
+    {
+        var dependencies = Dependencies(RepositoryFile(Pack));
+
+        // Pinned: a parse that stopped finding entries would otherwise pass while checking nothing.
+        Assert.Equal(4, dependencies.Count);
+
+        foreach (var dependency in dependencies)
+        {
+            Assert.Equal("condition: service_healthy", dependency.Condition);
+        }
+    }
+
+    [Fact]
+    public void The_proxy_waits_for_the_services_it_fronts()
+    {
+        var proxy = ServiceBlock(RepositoryFile(Pack), "proxy");
+
+        Assert.Contains("web:", proxy, StringComparison.Ordinal);
+        Assert.Contains("mcp:", proxy, StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(proxy, "condition: service_healthy"));
+    }
+
+    [Fact]
+    public void Postgres_keeps_its_own_probe()
+    {
+        var postgres = ServiceBlock(RepositoryFile(Pack), "postgres");
+
+        Assert.Contains("pg_isready", postgres, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every `depends_on` entry in the pack with the condition written under it, read from the file
+    /// rather than from the resolved project: a bare list (`depends_on: [web]`) inherits
+    /// `service_started`, and compose accepts it, so only the file shows it.
+    /// </summary>
+    private static IReadOnlyList<(string From, string To, string Condition)> Dependencies(string compose)
+    {
+        var normalized = compose.ReplaceLineEndings("\n");
+        var dependencies = new List<(string From, string To, string Condition)>();
+
+        foreach (Match service in Regex.Matches(normalized, @"^  ([\w-]+):$", RegexOptions.Multiline))
         {
             var name = service.Groups[1].Value;
-            var lines = ServiceBlock(compose, name).ReplaceLineEndings("\n").Split('\n');
+            var lines = ServiceBlock(normalized, name).ReplaceLineEndings("\n").Split('\n');
             var inDependsOn = false;
 
             for (var i = 0; i < lines.Length; i++)
@@ -113,45 +202,17 @@ public sealed class ProductionPackReadinessTests
 
                 var target = Regex.Match(lines[i], @"^      ([\w-]+):$");
 
-                if (target.Success
-                    && i + 1 < lines.Length
-                    && lines[i + 1].Trim() == "condition: service_healthy")
+                if (!target.Success)
                 {
-                    waits.Add((name, target.Groups[1].Value));
+                    continue;
                 }
+
+                var condition = i + 1 < lines.Length ? lines[i + 1].Trim() : string.Empty;
+                dependencies.Add((name, target.Groups[1].Value, condition));
             }
         }
 
-        // Four today — proxy waits for web and mcp, and each of those waits for postgres — and the
-        // count is pinned so a parse that stops finding them fails here instead of reporting a pack
-        // with no waits.
-        Assert.Equal(4, waits.Count);
-
-        foreach (var (from, to) in waits)
-        {
-            Assert.Contains(
-                "healthcheck:",
-                ServiceBlock(compose, to),
-                StringComparison.Ordinal);
-        }
-    }
-
-    [Fact]
-    public void The_proxy_waits_for_the_services_it_fronts()
-    {
-        var proxy = ServiceBlock(RepositoryFile(Pack), "proxy");
-
-        Assert.Contains("web:", proxy, StringComparison.Ordinal);
-        Assert.Contains("mcp:", proxy, StringComparison.Ordinal);
-        Assert.Equal(2, CountOccurrences(proxy, "condition: service_healthy"));
-    }
-
-    [Fact]
-    public void Postgres_keeps_its_own_probe()
-    {
-        var postgres = ServiceBlock(RepositoryFile(Pack), "postgres");
-
-        Assert.Contains("pg_isready", postgres, StringComparison.Ordinal);
+        return dependencies;
     }
 
     private static int CountOccurrences(string text, string value)

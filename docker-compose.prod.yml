@@ -54,6 +54,19 @@ services:
         condition: service_healthy
       mcp:
         condition: service_healthy
+    # The edge needs a probe of its own: it was the one service `docker compose ps` showed as running
+    # with nothing asking whether it could serve. It does not probe :80 or :443. Port 80 answers a
+    # redirect, and a client that follows it needs a certificate ACME may not have issued yet; port
+    # 443 cannot answer at all before then. Either probe calls a working edge dead exactly when a
+    # deployment is least able to look. The admin endpoint on localhost answers with the config Caddy
+    # has loaded, so it is up only when the process is up, and it is not published outside the
+    # container.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
     restart: unless-stopped
 
   postgres:
