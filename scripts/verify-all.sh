@@ -136,6 +136,11 @@ auth() {
 images() {
     step "images: build all three, boot both corpus hosts, start the production web service"
     ./scripts/verify-images.sh
+
+    # The runtime-images job's other step. A pack that resolves and cannot serve is a deployment
+    # finding this out, so the local gate checks the same two things the job does.
+    step "pack: resolve docker-compose.prod.yml and check every wait it declares can finish"
+    ./scripts/verify-compose.sh
 }
 
 restore() {

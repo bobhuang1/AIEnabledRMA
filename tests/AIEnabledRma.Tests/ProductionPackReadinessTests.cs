@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace AIEnabledRma.Tests;
 
 /// <summary>
@@ -66,6 +68,72 @@ public sealed class ProductionPackReadinessTests
     public void The_hosts_map_the_path_the_probe_calls(string host)
     {
         Assert.Contains("MapGet(\"/health\"", RepositoryFile(host), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A service may only be waited on as healthy if it has a probe. Compose accepts the reference
+    /// either way — the project resolves and `up --no-start` creates the container — so pointing
+    /// `depends_on` at a service with no healthcheck is found at deployment, where the wait never
+    /// finishes. `scripts/verify-compose.sh` asks the resolved project in CI; this asks the file, so
+    /// the same edit fails in the suite as well.
+    /// </summary>
+    [Fact]
+    public void Every_service_waited_on_as_healthy_declares_a_healthcheck()
+    {
+        // Normalised first: `$` matches before a \n but not before the \r of a CRLF line, so the
+        // checked-in file would parse as a pack with no services and this test would pass on nothing.
+        var compose = RepositoryFile(Pack).ReplaceLineEndings("\n");
+
+        var waits = new List<(string From, string To)>();
+
+        foreach (Match service in Regex.Matches(compose, @"^  ([\w-]+):$", RegexOptions.Multiline))
+        {
+            var name = service.Groups[1].Value;
+            var lines = ServiceBlock(compose, name).ReplaceLineEndings("\n").Split('\n');
+            var inDependsOn = false;
+
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (lines[i] == "    depends_on:")
+                {
+                    inDependsOn = true;
+                    continue;
+                }
+
+                // The next key at service-key indentation ends the dependency list.
+                if (inDependsOn && !lines[i].StartsWith("      ", StringComparison.Ordinal))
+                {
+                    inDependsOn = false;
+                }
+
+                if (!inDependsOn)
+                {
+                    continue;
+                }
+
+                var target = Regex.Match(lines[i], @"^      ([\w-]+):$");
+
+                if (target.Success
+                    && i + 1 < lines.Length
+                    && lines[i + 1].Trim() == "condition: service_healthy")
+                {
+                    waits.Add((name, target.Groups[1].Value));
+                }
+            }
+        }
+
+        // Four today — proxy waits for web and mcp, and each of those waits for postgres — and the
+        // count is pinned so a parse that stops finding them fails here instead of reporting a pack
+        // with no waits.
+        Assert.Equal(4, waits.Count);
+
+        foreach (var (from, to) in waits)
+        {
+            Assert.Contains(
+                "healthcheck:",
+                ServiceBlock(compose, to),
+                StringComparison.Ordinal);
+        }
     }
 
     [Fact]

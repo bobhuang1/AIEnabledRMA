@@ -267,14 +267,44 @@ public sealed class GateScriptTests
         var workflow = File.ReadAllText(
             Path.Combine(RepositoryRoot(), ".github", "workflows", "ci.yml"));
 
-        Assert.Contains(
-            "docker compose -f docker-compose.prod.yml --env-file deploy/prod.env.example config",
-            workflow,
-            StringComparison.Ordinal);
+        // The resolve lives in the gate script, beside the check that every wait in the pack can
+        // finish; CI runs the script, so both answers come from one place and one place can be tested.
+        Assert.Contains("./scripts/verify-compose.sh", workflow, StringComparison.Ordinal);
 
         // The boot lives in the image gate, which this job runs: a resolve step that nobody follows
         // with a start is the gap this pair closes.
         Assert.Contains("./scripts/verify-images.sh", workflow, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A resolve alone accepts `condition: service_healthy` on a service with no healthcheck: the
+    /// project parses and `up --no-start` creates the container, so the wait is discovered at
+    /// deployment, against something that will never report a health state. The gate reads the
+    /// resolved project instead — where anchors are expanded and defaults applied — and treats "no
+    /// wait found" as a failure, because an emptied `depends_on` is the edit it exists to notice.
+    /// </summary>
+    [Fact]
+    public void The_compose_gate_checks_that_every_healthy_wait_has_a_probe()
+    {
+        var script = Script("verify-compose.sh");
+
+        // The resolve, from the example env, exactly as CI ran it before the check moved in here.
+        Assert.Contains(
+            "docker compose -f \"$PACK\" --env-file \"$ENV_FILE\"",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("ENV_FILE=${ENV_FILE:-deploy/prod.env.example}", script, StringComparison.Ordinal);
+        Assert.Contains("config --format json", script, StringComparison.Ordinal);
+
+        // The resolved project, not the source text: a healthcheck inherited through an anchor looks
+        // absent in the file and is present after resolution.
+        Assert.Contains("service_healthy", script, StringComparison.Ordinal);
+        Assert.Contains("has no healthcheck", script, StringComparison.Ordinal);
+        Assert.Contains("healthcheck with no test", script, StringComparison.Ordinal);
+
+        // Nothing checked is a failed check, not a quiet pass.
+        Assert.Contains("sys.exit(3)", script, StringComparison.Ordinal);
+        Assert.Contains("the pack declares a service_healthy dependency", script, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -606,3 +606,17 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
 - **Gate:** `suite` 570 passed, 0 skipped, 0 failed. Mutations: flattening the direction to
   `ProviderOnly` fails the row-only and mismatch tests; swapping the 2 and 3 exit codes fails the
   test that pins them.
+- **The pack's waits are checked, not only its syntax.** CI already resolved the pack with
+  `docker compose config`, which catches a renamed value, a broken anchor and a dependency on a
+  service that does not exist. It does not catch `condition: service_healthy` naming a service with
+  no healthcheck: the project resolves, and `up --no-start` creates the containers, so the wait is
+  found at deployment and never finishes — the proxy behind it simply never starts. `scripts/
+  verify-compose.sh` resolves the pack from `deploy/prod.env.example` and then reads the *resolved*
+  project, where anchors are expanded, for every `service_healthy` dependency whose target has no
+  probe; a pack with no such dependency is a failure too, so an emptied `depends_on` cannot pass.
+  CI's resolve step runs the script, `verify-all.sh`'s images gate runs it, and the suite pins the
+  same property on the file itself, so the edit fails without docker as well.
+- **Gate:** `suite` 572 passed, 0 skipped, 0 failed. Mutations: pointing proxy at `ollama` (no
+  healthcheck) fails the script with `proxy waits for ollama to be healthy, but ollama has no
+  healthcheck` and fails the two pack tests; the resolve still exits 0 for that file, which is the
+  gap the new check closes.

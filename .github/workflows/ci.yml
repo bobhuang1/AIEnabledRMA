@@ -191,9 +191,11 @@ jobs:
       # and it is kept separate so a file that does not parse fails by itself rather than inside a
       # build-and-boot log. The production pack is a compose file, so a typo in it stays invisible
       # until a deployment; this resolves it — interpolating every required value from the example
-      # env file — without starting a container.
-      - name: The production pack resolves
-        run: docker compose -f docker-compose.prod.yml --env-file deploy/prod.env.example config --quiet
+      # env file — and then checks what a resolve alone cannot see: that every
+      # `condition: service_healthy` names a service with a probe, because compose accepts that
+      # reference either way and the wait would be found at deployment instead. Nothing is started.
+      - name: The production pack resolves and every wait in it can finish
+        run: ./scripts/verify-compose.sh
 
   restore-drill:
     # Migrations are forward-only and `reset --force` is the only other documented recovery, and that
