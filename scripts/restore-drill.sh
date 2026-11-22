@@ -60,7 +60,18 @@ cleanup() {
 
     docker rm -f "$SERVER" >/dev/null 2>&1 || true
     docker network rm "$NETWORK" >/dev/null 2>&1 || true
-    rm -rf "$WORK"
+
+    # The publish writes into the working directory as root inside the SDK container, so the user
+    # running this does not own those files. A plain rm then fails, and because this runs from an
+    # EXIT trap under `set -e`, it reported a drill whose every check had passed as a failure —
+    # which is exactly what happened on the first CI run of this gate. Delete the tree from inside
+    # a container first, then the empty directory from here, and never let tidying up decide the
+    # exit status.
+    if [ -d "$WORK" ]; then
+        docker run --rm -v "$(winpath "$WORK"):/work" "$SDK_IMAGE" \
+            bash -lc 'find /work -mindepth 1 -delete' >/dev/null 2>&1 || true
+        rm -rf "$WORK" >/dev/null 2>&1 || true
+    fi
 }
 
 trap cleanup EXIT

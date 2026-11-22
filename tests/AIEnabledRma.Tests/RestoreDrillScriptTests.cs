@@ -58,6 +58,13 @@ public sealed class RestoreDrillScriptTests
         Assert.Contains("trap cleanup EXIT", script, StringComparison.Ordinal);
         Assert.Contains("docker rm -f \"$SERVER\"", script, StringComparison.Ordinal);
         Assert.Contains("docker network rm \"$NETWORK\"", script, StringComparison.Ordinal);
+
+        // The publish leaves root-owned files in the working directory, and an EXIT trap under
+        // `set -e` turns a failed rm into a failed drill: it did, on the first CI run, after every
+        // check had passed. The tree goes from inside a container, and cleanup cannot set the
+        // status.
+        Assert.Contains("find /work -mindepth 1 -delete", script, StringComparison.Ordinal);
+        Assert.Contains("rm -rf \"$WORK\" >/dev/null 2>&1 || true", script, StringComparison.Ordinal);
     }
 
     [Fact]
