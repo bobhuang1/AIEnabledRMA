@@ -135,7 +135,11 @@ delete production data.
 | `review_items` | 90 days **after resolution** | `resolved_at_utc`; an open item is never pruned |
 | `webhook_events` | 90 days | the delivery (`received_at_utc`) |
 
+`DbAdmin stats` prints these four tables after the business ones, because the number an operator wants
+before a prune run is how much has accumulated, not only how many returns exist.
+
 ```bash
+dotnet run --project tools/DbAdmin -- stats                              # row counts, business and audit
 dotnet run --project tools/DbAdmin -- prune                              # dry run: counts only
 dotnet run --project tools/DbAdmin -- prune --apply                      # delete what the dry run counted
 dotnet run --project tools/DbAdmin -- prune --webhook-events --apply     # one table at a time

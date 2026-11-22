@@ -33,6 +33,10 @@
          entry point. The type is a project reference, not a package: the package only
          supplies the factory, the app under test still has to be this one. -->
     <ProjectReference Include="..\..\src\AIEnabledRma.Web\AIEnabledRma.Web.csproj" />
+    <!-- Referenced by DbAdminStatsTests, which pins the exact text of `DbAdmin stats`: the command
+         is an Exe, and a test that re-declared the format instead of calling it would pass while
+         the operator's output said something else. -->
+    <ProjectReference Include="..\..\tools\DbAdmin\AIEnabledRma.Tools.DbAdmin.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -441,3 +441,16 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
 - **Gates for this change:** `suite` 533 passed, 0 skipped, 0 failed; EF model check clean;
   vulnerability audit clean for all nine projects. `restore` end to end: 38,265-byte dump, scratch
   database at the current schema, every row count matched.
+- **`DbAdmin stats` now shows the audit tables.** The command counted the seven business tables and
+  nothing else, so between prune runs an operator had no way to see how fast `mcp_tool_calls`,
+  `operator_actions`, `review_items` and `webhook_events` were filling — the prune report only speaks
+  when it is run, and by then it is proposing deletions rather than showing growth. The four counts
+  now print under the business ones, in a block of their own because they answer a different
+  question. The printing moved out of the top-level program into `StatsReport` so
+  `DbAdminStatsTests` pins the exact text: a table that drops out of the list reads exactly like a
+  table that never grows, and that is the failure a pinned string catches. The tests project gained
+  a reference to the `DbAdmin` Exe for this, and its lock file gained the matching entry.
+- **Mutation-checked:** counting `review_items` from the `mcp_tool_calls` table makes the
+  database-backed test fail (0 where 1 was expected); the restore drill still passes end to end with
+  the longer output (audit counts 0 on both sides, 38,265-byte dump, no pending migrations).
+- **Gates for this change:** `suite` 535 passed, 0 skipped, 0 failed; `restore` green.

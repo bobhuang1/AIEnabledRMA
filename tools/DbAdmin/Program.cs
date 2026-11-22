@@ -6,6 +6,7 @@ using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Ai;
 using AIEnabledRma.Rag;
 using AIEnabledRma.Rag.Cases;
+using AIEnabledRma.Tools.DbAdmin;
 using AIEnabledRma.Rag.Knowledge;
 using AIEnabledRma.Rag.Store;
 using Microsoft.EntityFrameworkCore;
@@ -21,7 +22,7 @@ using Microsoft.Extensions.Options;
 //   DbAdmin migrations          list discovered, applied and pending migrations
 //   DbAdmin seed                 apply migrations, then insert demo data if the catalog is empty
 //   DbAdmin reset --force        drop every table, then migrate and seed
-//   DbAdmin stats                row counts per table
+//   DbAdmin stats                row counts per table, including the four audit tables
 //   DbAdmin prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events]
 //                                delete audit rows past their retention window; dry run by default
 //   DbAdmin kb-ingest [--rebuild] [--path <dir>]
@@ -266,13 +267,10 @@ return 0;
 
 static async Task PrintStatsAsync(RmaDbContext db)
 {
-    Console.WriteLine($"  products:      {await db.Products.CountAsync()}");
-    Console.WriteLine($"  devices:       {await db.Devices.CountAsync()}");
-    Console.WriteLine($"  warranties:    {await db.Warranties.CountAsync()}");
-    Console.WriteLine($"  customers:     {await db.Customers.CountAsync()}");
-    Console.WriteLine($"  addresses:     {await db.Addresses.CountAsync()}");
-    Console.WriteLine($"  rma_requests:  {await db.RmaRequests.CountAsync()}");
-    Console.WriteLine($"  rma_lines:     {await db.RmaLines.CountAsync()}");
+    foreach (var line in StatsReport.Format(await StatsReport.ReadAsync(db, CancellationToken.None)))
+    {
+        Console.WriteLine(line);
+    }
 }
 
 static void PrintPrune(PruneReport report)

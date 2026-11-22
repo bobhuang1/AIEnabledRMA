@@ -568,6 +568,14 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "aienabledrma.tools.dbadmin": {
+        "type": "Project",
+        "dependencies": {
+          "AIEnabledRma.Ai": "[1.0.0, )",
+          "AIEnabledRma.Data": "[1.0.0, )",
+          "AIEnabledRma.Rag": "[1.0.0, )"
+        }
+      },
       "aienabledrma.web": {
         "type": "Project",
         "dependencies": {
