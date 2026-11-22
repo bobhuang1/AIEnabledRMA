@@ -43,6 +43,23 @@ public sealed class RmaRepository(RmaDbContext db) : IRmaRepository
             .Take(take)
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<RmaRequest>> PaymentTransactionsAsync(
+        int? take,
+        CancellationToken cancellationToken)
+    {
+        var query = _db.RmaRequests
+            .AsNoTracking()
+            .Where(r => r.PaymentTransactionId != null)
+            // A draft has no transaction yet; a rejected return never reached the payment step.
+            .Where(r => r.Status != RmaRequestStatus.Draft && r.Status != RmaRequestStatus.Rejected)
+            .OrderBy(r => r.UpdatedAtUtc)
+            .ThenBy(r => r.Id);
+
+        return take is { } bounded
+            ? await query.Take(bounded).ToListAsync(cancellationToken)
+            : await query.ToListAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyList<RmaRequest>> GetOpenForDeviceAsync(
         Guid deviceId,
         CancellationToken cancellationToken) =>

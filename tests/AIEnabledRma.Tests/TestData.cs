@@ -278,6 +278,16 @@ internal sealed class FakeRmaRepository : IRmaRepository
                 .Where(r => r.PaymentTransactionId is not null && r.UpdatedAtUtc <= unchangedSince)
                 .Take(take)
                 .ToList());
+
+    public Task<IReadOnlyList<RmaRequest>> PaymentTransactionsAsync(
+        int? take, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<RmaRequest>>(
+            Requests
+                .Where(r => r.PaymentTransactionId is not null)
+                .OrderBy(r => r.UpdatedAtUtc)
+                .ThenBy(r => r.Id)
+                .Take(take ?? int.MaxValue)
+                .ToList());
 }
 
 /// <summary>A stub model that returns a canned completion, for pipeline tests.</summary>

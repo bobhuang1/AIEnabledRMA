@@ -207,6 +207,17 @@ public interface IRmaRepository
         DateTimeOffset unchangedSince,
         int take,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Every return carrying a payment transaction, oldest write first. No window, deliberately:
+    /// this is the sweep that finds a capture the row never recorded, and a row written a second ago
+    /// is no less out of step than one written yesterday — it is the shape a capture whose write lost
+    /// the row race leaves. Untracked, because the audit only reads.
+    /// </summary>
+    /// <param name="take">A bound on how many rows to read, or null for all of them.</param>
+    Task<IReadOnlyList<RmaRequest>> PaymentTransactionsAsync(
+        int? take,
+        CancellationToken cancellationToken);
 }
 
 public interface IUnitOfWork

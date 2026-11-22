@@ -32,6 +32,9 @@ using Microsoft.Extensions.Options;
 //   DbAdmin reconcile-payments [--older-than <hours>] [--take <n>]
 //                                ask the provider about stale authorisations and file a review item
 //                                where its answer disagrees with the stored return
+//   DbAdmin audit-payments [--take <n>]
+//                                ask the provider about every return carrying a transaction and
+//                                list the captures and voids only one side has; reads, never writes
 
 // The content root defaults to the current working directory, which would make the tool
 // fail with a bare "ConnectionStrings:Rma is not configured" when it is run as
@@ -70,6 +73,7 @@ builder.Services.AddScoped<IOperationsRepository, EfOperationsRepository>();
 builder.Services.AddSingleton<IReviewQueue, EfReviewQueue>();
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddScoped<PaymentReconciler>();
+builder.Services.AddScoped<PaymentAuditor>();
 builder.Services.AddPaymentGateway(
     builder.Configuration, builder.Environment.IsDevelopment(), builder.Environment.IsProduction());
 builder.Services.AddOptions<ChunkingOptions>().Bind(builder.Configuration.GetSection(ChunkingOptions.SectionName));
@@ -333,8 +337,48 @@ switch (command)
         return report.Unanswered.Count > 0 ? 2 : 0;
     }
 
+    case "audit-payments":
+    {
+        int? take = null;
+
+        for (var i = 1; i < args.Length; i++)
+        {
+            var flag = args[i].ToLowerInvariant();
+            var value = i + 1 < args.Length ? args[i + 1] : null;
+
+            if (flag == "--take" && value is not null
+                && int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var count)
+                && count > 0)
+            {
+                take = count;
+                i++;
+                continue;
+            }
+
+            // A mistyped flag must not fall back to "compare everything": a run over a different set
+            // from the one asked for looks exactly like a complete one, and reports nothing wrong.
+            Console.Error.WriteLine(
+                $"audit-payments does not understand '{args[i]}'. Use --take <count> to bound the run, or nothing to compare every return.");
+            return 1;
+        }
+
+        var audit = await scope.ServiceProvider.GetRequiredService<PaymentAuditor>()
+            .RunAsync(take, CancellationToken.None);
+
+        foreach (var line in AuditPaymentsReport.Format(audit))
+        {
+            Console.WriteLine(line);
+        }
+
+        Console.WriteLine(AuditPaymentsReport.Summary(audit));
+
+        // 3 for drift, not 1: 1 already means the command was called wrongly, and 2 means "ask again"
+        // — a scheduler watching this has to tell the three apart.
+        return audit.Unanswered.Count > 0 ? 2 : audit.Drift.Count > 0 ? 3 : 0;
+    }
+
     default:
-        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats|reconcile-payments [--older-than <hours>] [--take <n>]|prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events]|kb-ingest [--rebuild] [--path <dir>]|kb-cases --file <json> [--report <path>] [--publish --reviewed-by <name>]>");
+        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats|reconcile-payments [--older-than <hours>] [--take <n>]|audit-payments [--take <n>]|prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events]|kb-ingest [--rebuild] [--path <dir>]|kb-cases --file <json> [--report <path>] [--publish --reviewed-by <name>]>");
         return 1;
 }
 

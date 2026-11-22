@@ -591,3 +591,17 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   `operator_actions` must hold exactly two rows: the void as the only success, the capture as a refusal.
 - **Gate:** `suite` 560 passed, 0 skipped, 0 failed. Mutation: dropping `recorded.Succeeded = false`
   from the refusal catch fails the new test on the ledger assertion.
+- **`DbAdmin audit-payments` is the sweep beside reconciliation, not a second opinion on it.**
+  `reconcile-payments` deliberately skips a row written inside its six-hour window, because a delivery
+  that arrived writes the row — but a capture whose row write lost the race leaves the opposite shape:
+  the money moved, the row still says `Received`, and the row was written seconds ago. Nothing found
+  those. The new command reads every return carrying a transaction, with no window, asks the provider
+  for each one, and says which side holds the capture or void: `provider only` (money moved, never
+  recorded), `row only` (the row claims a capture the provider never took), or `mismatch` (both hold a
+  terminal state, different ones) — the two directions the operator needs, since the first is a return
+  to reconcile by hand and the second is a customer told they paid when they did not. It files and
+  changes nothing (that is reconciliation's job), an unanswerable transaction is reported as unanswered
+  rather than as drift, a `--take` bound that cuts the set short says so, and the exit code separates
+  0 in step, 2 could not be asked, 3 drift found.
+- **Gate:** `suite` 569 passed, 0 skipped, 0 failed. Mutation: flattening the direction to `ProviderOnly`
+  fails the row-only and mismatch tests.
