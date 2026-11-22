@@ -381,3 +381,17 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
 - **Gate for this change:** `suite` 516 passed, 0 skipped, 0 failed; EF model check clean ("No
   changes have been made to the model since the last migration"); vulnerability audit clean for all
   nine projects.
+- **The "no ORM in the RAG image" claim now has its measurement.** Built `05f80b5` (the commit before the
+  move) and `8e74e61` (the move) from `git archive` of each tree through the same Dockerfile: the base digests
+  and all seven base layers are byte-identical, so only the `COPY /app` layer differs, and every number below
+  is a byte sum of the image's own layer blobs (`docker save`), not the rounded `docker images` column.
+  The app layer fell from 8,396,288 to 2,346,496 bytes uncompressed (-6,049,792, -72.1%) and from 2,915,899 to
+  889,554 bytes compressed (-2,026,345); the whole image, sum of all blobs, fell from 106,894,292 to 104,867,954
+  bytes (-2,026,338, -1.9%). So the ORM leaving bought 72% of the application payload and under 2% of the pull:
+  the ASP.NET runtime and Debian base are ~104 MB of the download and the app is now under 1% of it. `/app` went
+  from 20 files to 13 and from 10 assemblies to 4, and the six removed assemblies are
+  `Microsoft.EntityFrameworkCore.dll` (2,829,152), `Microsoft.EntityFrameworkCore.Relational.dll` (2,194,744),
+  `Npgsql.EntityFrameworkCore.PostgreSQL.dll` (679,424), `AIEnabledRma.Data.dll` (250,368, plus its 37,104-byte
+  PDB), `Microsoft.EntityFrameworkCore.Abstractions.dll` (34,616) and `EFCore.NamingConventions.dll` (29,184).
+  `Npgsql.dll` stays because the host opens PostgreSQL directly, `AIEnabledRma.Domain.dll` grew 11,264 bytes as
+  the moved rule compiled into it, and the corpus is unchanged at 19 articles plus README and `REVIEWED.sha256`.
