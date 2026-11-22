@@ -603,5 +603,6 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   changes nothing (that is reconciliation's job), an unanswerable transaction is reported as unanswered
   rather than as drift, a `--take` bound that cuts the set short says so, and the exit code separates
   0 in step, 2 could not be asked, 3 drift found.
-- **Gate:** `suite` 569 passed, 0 skipped, 0 failed. Mutation: flattening the direction to `ProviderOnly`
-  fails the row-only and mismatch tests.
+- **Gate:** `suite` 570 passed, 0 skipped, 0 failed. Mutations: flattening the direction to
+  `ProviderOnly` fails the row-only and mismatch tests; swapping the 2 and 3 exit codes fails the
+  test that pins them.

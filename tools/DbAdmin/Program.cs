@@ -372,9 +372,7 @@ switch (command)
 
         Console.WriteLine(AuditPaymentsReport.Summary(audit));
 
-        // 3 for drift, not 1: 1 already means the command was called wrongly, and 2 means "ask again"
-        // — a scheduler watching this has to tell the three apart.
-        return audit.Unanswered.Count > 0 ? 2 : audit.Drift.Count > 0 ? 3 : 0;
+        return AuditPaymentsReport.ExitCode(audit);
     }
 
     default:

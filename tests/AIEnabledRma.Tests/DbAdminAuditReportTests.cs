@@ -65,6 +65,32 @@ public sealed class DbAdminAuditReportTests
     }
 
     [Fact]
+    public void The_exit_code_tells_a_scheduler_drift_from_could_not_ask_from_clean()
+    {
+        // 1 is how this tool reports a bad invocation, so drift and an unanswered transaction each get
+        // their own code rather than sharing it.
+        Assert.Equal(0, AuditPaymentsReport.ExitCode(
+            new PaymentAuditReport(3, 3, [], [], More: false)));
+
+        Assert.Equal(3, AuditPaymentsReport.ExitCode(
+            new PaymentAuditReport(
+                3,
+                2,
+                [new PaymentDrift(Guid.NewGuid(), "RMA-2026-00011", "pi_11", PaymentDriftDirection.ProviderOnly, PaymentStatus.Authorized, PaymentStatus.Captured, "Received")],
+                [],
+                More: false)));
+
+        // Both at once: "ask again" wins, because the drift list is incomplete either way.
+        Assert.Equal(2, AuditPaymentsReport.ExitCode(
+            new PaymentAuditReport(
+                2,
+                0,
+                [new PaymentDrift(Guid.NewGuid(), "RMA-2026-00012", "pi_12", PaymentDriftDirection.RowOnly, PaymentStatus.Captured, PaymentStatus.Authorized, "InRepair")],
+                ["RMA-2026-00009 (pi_9): That authorisation could not be found."],
+                More: false)));
+    }
+
+    [Fact]
     public void A_clean_run_says_the_returns_match_and_that_nothing_was_changed()
     {
         var report = new PaymentAuditReport(Checked: 4, InStep: 4, Drift: [], Unanswered: [], More: false);

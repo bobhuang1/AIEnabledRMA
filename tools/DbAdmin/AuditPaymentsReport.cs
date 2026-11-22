@@ -72,6 +72,14 @@ public static class AuditPaymentsReport
         return string.Join("; ", parts) + "; nothing was changed.";
     }
 
+    /// <summary>
+    /// What a scheduler sees: drift is the reason this command exists, so it must not exit like a
+    /// clean run; an unanswered transaction is neither drift nor agreement, and re-running is the
+    /// answer to it. 1 stays "called wrongly" and never comes from here.
+    /// </summary>
+    public static int ExitCode(PaymentAuditReport report) =>
+        report.Unanswered.Count > 0 ? 2 : report.Drift.Count > 0 ? 3 : 0;
+
     private static string Tag(PaymentDriftDirection direction) => direction switch
     {
         PaymentDriftDirection.ProviderOnly => "provider only",
