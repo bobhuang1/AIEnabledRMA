@@ -75,6 +75,60 @@ public sealed class RequestConcurrencyTests
     }
 
     [Fact]
+    public async Task A_stale_capture_is_refused_and_says_the_provider_may_already_hold_it()
+    {
+        await using var database = new LiveDatabase("rma_concurrency");
+        await database.InitializeAsync();
+
+        var request = Request(RmaRequestStatus.Received);
+        request.PaymentTransactionId = "pi_stale_capture";
+        request.DepositAmount = 69m;
+        request.CurrencyCode = "EUR";
+
+        await using (var seed = database.CreateContext())
+        {
+            await seed.Database.MigrateAsync(Ct);
+            seed.RmaRequests.Add(request);
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        await using var first = database.CreateContext();
+        await using var second = database.CreateContext();
+
+        // Both operators have the capture form open on an item in Received.
+        Assert.NotNull(await new RmaRepository(second).GetByIdAsync(request.Id, Ct));
+
+        var captured = await OperatorServiceFor(first).CaptureAsync(
+            request.Id, "operator-one", "screen replaced under warranty", Ct);
+        Assert.True(captured.Succeeded);
+
+        // The second operator submits the same form. Its status guard still reads Received, so the
+        // guard cannot refuse this one: only the token can. The provider was already called before
+        // the write, which is why the refusal must not claim the money stayed put.
+        var stale = await OperatorServiceFor(second).CaptureAsync(
+            request.Id, "operator-two", "screen replaced under warranty", Ct);
+
+        Assert.False(stale.Succeeded);
+        Assert.Contains("payment provider may already hold", stale.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Captured", stale.Message, StringComparison.Ordinal);
+
+        await using var check = database.CreateContext();
+        var stored = await check.RmaRequests.SingleAsync(r => r.Id == request.Id, Ct);
+        Assert.Equal(RmaRequestStatus.InRepair, stored.Status);
+
+        var captures = await check.OperatorActions
+            .Where(a => a.Action == "capture")
+            .ToListAsync(Ct);
+
+        // Two attempts, one success: the stale one is recorded as the refusal it was, rather than
+        // as a second capture that never happened.
+        Assert.Equal(2, captures.Count);
+        Assert.Single(captures, a => a.Succeeded);
+        var refused = Assert.Single(captures, a => !a.Succeeded);
+        Assert.Contains("changed since it was read", refused.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_confirmation_from_a_stale_page_is_refused_and_reports_the_stored_status()
     {
         await using var database = new LiveDatabase("rma_concurrency");

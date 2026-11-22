@@ -454,3 +454,14 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   database-backed test fail (0 where 1 was expected); the restore drill still passes end to end with
   the longer output (audit counts 0 on both sides, 38,265-byte dump, no pending migrations).
 - **Gates for this change:** `suite` 535 passed, 0 skipped, 0 failed; `restore` green.
+- **A stale capture now has a live test of its own.** The token, the refusal path and the stale-void
+  and stale-confirmation tests were already in place, but capture — the transition that moves money —
+  had no test holding two contexts on the same row, so nothing proved its refusal either. The new case
+  opens the capture form in Received in both sessions, captures in the first, and submits the second:
+  that one's status guard still reads Received, so the guard cannot refuse it and only `xmin` can.
+  It asserts the refusal, that its wording says the provider may already hold the capture rather than
+  claiming the money stayed put, that the stored row is InRepair, and that exactly two `capture`
+  action rows exist with one succeeded and one refused with "changed since it was read".
+- **Mutation-checked:** removing `IsRowVersion()` from the `RowVersion` mapping fails all three
+  concurrency tests, the new capture one included.
+- **Gate for this change:** `suite` 536 passed, 0 skipped, 0 failed.
