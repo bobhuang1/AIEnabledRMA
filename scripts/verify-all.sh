@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Runs the three gates CI runs, in the order CI runs them, from a checkout.
+# Runs the four gates CI runs, in the order CI runs them, from a checkout.
 #
 # CI is the authority, but its logs need an authenticated request, and this repository's runs failed
 # at the build step with nothing readable behind the annotation. Running the same commands here
@@ -8,13 +8,15 @@
 # and docs/mcp.md was measured in the first place.
 #
 # Usage:
-#   scripts/verify-all.sh                # all three, build-and-test first
+#   scripts/verify-all.sh                # all four, build-and-test first
 #   scripts/verify-all.sh suite auth     # a subset, in the order given
 #   scripts/verify-all.sh restore        # the backup drill: dump, restore, migrate, read back
 #
-# `restore` is not in the default set and is not in CI yet: it publishes DbAdmin and moves a dump
-# through a container, which is minutes rather than seconds. It is here so the drill runs the same
-# way every other gate does, from this script, rather than from someone's memory of a README.
+# `restore` is last in the default set because it is the slowest: it publishes DbAdmin and moves a
+# dump through two containers, which is minutes rather than seconds. It belongs in the set anyway.
+# Migrations here are forward-only and `reset --force` drops the database, so a dump that cannot be
+# restored into a scratch one is the failure with no other way back — and a drill nobody runs on
+# every change is a claim about the last time somebody remembered to.
 #
 # Environment:
 #   SDK_IMAGE  container the suite runs in (default mcr.microsoft.com/dotnet/sdk:10.0). There is no
@@ -142,7 +144,7 @@ restore() {
 }
 
 if [ "$#" -eq 0 ]; then
-    set -- suite auth images
+    set -- suite auth images restore
 fi
 
 for requested in "$@"; do

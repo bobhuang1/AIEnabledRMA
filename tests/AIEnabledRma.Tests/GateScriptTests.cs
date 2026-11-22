@@ -7,7 +7,7 @@ namespace AIEnabledRma.Tests;
 /// <remarks>
 /// The workflow is readable by anyone with the repository; a failing run's log is not, and the checks
 /// these scripts perform are the only readable account of what the gate does. The assertions are
-/// deliberately about intent rather than formatting: the local gate runs the same three checks CI
+/// deliberately about intent rather than formatting: the local gate runs the same checks CI
 /// runs, the image gate compares the commit label and knows the tool server carries no corpus, and
 /// the auth gate generates an admin password instead of logging in with the one in the repository.
 /// </remarks>
@@ -33,7 +33,7 @@ public sealed class GateScriptTests
     }
 
     [Fact]
-    public void The_local_gate_runs_the_same_three_checks_as_ci()
+    public void The_local_gate_runs_the_same_checks_as_ci()
     {
         var script = Script("verify-all.sh");
 
@@ -60,6 +60,14 @@ public sealed class GateScriptTests
             Assert.Contains(check, workflow, StringComparison.Ordinal);
             Assert.Contains(check, script, StringComparison.Ordinal);
         }
+
+        // The restore drill is a gate now, not a script somebody remembers: last in the default set
+        // here, and its own job in CI. Migrations are forward-only and `reset --force` drops the
+        // database, so this is the only check that speaks for the way back.
+        Assert.Contains("./scripts/restore-drill.sh", script, StringComparison.Ordinal);
+        Assert.Contains("set -- suite auth images restore", script, StringComparison.Ordinal);
+        Assert.Contains("restore-drill:", workflow, StringComparison.Ordinal);
+        Assert.Contains("run: ./scripts/restore-drill.sh", workflow, StringComparison.Ordinal);
 
         // The database and the skip check travel together: without a connection string the live
         // suites skip, and a green run that ran no database test is the failure the gate exists for.

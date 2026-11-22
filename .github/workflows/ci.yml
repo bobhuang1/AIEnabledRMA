@@ -14,6 +14,9 @@ name: ci
 #     predecessor as well. Main is never cancelled: cancelling the run for one commit is how this
 #     repository ended up with a single recorded run on main, a red one, and no green run after it.
 #   * a hard timeout, because a hung test otherwise bills until the runner gives up.
+#   * the restore drill is the fourth job, and it is the one that costs minutes to prove something no
+#     other job can: that a dump of this schema restores into a database the binary can migrate and
+#     read. Its own timeout, and no .NET setup, keep that cost to the drill itself.
 #   * the NuGet cache is keyed on the lock files, which are checked in.
 #
 # If this check is ever made required for merging, note that a skipped path filter leaves the
@@ -191,3 +194,21 @@ jobs:
       # env file — without starting a container.
       - name: The production pack resolves
         run: docker compose -f docker-compose.prod.yml --env-file deploy/prod.env.example config --quiet
+
+  restore-drill:
+    # Migrations are forward-only and `reset --force` is the only other documented recovery, and that
+    # is not a recovery: it drops the database. Nothing here proved a dump of this schema could be
+    # restored into a database the deployed binary can then migrate and read, which is the one thing
+    # a backup has to do. This runs scripts/restore-drill.sh — the same drill the local gate runs —
+    # so a migration that makes the dump unrestorable fails on its own commit rather than on the day
+    # the backup is the only copy. It is a job of its own rather than a step of build-and-test: it
+    # publishes DbAdmin and moves a dump through two containers, and it needs neither the .NET SDK
+    # nor the service database the other job sets up.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Dump a seeded database, restore it into a scratch one, migrate it and query it
+        run: ./scripts/restore-drill.sh

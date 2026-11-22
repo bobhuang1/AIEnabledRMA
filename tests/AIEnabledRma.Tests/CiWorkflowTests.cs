@@ -49,6 +49,25 @@ public sealed class CiWorkflowTests
     }
 
     /// <summary>
+    /// The restore drill is a job, because it is the only check that speaks for the way back from a
+    /// lost database: migrations are forward-only and <c>reset --force</c> drops the schema.
+    /// </summary>
+    /// <remarks>
+    /// It is separate from build-and-test on purpose. It publishes its own tool and moves a dump
+    /// between containers, needs neither the SDK nor the service database that job provisions, and
+    /// a shared job would make its timeout the other job's.
+    /// </remarks>
+    [Fact]
+    public void The_restore_drill_is_a_job_of_its_own()
+    {
+        var workflow = File.ReadAllText(WorkflowFile(RepositoryRoot()));
+
+        Assert.Contains("restore-drill:", workflow, StringComparison.Ordinal);
+        Assert.Contains("run: ./scripts/restore-drill.sh", workflow, StringComparison.Ordinal);
+        Assert.Contains("timeout-minutes: 20", workflow, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The solution is built by the SDK it declares, not by whichever one the runner happens to
     /// have installed.
     /// </summary>

@@ -21,11 +21,11 @@ not a signing key held by a test.
 ./scripts/verify-auth.sh
 ```
 
-The three gates CI runs can be run here, in the order CI runs them, without a GitHub runner and
+The four gates CI runs can be run here, in the order CI runs them, without a GitHub runner and
 without a token for its logs:
 
 ```bash
-./scripts/verify-all.sh            # the suite, then the auth flows, then all three images
+./scripts/verify-all.sh            # the suite, the auth flows, the images, then the restore drill
 ./scripts/verify-all.sh auth       # one of them, by name
 ```
 

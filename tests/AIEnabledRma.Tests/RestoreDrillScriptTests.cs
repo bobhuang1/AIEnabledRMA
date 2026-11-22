@@ -68,6 +68,10 @@ public sealed class RestoreDrillScriptTests
         Assert.Contains("restore)", gate, StringComparison.Ordinal);
         Assert.Contains("./scripts/restore-drill.sh", gate, StringComparison.Ordinal);
         Assert.Contains("expected suite, auth, images or restore", gate, StringComparison.Ordinal);
+
+        // In the default set, not only reachable by name: the drill is the way back from a lost
+        // database, and a gate somebody has to remember is the state this replaced.
+        Assert.Contains("set -- suite auth images restore", gate, StringComparison.Ordinal);
     }
 
     private static string Script(string name)

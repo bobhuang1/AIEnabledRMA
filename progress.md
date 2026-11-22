@@ -465,3 +465,23 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
 - **Mutation-checked:** removing `IsRowVersion()` from the `RowVersion` mapping fails all three
   concurrency tests, the new capture one included.
 - **Gate for this change:** `suite` 536 passed, 0 skipped, 0 failed.
+- **The restore drill is a gate, not a script somebody remembers.** `scripts/restore-drill.sh` existed
+  and `scripts/verify-all.sh restore` could run it, but it sat outside the default set and outside CI:
+  migrations here are forward-only and `reset --force` drops the schema, so the only thing speaking
+  for the way back never ran unless a person typed it. It is now the fourth step of the default gate
+  (`set -- suite auth images restore`, last because it is the slowest) and its own `restore-drill` job
+  in `ci.yml`, with a 20-minute timeout and no .NET setup, because it publishes `DbAdmin` and moves a
+  dump between containers rather than using the job's SDK or service database. The workflow's cost
+  comment says what the extra minutes buy, next to the rule about matrices and second operating
+  systems.
+- **Both scripts are now executable in the index.** `restore-drill.sh` and `verify-all.sh` were staged
+  as `100644`, so `run: ./scripts/restore-drill.sh` would have failed in CI with "Permission denied"
+  while every local run passed — the working tree had the bit and the index did not.
+- **Tests:** `RestoreDrillScriptTests` asserts the drill is in the default set rather than reachable
+  only by name; `GateScriptTests` asserts the same line and the CI job beside it, so the local gate
+  and CI cannot drift apart; `CiWorkflowTests` asserts the job exists with its own timeout.
+  Mutation-checked: removing `restore` from the default set and replacing the job's `run:` with
+  `echo` fails all three.
+- **Gates for this change:** `./scripts/verify-all.sh suite restore` end to end — suite 537 passed,
+  0 skipped, 0 failed, EF model check and vulnerability audit clean; then the drill: 38,265-byte
+  dump, scratch database at the current schema, every row count matched, "all requested gates passed".

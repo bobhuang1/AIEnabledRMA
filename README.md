@@ -173,8 +173,11 @@ every row count read back through the application's own context and compared wit
 scripts/restore-drill.sh            # or: scripts/verify-all.sh restore
 ```
 
-It is not in the default gate because it publishes `DbAdmin` and moves a dump through two
-containers; `KEEP=1` leaves the container and the dump behind for inspection. The production pack's
+It is the last step of `scripts/verify-all.sh` and the `restore-drill` job in CI, because migrations
+are forward-only and `reset --force` drops the database rather than restoring it — a dump that cannot
+be restored into a scratch database is the failure with no other way back. It costs minutes rather
+than seconds (it publishes `DbAdmin` and moves a dump through two containers), so it runs last;
+`KEEP=1` leaves the container and the dump behind for inspection. The production pack's
 `web`, `mcp` and `rag` services carry a readiness check that asks their own `/health` for an HTTP 200,
 and `proxy` waits for `service_healthy` before it fronts them. The probe uses bash's `/dev/tcp`
 rather than curl, because none of these images ships curl and a package installed into three
