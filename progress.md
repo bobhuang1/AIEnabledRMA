@@ -361,3 +361,23 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   theory now covers the RAG image. Mutation-checked: restoring the Data reference fails the publish assertion.
 - **Gate for this change:** `suite` 504 passed, 0 skipped, 0 failed; EF model check clean; vulnerability audit
   clean for all nine projects.
+
+- **A retention policy, and one command that applies it.** `RetentionPolicy` (Domain) fixes the four
+  windows the owner chose on 2026-11-22: `mcp_tool_calls` 90 days, `operator_actions` 730 days (the
+  default return window), resolved `review_items` 90 days after resolution, and `webhook_events` 90
+  days. `RetentionPruner` (Data) applies them with one query per table, so the count a dry run prints
+  is the set the applied run deletes, and each predicate is a range scan on the column the table
+  already indexes for time. `DbAdmin prune` is the operator surface: dry run by default, `--apply` to
+  delete, one optional per-table flag, and an unrecognised flag refused rather than read as "all
+  four", because with `--apply` that would turn one table into the whole audit trail. Open review
+  items are unreachable at any age (the predicate needs `status = Resolved` and a non-null
+  `resolved_at_utc`), and a window of zero or less is refused instead of deleting the row just
+  written. Tests: `RetentionPolicyTests` pins the four numbers and the guard;
+  `RetentionPruneTests` runs against PostgreSQL with rows straddling every window, including a
+  resolved item created 400 days ago and resolved 89 days ago (survives: age is resolution) and an
+  open item 4000 days old (survives). Mutation-checked twice: ageing review items by
+  `created_at_utc` fails the apply and dry-run tests, and pruning the queue by creation without the
+  status filter fails the open-item test.
+- **Gate for this change:** `suite` 516 passed, 0 skipped, 0 failed; EF model check clean ("No
+  changes have been made to the model since the last migration"); vulnerability audit clean for all
+  nine projects.

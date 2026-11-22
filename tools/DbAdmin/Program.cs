@@ -1,6 +1,7 @@
 using AIEnabledRma.Data;
 using AIEnabledRma.Domain.Catalog;
 using AIEnabledRma.Domain.Customers;
+using AIEnabledRma.Domain.Operations;
 using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Ai;
 using AIEnabledRma.Rag;
@@ -21,6 +22,8 @@ using Microsoft.Extensions.Options;
 //   DbAdmin seed                 apply migrations, then insert demo data if the catalog is empty
 //   DbAdmin reset --force        drop every table, then migrate and seed
 //   DbAdmin stats                row counts per table
+//   DbAdmin prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events]
+//                                delete audit rows past their retention window; dry run by default
 //   DbAdmin kb-ingest [--rebuild] [--path <dir>]
 //                                chunk, embed and publish the knowledge base to the pgvector store
 //   DbAdmin kb-cases --file <cases.json> [--report <path>] [--publish --reviewed-by <name>]
@@ -129,6 +132,51 @@ switch (command)
         await PrintStatsAsync(db);
         break;
 
+    case "prune":
+    {
+        var tables = new Dictionary<string, RetentionTargets>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["--mcp-calls"] = RetentionTargets.McpToolCalls,
+            ["--operator-actions"] = RetentionTargets.OperatorActions,
+            ["--review-items"] = RetentionTargets.ReviewItems,
+            ["--webhook-events"] = RetentionTargets.WebhookEvents,
+        };
+
+        var apply = args.Contains("--apply", StringComparer.OrdinalIgnoreCase);
+        var targets = RetentionTargets.None;
+        foreach (var arg in args.Skip(1))
+        {
+            if (arg.Equals("--apply", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (tables.TryGetValue(arg, out var target))
+            {
+                targets |= target;
+                continue;
+            }
+
+            // A mistyped flag must not fall through to "no table named, so all four": with
+            // --apply that turns one table into the whole audit trail. Refuse it instead.
+            Console.Error.WriteLine(
+                $"prune does not understand '{arg}'. Use --apply and, optionally, "
+                + $"{string.Join(", ", tables.Keys)}; naming none prunes all four.");
+            return 1;
+        }
+
+        var report = await RetentionPruner.PruneAsync(
+            db,
+            RetentionPolicy.Default,
+            DateTimeOffset.UtcNow,
+            targets == RetentionTargets.None ? RetentionTargets.All : targets,
+            apply,
+            CancellationToken.None);
+
+        PrintPrune(report);
+        return 0;
+    }
+
     case "kb-ingest":
     {
         var pathIndex = Array.FindIndex(args, a => a.Equals("--path", StringComparison.OrdinalIgnoreCase));
@@ -210,7 +258,7 @@ switch (command)
     }
 
     default:
-        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats|kb-ingest [--rebuild] [--path <dir>]|kb-cases --file <json> [--report <path>] [--publish --reviewed-by <name>]>");
+        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats|prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events]|kb-ingest [--rebuild] [--path <dir>]|kb-cases --file <json> [--report <path>] [--publish --reviewed-by <name>]>");
         return 1;
 }
 
@@ -225,6 +273,27 @@ static async Task PrintStatsAsync(RmaDbContext db)
     Console.WriteLine($"  addresses:     {await db.Addresses.CountAsync()}");
     Console.WriteLine($"  rma_requests:  {await db.RmaRequests.CountAsync()}");
     Console.WriteLine($"  rma_lines:     {await db.RmaLines.CountAsync()}");
+}
+
+static void PrintPrune(PruneReport report)
+{
+    Console.WriteLine(report.Applied
+        ? "Retention applied:"
+        : "Retention (dry run): nothing is deleted until you re-run with --apply.");
+
+    foreach (var table in report.Tables)
+    {
+        // The review queue has a second rule the cutoff alone cannot say, and the operator reading
+        // the report is the person who has to trust it.
+        var scope = table.Target == RetentionTargets.ReviewItems
+            ? $"resolved at or before {table.Cutoff.ToUniversalTime():yyyy-MM-dd HH:mm:ss}Z (open items are never pruned)"
+            : $"at or before {table.Cutoff.ToUniversalTime():yyyy-MM-dd HH:mm:ss}Z";
+
+        Console.WriteLine($"  {table.Table,-16} {scope}");
+        Console.WriteLine($"  {string.Empty,-16} {table.Rows} row(s) {(report.Applied ? "deleted" : "would be deleted")}");
+    }
+
+    Console.WriteLine($"  total: {report.TotalRows} row(s) {(report.Applied ? "deleted" : "would be deleted")}.");
 }
 
 

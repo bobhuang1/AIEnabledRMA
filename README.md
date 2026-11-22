@@ -53,7 +53,7 @@ ambiguous-identity path; `j.smith@example.com` resolves to exactly one customer.
 | `src/AIEnabledRma.Rag` | In-process knowledge index (BM25-ish retrieval) that feeds the AI with troubleshooting articles. |
 | `src/AIEnabledRma.Mcp` | MCP tool server: the same policy and lookups exposed to an agent. |
 | `src/AIEnabledRma.Web` | Customer-facing return wizard (ASP.NET Core MVC). |
-| `tools/DbAdmin` | Migrate, seed, reset, and inspect the database from the command line. |
+| `tools/DbAdmin` | Migrate, seed, reset, prune and inspect the database from the command line. |
 | `tests/AIEnabledRma.Tests` | The full suite, incl. live PostgreSQL sequence and end-to-end wizard suites. |
 
 The Web and MCP hosts call the same `AddRmaData` registration, so the fuzzy-match thresholds an
@@ -118,7 +118,44 @@ dotnet run --project tools/DbAdmin -- seed
 ```
 
 `DbAdmin` commands: `migrate`, `migrations`, `seed` (only when the catalog is empty),
-`reset --force` (drop schema, migrate, seed, realign the RMA number sequence), `stats`.
+`reset --force` (drop schema, migrate, seed, realign the RMA number sequence), `stats`,
+`prune` (delete audit rows past their retention window — see below).
+
+### Retention
+
+Four tables are audit trails rather than business records, so each has a window after which its rows
+are deleted. `prune` is an operator-run command: it is not a background job in a host and not an HTTP
+endpoint, for the same reason `migrate` and `seed` are not — a running site should never be a way to
+delete production data.
+
+| Table | Kept | Aged from |
+| --- | --- | --- |
+| `mcp_tool_calls` | 90 days | the call (`at_utc`) |
+| `operator_actions` | 730 days — the default return window | the action (`at_utc`) |
+| `review_items` | 90 days **after resolution** | `resolved_at_utc`; an open item is never pruned |
+| `webhook_events` | 90 days | the delivery (`received_at_utc`) |
+
+```bash
+dotnet run --project tools/DbAdmin -- prune                              # dry run: counts only
+dotnet run --project tools/DbAdmin -- prune --apply                      # delete what the dry run counted
+dotnet run --project tools/DbAdmin -- prune --webhook-events --apply     # one table at a time
+```
+
+The dry run is the default and prints the cutoff it would use and the rows it would lose per table, so
+`--apply` is a decision about a number somebody has seen rather than a guess. Naming no table prunes
+all four; naming one limits the run; an unrecognised flag is refused rather than treated as "no table
+named", because with `--apply` that would quietly turn one table into the whole trail. Each delete is a
+range scan on the column the table already indexes for time, and the count and the delete are built
+from one query, so the report cannot promise a number the next command does not remove.
+
+`operator_actions` is tied to the return window on purpose: an action explains a decision for as long
+as that decision can be disputed, and keeping the return while deleting who moved it would leave the
+evidence half gone. `review_items` is aged from resolution rather than creation, so an item opened long
+ago and closed yesterday is one day old as far as the queue is concerned. A window of zero or less is
+refused at startup of the command rather than honoured, because it is not a short retention period —
+it deletes the row that was just written. Raising `RmaPolicy:ReturnWindowDays` in a deployment does
+not move the retention window with it; the two are equal at their defaults, and moving one without the
+other is a decision for whoever changes it.
 
 ## Run the web wizard
 
