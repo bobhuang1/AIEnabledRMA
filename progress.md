@@ -582,3 +582,12 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   that test with the escaped `ConcurrencyConflictException`, and putting the old catch block back fails
   it on the missing "confirmation step".
 - **Gate:** `suite` 559 passed, 0 skipped, 0 failed.
+- **The capture race, seen from the losing side.** The existing capture test lets both operators capture,
+  and both write `InRepair` — so a refused write and a landed one leave the same status and only the
+  ledger can tell them apart. The new test makes the competing write a void: operator one cancels a
+  return in `Received`, operator two's capture form is still open on that row, and its submit is refused
+  after the provider was already called. The row must stay `Cancelled` with its cancellation reason (a
+  write that landed would flip it to `InRepair` while the reason still names a withdrawal), and
+  `operator_actions` must hold exactly two rows: the void as the only success, the capture as a refusal.
+- **Gate:** `suite` 560 passed, 0 skipped, 0 failed. Mutation: dropping `recorded.Succeeded = false`
+  from the refusal catch fails the new test on the ledger assertion.

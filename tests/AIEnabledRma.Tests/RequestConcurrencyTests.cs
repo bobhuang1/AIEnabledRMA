@@ -128,6 +128,71 @@ public sealed class RequestConcurrencyTests
         Assert.Contains("changed since it was read", refused.Detail, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The capture that loses the race must not move the row to InRepair. The both-capture test above
+    /// cannot show that: there both writers want InRepair, so a lost write and a landed one leave the
+    /// same status and only the ledger tells them apart. Here the competing write is a void, so the row
+    /// ends Cancelled and a stale capture that wrote through would visibly flip it back to InRepair —
+    /// while the provider, already called, would be holding money for a cancelled return.
+    /// </summary>
+    [Fact]
+    public async Task A_capture_whose_row_was_cancelled_underneath_it_is_refused_and_leaves_the_row_cancelled()
+    {
+        await using var database = new LiveDatabase("rma_concurrency");
+        await database.InitializeAsync();
+
+        var request = Request(RmaRequestStatus.Received);
+        request.PaymentTransactionId = "pi_cancelled_capture";
+        request.DepositAmount = 69m;
+        request.CurrencyCode = "EUR";
+
+        await using (var seed = database.CreateContext())
+        {
+            await seed.Database.MigrateAsync(Ct);
+            seed.RmaRequests.Add(request);
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        await using var first = database.CreateContext();
+        await using var second = database.CreateContext();
+
+        // Both operators have the item open: one on the capture form, one on the cancel panel.
+        Assert.NotNull(await new RmaRepository(second).GetByIdAsync(request.Id, Ct));
+
+        var voided = await OperatorServiceFor(first).VoidAsync(
+            request.Id, "operator-one", "customer withdrew the repair", Ct);
+        Assert.True(voided.Succeeded);
+
+        // The stale capture. Its copy still says Received, so the status guard passes and only the
+        // token can refuse it; the provider is called before the write, which is why the refusal has
+        // to say the money may already be held.
+        var stale = await OperatorServiceFor(second).CaptureAsync(
+            request.Id, "operator-two", "screen replaced under warranty", Ct);
+
+        Assert.False(stale.Succeeded);
+        Assert.Contains("payment provider may already hold", stale.Message, StringComparison.OrdinalIgnoreCase);
+
+        await using var check = database.CreateContext();
+        var stored = await check.RmaRequests.SingleAsync(r => r.Id == request.Id, Ct);
+
+        // The void stands. Without the token this row reads InRepair while its cancellation reason
+        // still names a withdrawal, which is the state nobody would notice until the customer asked
+        // why a cancelled return was being repaired.
+        Assert.Equal(RmaRequestStatus.Cancelled, stored.Status);
+        Assert.NotEqual(RmaRequestStatus.InRepair, stored.Status);
+        Assert.Contains("customer withdrew the repair", stored.CancellationReason, StringComparison.Ordinal);
+
+        var actions = await check.OperatorActions.ToListAsync(Ct);
+
+        // One success, and it is the void. The capture appears once, as the refusal it was.
+        Assert.Equal(2, actions.Count);
+        Assert.True(actions.Single(a => a.Action == "void").Succeeded);
+        var refused = Assert.Single(actions, a => a.Action == "capture");
+        Assert.False(refused.Succeeded);
+        Assert.DoesNotContain(actions, a => a.Action == "capture" && a.Succeeded);
+        Assert.Contains("changed since it was read", refused.Detail, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_confirmation_from_a_stale_page_is_refused_and_reports_the_stored_status()
     {
