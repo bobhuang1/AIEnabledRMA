@@ -1,13 +1,19 @@
-using AIEnabledRma.Domain.Configuration;
 using Microsoft.Extensions.Configuration;
 
-namespace AIEnabledRma.Data;
+namespace AIEnabledRma.Domain.Configuration;
 
 /// <summary>
 /// Startup checks for a Production deployment (P11). Each host calls <see cref="Problems"/> with the
 /// checks that apply to it and refuses to start when any fail, so a misconfiguration is an obvious
 /// crash at deploy time rather than a quiet security gap in service.
 /// </summary>
+/// <remarks>
+/// This lives beside <see cref="ProductionDatabaseCredentials"/> and <see cref="ProductionSecrets"/>
+/// rather than in the data layer, because the rules are configuration, not persistence. The RAG host
+/// applies the database rule and opens PostgreSQL through Npgsql directly, so a copy here from the
+/// EF Core project would pull an ORM into an image that never uses one — and a second copy in the RAG
+/// project would be the drift this shared implementation exists to prevent.
+/// </remarks>
 public static class ProductionConfiguration
 {
     /// <summary>The bundled offline model's name; see <c>AddAiProvider</c>.</summary>

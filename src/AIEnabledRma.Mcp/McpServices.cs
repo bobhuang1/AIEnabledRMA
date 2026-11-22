@@ -1,5 +1,6 @@
 using AIEnabledRma.Data;
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Configuration;
 using AIEnabledRma.Mcp.Tools;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;

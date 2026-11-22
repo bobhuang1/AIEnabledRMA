@@ -93,6 +93,49 @@ public sealed class PublishLayoutTests
     }
 
     /// <summary>
+    /// The RAG host reads the corpus and opens PostgreSQL through Npgsql; it never builds an EF
+    /// model, so its image carries no ORM.
+    /// </summary>
+    /// <remarks>
+    /// The shared Production database rule used to live in the data layer, which made this project
+    /// reference it and put Entity Framework Core into an image that needs none. The rule now lives in
+    /// Domain, beside the credential rules it applies. This asserts the published output rather than
+    /// the project file: a reference pulled in through another project would pass a csproj check and
+    /// still ship the assemblies, and an image is the thing that has to stay small.
+    /// </remarks>
+    [Fact]
+    public async Task The_published_rag_host_carries_no_orm()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var root = RepositoryRoot();
+        var output = Path.Combine(Path.GetTempPath(), $"rma-publish-{Guid.NewGuid():N}");
+
+        try
+        {
+            await PublishAsync("AIEnabledRma.Rag", root, output, ct);
+
+            var published = Directory.GetFiles(output)
+                .Select(Path.GetFileName)
+                .OfType<string>()
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            Assert.DoesNotContain("AIEnabledRma.Data.dll", published);
+            Assert.DoesNotContain("Npgsql.EntityFrameworkCore.PostgreSQL.dll", published);
+            Assert.DoesNotContain(
+                published,
+                file => file.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.OrdinalIgnoreCase));
+
+            // The vector store still talks to PostgreSQL directly, so the assertions above are about
+            // the ORM rather than about a publish that lost database access altogether.
+            Assert.Contains("Npgsql.dll", published);
+        }
+        finally
+        {
+            Delete(output);
+        }
+    }
+
+    /// <summary>
     /// The tool server publishes no corpus, and that is the assertion, not an oversight.
     /// </summary>
     /// <remarks>
@@ -138,6 +181,7 @@ public sealed class PublishLayoutTests
     [Theory]
     [InlineData("AIEnabledRma.Mcp")]
     [InlineData("AIEnabledRma.Web")]
+    [InlineData("AIEnabledRma.Rag")]
     public void The_dockerfile_copies_every_project_it_builds(string project)
     {
         var root = RepositoryRoot();

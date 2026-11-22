@@ -350,3 +350,14 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   admission test.
 - **Gate for this change:** `suite` 502 passed, 0 skipped, 0 failed; EF model check clean ("No changes have
   been made to the model since the last migration"); vulnerability audit clean for all nine projects.
+
+- **The shared Production rule left the data layer.** `ProductionConfiguration` moved from `AIEnabledRma.Data`
+  to `AIEnabledRma.Domain`, beside the `ProductionDatabaseCredentials` and `ProductionSecrets` rules it applies,
+  and Domain gained `Microsoft.Extensions.Configuration.Abstractions` for `IConfiguration`. The RAG host had
+  referenced the EF Core project only for that call, so it now references Domain and Privacy alone, its
+  Dockerfile copies no Data manifest, and its published image carries no `Microsoft.EntityFrameworkCore.*`,
+  `Npgsql.EntityFrameworkCore.PostgreSQL` or `AIEnabledRma.Data.dll` while keeping `Npgsql`. Evidence:
+  `PublishLayoutTests.The_published_rag_host_carries_no_orm` asserts the publish, and the Dockerfile-copy
+  theory now covers the RAG image. Mutation-checked: restoring the Data reference fails the publish assertion.
+- **Gate for this change:** `suite` 504 passed, 0 skipped, 0 failed; EF model check clean; vulnerability audit
+  clean for all nine projects.
