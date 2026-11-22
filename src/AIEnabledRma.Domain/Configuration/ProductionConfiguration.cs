@@ -10,8 +10,8 @@ namespace AIEnabledRma.Domain.Configuration;
 /// <remarks>
 /// This lives beside <see cref="ProductionDatabaseCredentials"/> and <see cref="ProductionSecrets"/>
 /// rather than in the data layer, because the rules are configuration, not persistence. The RAG host
-/// applies the database rule and opens PostgreSQL through Npgsql directly, so a copy here from the
-/// EF Core project would pull an ORM into an image that never uses one — and a second copy in the RAG
+/// applies the database rule and opens PostgreSQL through Npgsql directly; a copy of it taken from the
+/// EF Core project would put an ORM into an image that never uses one, and a copy kept in the RAG
 /// project would be the drift this shared implementation exists to prevent.
 /// </remarks>
 public static class ProductionConfiguration
