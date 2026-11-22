@@ -159,6 +159,11 @@ public sealed class RequestConcurrencyTests
         Assert.Equal(StepOutcome.InvalidTransition, again.Outcome);
         Assert.Contains("changed", again.Message, StringComparison.OrdinalIgnoreCase);
 
+        // One refusal path, shared with every other step: the message names the step the helper was
+        // given. A bespoke confirmation wording reappearing beside it — the duplicate this replaced —
+        // fails here rather than living on as a second message nobody reads.
+        Assert.Contains("confirmation step", again.Message, StringComparison.Ordinal);
+
         // Reported from the row that is actually stored, not from the stale page.
         Assert.Equal(RmaRequestStatus.AwaitingShipment, again.Status);
 

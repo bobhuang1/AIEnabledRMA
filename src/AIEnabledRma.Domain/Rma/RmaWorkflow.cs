@@ -904,28 +904,13 @@ public sealed partial class RmaWorkflow(
         request.Status = RmaRequestStatus.AwaitingShipment;
         request.UpdatedAtUtc = clock.UtcNow;
 
-        try
+        // The status guard cannot see a replayed page: a double submission and the first
+        // confirmation both read the same Approved row, so only the token refuses the second one.
+        // TryCommitAsync reloads the row and reports where it actually is, rather than going through
+        // this same refusal a second time with its own wording.
+        if (await TryCommitAsync(request, "confirmation", cancellationToken) is { } confirmationConflict)
         {
-            await CommitAsync(cancellationToken);
-        }
-        catch (ConcurrencyConflictException)
-        {
-            // Another confirmation (a double-clicked or replayed page) or an operator changed the
-            // row between the read above and this write. The status guard cannot see that: both
-            // confirmations read the same Approved row. Report where the row actually is now, not
-            // where this attempt meant to put it — the save was rolled back and nothing of this
-            // attempt was written.
-            var current = await LoadAsync(rmaId, cancellationToken);
-
-            return new StepResult
-            {
-                Outcome = StepOutcome.InvalidTransition,
-                RmaId = rmaId,
-                RmaNumber = request.RmaNumber,
-                Message = "This return was changed by someone else while you were confirming it, "
-                    + "so nothing was saved. Open it again to see where it stands.",
-                Status = current?.Status ?? request.Status,
-            };
+            return confirmationConflict;
         }
 
         return new StepResult
@@ -1094,7 +1079,8 @@ public sealed partial class RmaWorkflow(
     /// </summary>
     /// <remarks>
     /// The token sits on the row, so it covers every step that writes one — not only the steps it
-    /// was added for. Without this, a conflicting triage, problems, shipping or payment step would
+    /// was added for. Without this, a conflicting confirmation, triage, problems, shipping or payment
+    /// step would
     /// escape to the host as an unhandled fault, where every other stale page is a message.
     /// </remarks>
     private async Task<StepResult?> TryCommitAsync(

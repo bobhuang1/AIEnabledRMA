@@ -571,3 +571,14 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   caught by the suite's `ef migrations has-pending-model-changes` step, which is how a token that stopped
   being enforced would surface first.
 - **Gates:** `suite` 557 passed, 0 skipped, 0 failed.
+- **One refusal path, not two.** `ConfirmAsync` still carried its own `try`/`catch` around
+  `CommitAsync`, with its own reload and its own wording ("changed by someone else while you were
+  confirming it"), while every step added since went through `TryCommitAsync` — the same decision
+  written twice, free to drift, and the drift would only show on a stale page nobody exercises twice.
+  The confirmation step now calls `TryCommitAsync(request, "confirmation", cancellationToken)` and the
+  duplicate is deleted, so the reload, the `InvalidTransition` outcome and the message exist once. The
+  stale-page test additionally asserts the refusal names the step ("confirmation step"), which a
+  bespoke wording would not; mutation-checked both ways — calling `CommitAsync` directly again fails
+  that test with the escaped `ConcurrencyConflictException`, and putting the old catch block back fails
+  it on the missing "confirmation step".
+- **Gate:** `suite` 559 passed, 0 skipped, 0 failed.
