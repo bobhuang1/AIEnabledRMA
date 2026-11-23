@@ -1,0 +1,32 @@
+# One database backup, written to a destination outside this host.
+#
+# The dump cannot be taken on the host directly: the production pack's postgres publishes no port,
+# and the PostgreSQL client runs inside the container that already holds the credentials. This unit
+# calls scripts/backup.sh, which dumps through the pack's own image, checks the file, copies it to
+# BACKUP_REMOTE and prunes the window -- see "Database backups" in the README.
+#
+# Install beside the checkout that holds prod.env:
+#   sudo cp deploy/rma-backup.service deploy/rma-backup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rma-backup.timer
+
+[Unit]
+Description=RMA database backup to an off-host destination
+Documentation=file:///srv/aienabledrma/README.md
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust to the checkout that holds docker-compose.prod.yml, prod.env and rclone.conf.
+WorkingDirectory=/srv/aienabledrma
+# The env file carries POSTGRES_* for the dump and BACKUP_REMOTE/BACKUP_KEEP_DAYS for the
+# destination; rclone reads its credentials from RCLONE_CONFIG_DIR rather than this file, so no
+# storage key is ever in prod.env.
+EnvironmentFile=/srv/aienabledrma/prod.env
+ExecStart=/usr/bin/bash /srv/aienabledrma/scripts/backup.sh backup
+# A backup that could not reach its destination exits non-zero, and systemd records the unit as
+# failed: that is the whole point. A schedule that answers 0 while uploading nothing is the state
+# this job exists to make impossible.
+User=rma
+Group=docker

@@ -11,19 +11,28 @@
 # What this does, end to end:
 #   1. starts a throwaway PostgreSQL from the pack's own image
 #   2. seeds it through the application's own path (`DbAdmin seed`, which migrates first)
-#   3. dumps it with `pg_dump -Fc`, copies the file out of the container and back in, so the exercise
-#      includes the file leaving the server rather than staying in its /tmp
-#   4. restores it with `pg_restore --exit-on-error` into a *different* database on that server
-#   5. migrates the restored database (`DbAdmin migrate`) and asserts nothing is left pending
-#   6. reads it back (`DbAdmin stats`) and compares every count against the source
+#   3. runs the deployment's own backup, `scripts/backup.sh`: the dump, the pg_restore check and the
+#      copy to a destination outside the server are its code, not a second copy of them written here
+#   4. runs it twice, so there is a newest copy for the fetch to have to choose, beside a copy already
+#      past the retention window, which the same run has to delete
+#   5. deletes the local copies and fetches the newest dump back from the destination
+#   6. restores that copy with `pg_restore --exit-on-error` into a *different* database on the server
+#   7. migrates the restored database (`DbAdmin migrate`) and asserts nothing is left pending
+#   8. reads it back (`DbAdmin stats`) and compares every count against the source
 #
 # Usage:
 #   scripts/restore-drill.sh
 #
 # Environment:
-#   PG_IMAGE   default pgvector/pgvector:pg16 (the image the production pack runs)
-#   SDK_IMAGE  default mcr.microsoft.com/dotnet/sdk:10.0
-#   KEEP=1     leave the container, the dump and the working directory for inspection
+#   PG_IMAGE      default pgvector/pgvector:pg16 (the image the production pack runs)
+#   SDK_IMAGE     default mcr.microsoft.com/dotnet/sdk:10.0
+#   RCLONE_IMAGE  default the rclone image scripts/backup.sh pins; it is what moves the dump off the
+#                 server, so the drill exercises the transport rather than describing it
+#   KEEP=1        leave the container, the dumps and the working directory for inspection
+#
+# The dump is not taken here. `scripts/backup.sh` takes it, the way deploy/rma-backup.service does,
+# because a drill that dumps its own file and restores it proves the dump format and says nothing
+# about the backup path -- the copy that left the host yesterday is the one a disaster needs.
 #
 # Requirements: docker. Nothing else: there is no host dotnet on the machines this was written on,
 # so DbAdmin is published and run in the SDK container, the same way the suite does it.
@@ -35,6 +44,7 @@ cd "$REPO_ROOT"
 
 PG_IMAGE=${PG_IMAGE:-pgvector/pgvector:pg16}
 SDK_IMAGE=${SDK_IMAGE:-mcr.microsoft.com/dotnet/sdk:10.0}
+RCLONE_IMAGE=${RCLONE_IMAGE:-rclone/rclone:1.68.1@sha256:e78b765d51301e1934c376e9b5d0b42a156352099502a812b5e3b3bd37ccb33b}
 NETWORK=rma-restore-drill
 SERVER=rma-restore-drill-pg
 SEED_DB=rmadrill_seed
@@ -181,28 +191,95 @@ fi
 
 pass "seeded: $(tr -s ' ' <"$WORK/seed-counts.txt" | tr '\n' ' ' | sed 's/ $//')"
 
-# -Fc is the format the pack's operator instructions use (custom format: compressed, selective
-# restore, pg_restore-able). The file leaves the container and comes back, because a dump that only
-# ever existed inside the server it came from is not a backup.
-# MSYS_NO_PATHCONV=1 throughout the docker exec calls: the paths below are the container's, and
-# Git Bash would otherwise rewrite /tmp/seed.dump into a Windows path that does not exist there.
-if ! MSYS_NO_PATHCONV=1 docker exec "$SERVER" pg_dump -U "$DB_USER" -Fc -d "$SEED_DB" -f /tmp/seed.dump; then
-    fail "pg_dump" "pg_dump -Fc failed"
+# The backup path the deployment runs, not one invented here. A dump made a second before it is
+# restored proves the format; the copy that matters is the one that left the host at 01:20 and has
+# been sitting in a bucket since. `scripts/backup.sh` is the command the nightly unit runs, so the
+# drill drives it: dump, verify, upload, prune -- then delete the local copy and fetch the newest
+# object back, so what is restored is what the destination holds.
+#
+# The destination is a directory beside the drill (`local:`, one of the remotes the script accepts)
+# rather than a bucket, so the drill needs no credentials. Under that line it is the same code: the
+# dump flags, the pg_restore check, the copy, the retention, and the choice of the newest object.
+OFFHOST="$WORK/offhost"
+STAGING="$WORK/staging"
+KEEP_DAYS=14
+DECOY=rma-20200101T000000Z.dump
+
+mkdir -p "$OFFHOST"
+
+backup() {
+    BACKUP_REMOTE="local:$OFFHOST" \
+    BACKUP_STAGING="$STAGING" \
+    BACKUP_KEEP_DAYS="$KEEP_DAYS" \
+    BACKUP_DB_CONTAINER="$SERVER" \
+    RCLONE_IMAGE="$RCLONE_IMAGE" \
+        "$REPO_ROOT/scripts/backup.sh" "$@"
+}
+
+# A copy already past the window, with a name an oldest-first rule would choose. Retention has to
+# delete it, and the fetch below has to come back with one of the two real dumps instead.
+printf 'not a dump\n' >"$OFFHOST/$DECOY"
+touch -d '30 days ago' "$OFFHOST/$DECOY" 2>/dev/null || touch -t 202001010000 "$OFFHOST/$DECOY"
+
+if ! backup backup >"$WORK/backup-1.txt" 2>&1; then
+    fail "backup writes a dump off the host" "scripts/backup.sh backup failed:"
+    tail -12 "$WORK/backup-1.txt" | sed 's/^/          /'
+    printf '\n%d check(s) failed\n' "$failures"
+    exit 1
 fi
 
-# The container side is a container path and must stay one; the host side has to be the Windows
-# path under Git Bash, which is why it goes through winpath rather than being left as /tmp/...
-MSYS_NO_PATHCONV=1 docker cp "$SERVER:/tmp/seed.dump" "$(winpath "$WORK/seed.dump")" >/dev/null \
-    || fail "dump leaves the server" "docker cp failed"
-MSYS_NO_PATHCONV=1 docker cp "$(winpath "$WORK/seed.dump")" "$SERVER:/tmp/restore.dump" >/dev/null \
-    || fail "dump comes back" "docker cp failed"
+first=$(ls "$STAGING"/*.dump 2>/dev/null | xargs -r -n1 basename | sort | tail -n 1)
 
-dump_bytes=$(wc -c <"$WORK/seed.dump" | tr -d ' ')
-if [ "${dump_bytes:-0}" -lt 1024 ]; then
-    fail "dump is not empty" "the dump file is ${dump_bytes} bytes"
+# A second dump, so "the newest" has something to be wrong about. The names carry a UTC timestamp
+# fixed to the second, which is what makes sorting them chronological rather than alphabetical luck.
+sleep 2
+
+if ! backup backup >"$WORK/backup-2.txt" 2>&1; then
+    fail "backup runs twice" "the second scripts/backup.sh backup failed:"
+    tail -12 "$WORK/backup-2.txt" | sed 's/^/          /'
+    printf '\n%d check(s) failed\n' "$failures"
+    exit 1
 fi
 
-pass "dumped and moved: $dump_bytes bytes"
+second=$(ls "$STAGING"/*.dump 2>/dev/null | xargs -r -n1 basename | sort | tail -n 1)
+
+if [ -e "$OFFHOST/$DECOY" ]; then
+    fail "retention deletes the copy past the window" "$DECOY is still at $OFFHOST after $KEEP_DAYS days of retention"
+else
+    pass "retention deleted the copy older than $KEEP_DAYS days"
+fi
+
+offhost_count=$(ls "$OFFHOST"/*.dump 2>/dev/null | wc -l | tr -d ' ')
+
+if [ "$offhost_count" = 2 ] && [ -n "$first" ] && [ "$first" != "$second" ]; then
+    pass "two dumps are off the host, the newest being $second"
+else
+    fail "the backups are off the host" "$offhost_count dump(s) at $OFFHOST, named '$first' and '$second'"
+fi
+
+# The local copies go first, so the restore below cannot quietly use one of them: the only way back
+# is `fetch` pulling the newest object from the destination.
+rm -f "$STAGING"/*.dump
+
+if ! fetched=$(backup fetch 2>"$WORK/fetch.txt"); then
+    fail "fetch the newest off-host copy" "scripts/backup.sh fetch failed:"
+    tail -12 "$WORK/fetch.txt" | sed 's/^/          /'
+    printf '\n%d check(s) failed\n' "$failures"
+    exit 1
+fi
+
+dump_bytes=$(wc -c <"$STAGING/$fetched" 2>/dev/null | tr -d ' ')
+
+if [ "$fetched" = "$second" ] && [ "${dump_bytes:-0}" -ge 1024 ]; then
+    pass "fetched the newest off-host copy ($fetched, $dump_bytes bytes), not a fresh dump"
+else
+    fail "fetch returns the newest off-host copy" "wanted '$second', got '$fetched' (${dump_bytes:-0} bytes)"
+fi
+
+# Into the server the way any restore gets a file: the container side stays a container path and the
+# host side goes through winpath.
+MSYS_NO_PATHCONV=1 docker cp "$(winpath "$STAGING/$fetched")" "$SERVER:/tmp/restore.dump" >/dev/null \
+    || fail "the fetched copy reaches the server" "docker cp failed"
 
 # A different database on the same server: the restore has to recreate the schema rather than
 # inherit it from the source, and the source stays intact for comparison.
@@ -211,6 +288,7 @@ if ! docker exec "$SERVER" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 \
     fail "scratch database" "CREATE DATABASE $SCRATCH_DB failed"
 fi
 
+# /tmp/restore.dump is the file fetched from the destination above, not one made here.
 # --exit-on-error, because pg_restore's default is to report errors and exit zero: a restore that
 # skipped half the tables would otherwise be called a success by the script and by the operator.
 if ! MSYS_NO_PATHCONV=1 docker exec "$SERVER" pg_restore -U "$DB_USER" -d "$SCRATCH_DB" --no-owner --exit-on-error /tmp/restore.dump; then

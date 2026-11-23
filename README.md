@@ -255,13 +255,62 @@ be asked about something, and 0 means every transaction agreed. Against the bund
 process starts with an empty authorisation book, so a development run reports those transactions as
 unanswered rather than as drift; against Stripe it is the real comparison.
 
+### Database backups
+
+A dump on the host that holds the database is not a backup: it fails with the disk, the host and the
+account that made it. `scripts/backup.sh` writes one to a destination outside the host, keeps a local
+copy so a restore does not have to reach the network first, and prunes both to the retention window
+in the same run.
+
+```bash
+BACKUP_REMOTE=s3:rma-prod-backups/postgres scripts/backup.sh backup   # dump, verify, upload, prune
+BACKUP_REMOTE=s3:rma-prod-backups/postgres scripts/backup.sh list     # names at the destination
+BACKUP_REMOTE=s3:rma-prod-backups/postgres scripts/backup.sh fetch    # newest one back; name on stdout
+```
+
+`BACKUP_REMOTE` is an rclone destination, so one command covers object storage and a remote host:
+`s3:bucket/prefix`, `b2:bucket/prefix`, `sftp:backup.example.com:/srv/rma`, or
+`local:/mnt/offsite/rma` for a volume mounted from somewhere else. `local:` is a directory mounted
+into the rclone container, which is the case the restore drill uses because it needs no credentials.
+Object-store and SFTP credentials live in `rclone.conf` on the host (`RCLONE_CONFIG_DIR`, default
+`/etc/aienabledrma`), never in `prod.env`: a storage key in the same file as the database password is
+one file to leak instead of two, and `prod.env` is copied into every container.
+
+Two checks run before the file leaves. It must be larger than a kilobyte (an empty dump uploads
+happily and is found at the restore), and `pg_restore --list` must read it (a file the restore tool
+cannot open is not a dump). Either failing deletes the file, uploads nothing, and exits non-zero.
+
+Retention is `BACKUP_KEEP_DAYS` (default 14) and applies on the destination and in `BACKUP_STAGING`
+(default `/var/backups/aienabledrma`), so neither side grows without somebody deciding it should.
+Names are `rma-YYYYmmddTHHMMSSZ.dump`: fixed-width UTC, which is what makes "the newest" a sort
+rather than a guess -- and what the drill and `fetch` both rely on.
+
+`deploy/rma-backup.service` runs one backup and `deploy/rma-backup.timer` fires it nightly at 01:20,
+before the reconciliation sweep, with `Persistent=true` so a night the host was down is not skipped.
+Install on the host that holds `prod.env` and `rclone.conf`:
+
+```bash
+sudo cp deploy/rma-backup.service deploy/rma-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now rma-backup.timer
+systemctl list-timers rma-backup.timer      # when it next fires
+journalctl -u rma-backup.service -n 50      # what the last run said
+```
+
+A nightly run that cannot reach its destination exits non-zero, so systemd reports the unit failed
+the morning it happens. That is deliberate: a schedule that answers 0 while uploading nothing is the
+failure this job exists to make impossible.
+
 ### Restore drill
 
 A dump is a backup only if it can be restored into a database this application can migrate and read
-back. `scripts/restore-drill.sh` proves that end to end: throwaway PostgreSQL, seeded through
-`DbAdmin seed`, dumped with `pg_dump -Fc`, the file copied out of the container and back, restored
-into a second database with `pg_restore --exit-on-error`, migrated with nothing left pending, and
-every row count read back through the application's own context and compared with the source.
+back. `scripts/restore-drill.sh` proves that end to end, and it restores what the deployment's own
+backup wrote off the host rather than a dump it made a moment earlier: throwaway PostgreSQL, seeded
+through `DbAdmin seed`, `scripts/backup.sh` run twice against a destination beside the drill (so
+there is a newest copy to choose and a copy past the window to prune), the local copies deleted,
+`fetch` bringing the newest one back, `pg_restore --exit-on-error` into a second database, `DbAdmin
+migrate` with nothing left pending, and every row count read back through the application's own
+context and compared with the source.
 
 ```bash
 scripts/restore-drill.sh            # or: scripts/verify-all.sh restore
@@ -767,6 +816,9 @@ required value is missing.
   a dependency change that was not committed fails the image build instead of being resolved from the feed.
 - App containers run as non-root with a read-only root filesystem, `no-new-privileges` and no capabilities.
 - Caddy routes web traffic only while `/health/ready` (database reachable) answers.
+- Database backups leave the host: `scripts/backup.sh` dumps through the pack's PostgreSQL image and
+  copies the file to an rclone destination (`BACKUP_REMOTE`), pruning both sides to
+  `BACKUP_KEEP_DAYS`; `deploy/rma-backup.timer` runs it nightly at 01:20.
 - `scripts/verify-images.sh` starts this file's web service from `deploy/prod.env.example` (under its own
   project name, then removes it), so a value the example forgot, or a service the current host refuses, fails
   the gate instead of a deployment.

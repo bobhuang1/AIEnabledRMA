@@ -1,0 +1,24 @@
+# Nightly database backup. 01:20 is before the 02:40 reconciliation sweep, so the night's dump is
+# taken from a database the sweeps have already settled rather than mid-run, and a backup that fails
+# is on the morning's failed-unit list before anybody looks at payments.
+#
+# Persistent=true is what makes a missed night visible rather than lost: a host that was down at
+# 01:20 takes the backup when it comes back instead of skipping the day.
+#
+# Install with the service beside it:
+#   sudo cp deploy/rma-backup.service deploy/rma-backup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rma-backup.timer
+#   systemctl list-timers rma-backup.timer
+
+[Unit]
+Description=Nightly RMA database backup
+
+[Timer]
+OnCalendar=*-*-* 01:20:00
+# Spread across a fleet rather than every host dumping at the same second.
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

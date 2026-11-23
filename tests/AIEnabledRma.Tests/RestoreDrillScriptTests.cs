@@ -13,11 +13,16 @@ public sealed class RestoreDrillScriptTests
     {
         var script = Script("restore-drill.sh");
 
-        // Dump: the pack's own format, from the seeded database.
-        Assert.Contains("pg_dump -U \"$DB_USER\" -Fc", script, StringComparison.Ordinal);
+        // Dump: through the deployment's own backup, from the seeded database. The drill used to run
+        // pg_dump itself, which proved the dump format and said nothing about whether a copy ever
+        // reached a destination outside the host -- it restored a file it had made a second earlier.
+        Assert.Contains("\"$REPO_ROOT/scripts/backup.sh\"", script, StringComparison.Ordinal);
+        Assert.Contains("backup backup", script, StringComparison.Ordinal);
+        Assert.Contains("backup fetch", script, StringComparison.Ordinal);
 
-        // The file has to leave the server and come back, or the drill only proves the server can
-        // read its own /tmp.
+        // What is restored comes back from the destination, and the local dumps are deleted first so
+        // it cannot be one of them.
+        Assert.Contains("rm -f \"$STAGING\"/*.dump", script, StringComparison.Ordinal);
         Assert.Contains("docker cp", script, StringComparison.Ordinal);
 
         // Restore into a different database, failing on any skipped object.

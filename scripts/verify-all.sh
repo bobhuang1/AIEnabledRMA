@@ -144,7 +144,7 @@ images() {
 }
 
 restore() {
-    step "restore: dump a seeded database, restore it into a scratch one, migrate and query it"
+    step "restore: back up a database off the host, restore the newest copy into a scratch one, migrate and query it"
     ./scripts/restore-drill.sh
 }
 
