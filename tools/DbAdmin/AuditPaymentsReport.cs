@@ -25,9 +25,15 @@ public static class AuditPaymentsReport
 
         foreach (var drift in report.Drift)
         {
+            // The amounts appear only where they differ: a status drift already says what is wrong,
+            // while two equal states with two different sums is a sentence about the money.
+            var money = PaymentReconciler.SameMoney(drift.ExpectedAmount, drift.ProviderAmount)
+                ? string.Empty
+                : $"; it holds {drift.ProviderAmount} where the return says {drift.ExpectedAmount}";
+
             lines.Add(
                 $"  [{Tag(drift.Direction)}] {drift.RmaNumber}: provider says {drift.Provider}, "
-                + $"this database expects {drift.Expected} ({drift.LocalStatus}), {drift.TransactionId}");
+                + $"this database expects {drift.Expected} ({drift.LocalStatus}), {drift.TransactionId}{money}");
         }
 
         foreach (var unanswered in report.Unanswered)

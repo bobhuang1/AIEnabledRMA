@@ -24,12 +24,19 @@ public static class ReconcilePaymentsReport
 
         foreach (var disagreement in report.Disagreements)
         {
+            // The amounts are printed only where they differ. Two equal states with two different
+            // sums is a sentence about the money, and repeating "69.00 EUR / 69.00 EUR" on every
+            // status drift would bury it.
+            var money = PaymentReconciler.SameMoney(disagreement.ExpectedAmount, disagreement.ProviderAmount)
+                ? string.Empty
+                : $"; it holds {disagreement.ProviderAmount} where the return says {disagreement.ExpectedAmount}";
+
             // One line per disagreement, ending in what this database thought: the provider's answer
             // alone does not say what to fix.
             lines.Add(
                 $"  {disagreement.RmaNumber}: provider says {disagreement.Provider}, "
                 + $"this database expects {disagreement.Expected} ({disagreement.LocalStatus}), "
-                + $"{disagreement.TransactionId}");
+                + $"{disagreement.TransactionId}{money}");
         }
 
         foreach (var unanswered in report.Unanswered)

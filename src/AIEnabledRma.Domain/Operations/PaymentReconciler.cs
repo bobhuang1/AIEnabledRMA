@@ -6,13 +6,20 @@ using Microsoft.Extensions.Logging;
 namespace AIEnabledRma.Domain.Operations;
 
 /// <summary>One row where this database and the payment provider disagree about a transaction.</summary>
+/// <remarks>
+/// The amount is part of the disagreement, not a footnote: a provider holding a different sum from
+/// the one the return describes is money that moved unrecorded even when both sides call the state
+/// "captured".
+/// </remarks>
 public sealed record PaymentDisagreement(
     Guid RmaRequestId,
     string RmaNumber,
     string TransactionId,
     PaymentStatus Expected,
     PaymentStatus Provider,
-    string LocalStatus);
+    string LocalStatus,
+    Money ExpectedAmount,
+    Money ProviderAmount);
 
 /// <summary>What a reconciliation run did, in numbers an operator can act on.</summary>
 public sealed record PaymentReconciliationReport(
@@ -27,10 +34,12 @@ public sealed record PaymentReconciliationReport(
 /// </summary>
 /// <remarks>
 /// <para>
-/// The webhook is the fast path: Stripe delivers <c>payment_intent.succeeded</c> and the local row
-/// moves. Nothing survives a delivery that is lost, rejected or never configured — the return stays
-/// "authorised" for good, the customer's money is not where the database says it is, and no row
-/// records that anybody asked. This is the check that asks.
+/// The webhook is the fast path for a refusal: Stripe reports a failed or cancelled intent and a
+/// delivery files it for a person. Nothing in this host moves a return's status from a delivery — a
+/// capture is an operator's decision and a <c>succeeded</c> intent is its consequence — so a delivery
+/// that is lost, rejected or never configured leaves the return saying "authorised" for good, the
+/// customer's money not where the database says it is, and no row recording that anybody asked. This
+/// is the check that asks, and it asks about the money as well as the state.
 /// </para>
 /// <para>
 /// The expected state is derived from the return's own status rather than stored twice: a return in
@@ -97,10 +106,11 @@ public sealed class PaymentReconciler(
                 continue;
             }
 
-            var provider = asked.Value!.Status;
+            var answer = asked.Value!;
             var expected = ExpectedFor(request.Status);
+            var expectedAmount = AmountFor(request);
 
-            if (provider == expected)
+            if (Agrees(answer, expected, expectedAmount))
             {
                 agreed++;
                 continue;
@@ -111,8 +121,10 @@ public sealed class PaymentReconciler(
                 request.RmaNumber,
                 transactionId,
                 expected,
-                provider,
-                request.Status.ToString()));
+                answer.Status,
+                request.Status.ToString(),
+                expectedAmount,
+                answer.Amount));
 
             // One open item per return: a nightly run over the same lost delivery must not fill the
             // queue with the same sentence, and resolving the item is the operator saying they have
@@ -128,22 +140,30 @@ public sealed class PaymentReconciler(
                     Id = Guid.NewGuid(),
                     CreatedAtUtc = clock.UtcNow,
                     Source = ReviewSources.PaymentMismatch,
-                    Reason = PaymentMismatchReason.For(provider),
+                    Reason = PaymentMismatchReason.For(answer.Status),
                     Explanation =
-                        $"The payment provider reports {provider} for {transactionId}, but {request.RmaNumber} "
-                        + $"is {request.Status} here and expects {expected}. A webhook may never have arrived; "
-                        + "check the transaction before changing anything.",
+                        // Two equal statuses and two different sums is still a disagreement, so the
+                        // sentence says which half of it is wrong instead of repeating the states.
+                        (answer.Status == expected
+                            ? $"The payment provider holds {answer.Amount} for {transactionId}, where "
+                              + $"{request.RmaNumber} says {expectedAmount}."
+                            : $"The payment provider reports {answer.Status} holding {answer.Amount} for "
+                              + $"{transactionId}, but {request.RmaNumber} is {request.Status} here and "
+                              + $"expects {expected} of {expectedAmount}.")
+                        + " A webhook may never have arrived; check the transaction before changing anything.",
                     RmaRequestId = request.Id,
                     CustomerId = request.CustomerId,
                 },
                 cancellationToken);
 
             logger.LogWarning(
-                "Payment {TransactionId} for {Rma} is {Provider} at the provider and {Expected} here ({Status}); filed a review item",
+                "Payment {TransactionId} for {Rma} is {Provider} at the provider holding {ProviderAmount} and {Expected} here holding {ExpectedAmount} ({Status}); filed a review item",
                 transactionId,
                 request.RmaNumber,
-                provider,
+                answer.Status,
+                answer.Amount,
                 expected,
+                expectedAmount,
                 request.Status);
         }
 
@@ -171,4 +191,28 @@ public sealed class PaymentReconciler(
 
         _ => PaymentStatus.Authorized,
     };
+
+    /// <summary>
+    /// The sum this database's own row says the charge is: what the payment step authorised, in the
+    /// row's currency. Read from the row rather than stored a second time, so a re-price that the
+    /// provider never heard about is exactly what shows up as a disagreement.
+    /// </summary>
+    public static Money AmountFor(RmaRequest request) =>
+        new(request.ShippingCharge + request.DepositAmount, request.CurrencyCode.Trim().ToUpperInvariant());
+
+    /// <summary>
+    /// Whether the provider's answer is the charge this row describes: the same state <em>and</em> the
+    /// same money. Two equal statuses are not agreement — a capture for 69.00 where the return says
+    /// 70.00 is money that moved unrecorded, and a status-only comparison calls it a match.
+    /// </summary>
+    public static bool Agrees(PaymentReceipt answer, PaymentStatus expected, Money amount) =>
+        answer.Status == expected && SameMoney(answer.Amount, amount);
+
+    /// <summary>
+    /// Compares amount and currency. The code's case is a provider's formatting rather than a second
+    /// currency, so <c>eur</c> and <c>EUR</c> are the same money.
+    /// </summary>
+    public static bool SameMoney(Money left, Money right) =>
+        left.Amount == right.Amount
+        && string.Equals(left.CurrencyCode, right.CurrencyCode, StringComparison.OrdinalIgnoreCase);
 }

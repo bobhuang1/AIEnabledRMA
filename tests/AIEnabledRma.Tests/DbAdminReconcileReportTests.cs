@@ -1,4 +1,5 @@
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Common;
 using AIEnabledRma.Domain.Operations;
 using AIEnabledRma.Tools.DbAdmin;
 
@@ -25,7 +26,9 @@ public sealed class DbAdminReconcileReportTests
                     "pi_123",
                     Expected: PaymentStatus.Authorized,
                     Provider: PaymentStatus.Captured,
-                    LocalStatus: "Approved"),
+                    LocalStatus: "Approved",
+                    ExpectedAmount: new Money(69m, "EUR"),
+                    ProviderAmount: new Money(69m, "EUR")),
             ],
             Unanswered: []);
 
@@ -40,6 +43,37 @@ public sealed class DbAdminReconcileReportTests
             ReconcilePaymentsReport.Format(report));
 
         Assert.Equal("1 disagreement(s) filed for review.", ReconcilePaymentsReport.Summary(report));
+    }
+
+    /// <summary>
+    /// Two equal states and two different sums is a disagreement about the money, so the line has to
+    /// say which side holds what. Printing the amounts only where they differ keeps the status cases
+    /// readable.
+    /// </summary>
+    [Fact]
+    public void A_disagreement_about_the_amount_alone_names_both_sums()
+    {
+        var report = new PaymentReconciliationReport(
+            Checked: 1,
+            Agreed: 0,
+            Disagreements:
+            [
+                new PaymentDisagreement(
+                    Guid.NewGuid(),
+                    "RMA-2026-00008",
+                    "pi_8",
+                    Expected: PaymentStatus.Captured,
+                    Provider: PaymentStatus.Captured,
+                    LocalStatus: "InRepair",
+                    ExpectedAmount: new Money(70m, "EUR"),
+                    ProviderAmount: new Money(69m, "EUR")),
+            ],
+            Unanswered: []);
+
+        Assert.Contains(
+            "  RMA-2026-00008: provider says Captured, this database expects Captured (InRepair), "
+            + "pi_8; it holds 69.00 EUR where the return says 70.00 EUR",
+            ReconcilePaymentsReport.Format(report));
     }
 
     [Fact]

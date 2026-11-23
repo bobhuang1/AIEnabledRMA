@@ -1,4 +1,5 @@
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Common;
 using AIEnabledRma.Domain.Rma;
 using Microsoft.Extensions.Logging;
 
@@ -21,6 +22,11 @@ public enum PaymentDriftDirection
 }
 
 /// <summary>One return where this database and the payment provider disagree about a transaction.</summary>
+/// <remarks>
+/// The amounts travel with the drift because they are half of what an operator has to decide: the
+/// same status on both sides with a different sum is a capture this database recorded wrong, not a
+/// clean row.
+/// </remarks>
 public sealed record PaymentDrift(
     Guid RmaRequestId,
     string RmaNumber,
@@ -28,7 +34,9 @@ public sealed record PaymentDrift(
     PaymentDriftDirection Direction,
     PaymentStatus Expected,
     PaymentStatus Provider,
-    string LocalStatus);
+    string LocalStatus,
+    Money ExpectedAmount,
+    Money ProviderAmount);
 
 /// <summary>What one audit run saw, in numbers an operator can act on.</summary>
 public sealed record PaymentAuditReport(
@@ -105,31 +113,36 @@ public sealed class PaymentAuditor(
                 continue;
             }
 
-            var provider = asked.Value!.Status;
+            var answer = asked.Value!;
             var expected = PaymentReconciler.ExpectedFor(request.Status);
+            var expectedAmount = PaymentReconciler.AmountFor(request);
 
-            if (provider == expected)
+            if (PaymentReconciler.Agrees(answer, expected, expectedAmount))
             {
                 inStep++;
                 continue;
             }
 
-            var direction = Classify(expected, provider);
+            var direction = Classify(expected, answer.Status);
             drift.Add(new PaymentDrift(
                 request.Id,
                 request.RmaNumber,
                 transactionId,
                 direction,
                 expected,
-                provider,
-                request.Status.ToString()));
+                answer.Status,
+                request.Status.ToString(),
+                expectedAmount,
+                answer.Amount));
 
             logger.LogWarning(
-                "Payment {TransactionId} for {Rma}: provider says {Provider}, this database expects {Expected} ({Status}); {Direction}",
+                "Payment {TransactionId} for {Rma}: provider says {Provider} holding {ProviderAmount}, this database expects {Expected} holding {ExpectedAmount} ({Status}); {Direction}",
                 transactionId,
                 request.RmaNumber,
-                provider,
+                answer.Status,
+                answer.Amount,
                 expected,
+                expectedAmount,
                 request.Status,
                 direction);
         }

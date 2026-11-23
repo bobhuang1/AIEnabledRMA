@@ -158,6 +158,30 @@ public sealed class PaymentAuditTests : IAsyncLifetime
         Assert.Equal(3, everything.InStep);
     }
 
+    /// <summary>
+    /// Both sides hold a capture and the sums differ: the row recorded a capture of the wrong amount,
+    /// which is a state comparison's blind spot and the reason the audit compares the money too.
+    /// </summary>
+    [Fact]
+    public async Task A_capture_for_a_different_amount_is_drift_even_though_both_say_captured()
+    {
+        var transactionId = await AuthoriseAsync();
+        await SeedAsync(RmaRequestStatus.InRepair, transactionId, deposit: 70m);
+
+        Assert.True((await _gateway.CaptureAsync(transactionId, Ct)).IsSuccess);
+
+        var report = await AuditAsync();
+
+        Assert.Equal(0, report.InStep);
+
+        var drift = Assert.Single(report.Drift);
+        Assert.Equal(PaymentDriftDirection.Mismatched, drift.Direction);
+        Assert.Equal(PaymentStatus.Captured, drift.Expected);
+        Assert.Equal(PaymentStatus.Captured, drift.Provider);
+        Assert.Equal(new Money(70m, "EUR"), drift.ExpectedAmount);
+        Assert.Equal(new Money(69m, "EUR"), drift.ProviderAmount);
+    }
+
     private async Task<PaymentAuditReport> AuditAsync(int? take = null)
     {
         await using var db = _database.CreateContext();
@@ -189,7 +213,7 @@ public sealed class PaymentAuditTests : IAsyncLifetime
         return receipt.Value!.TransactionId;
     }
 
-    private async Task<Guid> SeedAsync(RmaRequestStatus status, string? transactionId)
+    private async Task<Guid> SeedAsync(RmaRequestStatus status, string? transactionId, decimal deposit = 69m)
     {
         await using var db = _database.CreateContext();
 
@@ -202,7 +226,7 @@ public sealed class PaymentAuditTests : IAsyncLifetime
             CreatedAtUtc = Now,
             UpdatedAtUtc = Now,
             PaymentTransactionId = transactionId,
-            DepositAmount = transactionId is null ? 0m : 69m,
+            DepositAmount = transactionId is null ? 0m : deposit,
             CurrencyCode = "EUR",
         };
 

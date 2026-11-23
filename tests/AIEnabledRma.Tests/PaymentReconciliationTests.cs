@@ -106,6 +106,60 @@ public sealed class PaymentReconciliationTests : IAsyncLifetime
         Assert.Equal("PaymentMismatch:Voided", item.Reason);
     }
 
+    /// <summary>
+    /// Both sides say the money was captured and the sums differ. Comparing the state alone calls
+    /// this a match, which is the failure this test exists for: the two sides can agree about the
+    /// word while disagreeing about the amount, and the amount is what the customer paid.
+    /// </summary>
+    [Fact]
+    public async Task A_capture_for_a_different_amount_is_a_disagreement_even_though_both_say_captured()
+    {
+        var transactionId = await AuthoriseAsync();
+
+        // The return was re-priced after the authorisation, so it now describes a charge the
+        // provider never heard about. It is in repair, so both sides call the money captured and the
+        // only thing left to disagree about is the sum.
+        await SeedAsync(RmaRequestStatus.InRepair, transactionId, Now.AddHours(-7), deposit: 70m);
+
+        Assert.True((await _gateway.CaptureAsync(transactionId, Ct)).IsSuccess);
+
+        var report = await ReconcileAsync();
+
+        Assert.Equal(0, report.Agreed);
+
+        var disagreement = Assert.Single(report.Disagreements);
+        Assert.Equal(PaymentStatus.Captured, disagreement.Provider);
+        Assert.Equal(PaymentStatus.Captured, disagreement.Expected);
+        Assert.Equal(new Money(70m, "EUR"), disagreement.ExpectedAmount);
+        Assert.Equal(new Money(69m, "EUR"), disagreement.ProviderAmount);
+
+        await using var check = _database.CreateContext();
+        var item = await check.ReviewItems.SingleAsync(Ct);
+
+        // The sentence is about the money: repeating "Captured" twice would say nothing.
+        Assert.Contains("70.00 EUR", item.Explanation!, StringComparison.Ordinal);
+        Assert.Contains("69.00 EUR", item.Explanation!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The same number in two currencies is not the same money, and a comparison that only looks at
+    /// <c>Amount</c> cannot see the difference.
+    /// </summary>
+    [Fact]
+    public async Task A_charge_in_another_currency_is_a_disagreement_at_the_same_number()
+    {
+        var transactionId = await AuthoriseAsync();
+        await SeedAsync(RmaRequestStatus.Approved, transactionId, Now.AddHours(-7), currency: "USD");
+
+        var report = await ReconcileAsync();
+
+        var disagreement = Assert.Single(report.Disagreements);
+        Assert.Equal(PaymentStatus.Authorized, disagreement.Expected);
+        Assert.Equal(PaymentStatus.Authorized, disagreement.Provider);
+        Assert.Equal(new Money(69m, "USD"), disagreement.ExpectedAmount);
+        Assert.Equal(new Money(69m, "EUR"), disagreement.ProviderAmount);
+    }
+
     [Fact]
     public async Task A_transaction_the_provider_cannot_answer_for_is_reported_and_not_filed()
     {
@@ -199,14 +253,16 @@ public sealed class PaymentReconciliationTests : IAsyncLifetime
         return receipt.Value!.TransactionId;
     }
 
-    private async Task SeedAsync(
+    private async Task<Guid> SeedAsync(
         RmaRequestStatus status,
         string transactionId,
-        DateTimeOffset updatedAtUtc)
+        DateTimeOffset updatedAtUtc,
+        decimal deposit = 69m,
+        string currency = "EUR")
     {
         await using var db = _database.CreateContext();
 
-        db.RmaRequests.Add(new RmaRequest
+        var request = new RmaRequest
         {
             Id = Guid.NewGuid(),
             RmaNumber = "RMA-2026-" + Guid.NewGuid().ToString("N")[..5],
@@ -215,11 +271,15 @@ public sealed class PaymentReconciliationTests : IAsyncLifetime
             CreatedAtUtc = updatedAtUtc,
             UpdatedAtUtc = updatedAtUtc,
             PaymentTransactionId = transactionId,
-            DepositAmount = 69m,
-            CurrencyCode = "EUR",
-        });
+            DepositAmount = deposit,
+            CurrencyCode = currency,
+        };
+
+        db.RmaRequests.Add(request);
 
         await db.SaveChangesAsync(Ct);
+
+        return request.Id;
     }
 
     private async Task<PaymentReconciliationReport> ReconcileAsync(TimeSpan? staleAfter = null)

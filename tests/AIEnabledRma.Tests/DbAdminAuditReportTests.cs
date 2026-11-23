@@ -1,4 +1,5 @@
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Common;
 using AIEnabledRma.Domain.Operations;
 using AIEnabledRma.Tools.DbAdmin;
 
@@ -26,7 +27,9 @@ public sealed class DbAdminAuditReportTests
                     PaymentDriftDirection.ProviderOnly,
                     Expected: PaymentStatus.Authorized,
                     Provider: PaymentStatus.Captured,
-                    LocalStatus: "Received"),
+                    LocalStatus: "Received",
+                    ExpectedAmount: new Money(69m, "EUR"),
+                    ProviderAmount: new Money(69m, "EUR")),
                 new PaymentDrift(
                     Guid.NewGuid(),
                     "RMA-2026-00012",
@@ -34,7 +37,9 @@ public sealed class DbAdminAuditReportTests
                     PaymentDriftDirection.RowOnly,
                     Expected: PaymentStatus.Captured,
                     Provider: PaymentStatus.Authorized,
-                    LocalStatus: "InRepair"),
+                    LocalStatus: "InRepair",
+                    ExpectedAmount: new Money(69m, "EUR"),
+                    ProviderAmount: new Money(69m, "EUR")),
                 new PaymentDrift(
                     Guid.NewGuid(),
                     "RMA-2026-00013",
@@ -42,7 +47,9 @@ public sealed class DbAdminAuditReportTests
                     PaymentDriftDirection.Mismatched,
                     Expected: PaymentStatus.Voided,
                     Provider: PaymentStatus.Captured,
-                    LocalStatus: "Cancelled"),
+                    LocalStatus: "Cancelled",
+                    ExpectedAmount: new Money(69m, "EUR"),
+                    ProviderAmount: new Money(69m, "EUR")),
             ],
             Unanswered: [],
             More: false);
@@ -76,7 +83,7 @@ public sealed class DbAdminAuditReportTests
             new PaymentAuditReport(
                 3,
                 2,
-                [new PaymentDrift(Guid.NewGuid(), "RMA-2026-00011", "pi_11", PaymentDriftDirection.ProviderOnly, PaymentStatus.Authorized, PaymentStatus.Captured, "Received")],
+                [new PaymentDrift(Guid.NewGuid(), "RMA-2026-00011", "pi_11", PaymentDriftDirection.ProviderOnly, PaymentStatus.Authorized, PaymentStatus.Captured, "Received", new Money(69m, "EUR"), new Money(69m, "EUR"))],
                 [],
                 More: false)));
 
@@ -85,9 +92,41 @@ public sealed class DbAdminAuditReportTests
             new PaymentAuditReport(
                 2,
                 0,
-                [new PaymentDrift(Guid.NewGuid(), "RMA-2026-00012", "pi_12", PaymentDriftDirection.RowOnly, PaymentStatus.Captured, PaymentStatus.Authorized, "InRepair")],
+                [new PaymentDrift(Guid.NewGuid(), "RMA-2026-00012", "pi_12", PaymentDriftDirection.RowOnly, PaymentStatus.Captured, PaymentStatus.Authorized, "InRepair", new Money(69m, "EUR"), new Money(69m, "EUR"))],
                 ["RMA-2026-00009 (pi_9): That authorisation could not be found."],
                 More: false)));
+    }
+
+    /// <summary>
+    /// A drift where the state agrees and the money does not is the case a status comparison misses,
+    /// so the line has to name both sums.
+    /// </summary>
+    [Fact]
+    public void A_drift_about_the_amount_alone_names_both_sums()
+    {
+        var report = new PaymentAuditReport(
+            Checked: 1,
+            InStep: 0,
+            Drift:
+            [
+                new PaymentDrift(
+                    Guid.NewGuid(),
+                    "RMA-2026-00014",
+                    "pi_14",
+                    PaymentDriftDirection.Mismatched,
+                    PaymentStatus.Captured,
+                    PaymentStatus.Captured,
+                    "InRepair",
+                    new Money(70m, "EUR"),
+                    new Money(69m, "EUR")),
+            ],
+            Unanswered: [],
+            More: false);
+
+        Assert.Contains(
+            "  [mismatch] RMA-2026-00014: provider says Captured, this database expects Captured "
+            + "(InRepair), pi_14; it holds 69.00 EUR where the return says 70.00 EUR",
+            AuditPaymentsReport.Format(report));
     }
 
     [Fact]
