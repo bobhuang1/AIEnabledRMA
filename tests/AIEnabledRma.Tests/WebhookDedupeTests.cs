@@ -17,7 +17,7 @@ namespace AIEnabledRma.Tests;
 /// <remarks>
 /// The ledger is replaced with an in-memory recorder so the assertion is about the handler's
 /// decision rather than about PostgreSQL. <see cref="WebhookEventLedgerTests"/> covers the
-/// implementation the host registers.
+/// implementation the host registers, including what happens when the effect cannot be filed.
 /// </remarks>
 public sealed class WebhookDedupeTests
 {
@@ -31,9 +31,8 @@ public sealed class WebhookDedupeTests
     public async Task A_retried_delivery_files_one_review_item()
     {
         var ledger = new RecordingLedger();
-        var reviews = new RecordingReviewQueue();
 
-        await using var factory = new StripeFactory(ledger, reviews);
+        await using var factory = new StripeFactory(ledger);
         using var client = factory.CreateClient();
 
         var first = await PostSignedAsync(client, CanceledIntent);
@@ -44,7 +43,7 @@ public sealed class WebhookDedupeTests
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
         Assert.Equal(HttpStatusCode.OK, second.StatusCode);
 
-        Assert.Single(reviews.Items);
+        Assert.Single(ledger.Items);
         Assert.Equal(2, ledger.Attempts);
     }
 
@@ -52,15 +51,14 @@ public sealed class WebhookDedupeTests
     public async Task A_delivery_of_a_different_event_is_still_processed()
     {
         var ledger = new RecordingLedger();
-        var reviews = new RecordingReviewQueue();
 
-        await using var factory = new StripeFactory(ledger, reviews);
+        await using var factory = new StripeFactory(ledger);
         using var client = factory.CreateClient();
 
         await PostSignedAsync(client, CanceledIntent);
         await PostSignedAsync(client, CanceledIntent.Replace("evt_test_retry", "evt_test_other"));
 
-        Assert.Equal(2, reviews.Items.Count);
+        Assert.Equal(2, ledger.Items.Count);
     }
 
     /// <summary>
@@ -72,9 +70,8 @@ public sealed class WebhookDedupeTests
     public async Task A_delivery_without_an_event_id_is_refused()
     {
         var ledger = new RecordingLedger();
-        var reviews = new RecordingReviewQueue();
 
-        await using var factory = new StripeFactory(ledger, reviews);
+        await using var factory = new StripeFactory(ledger);
         using var client = factory.CreateClient();
 
         var response = await PostSignedAsync(
@@ -82,7 +79,28 @@ public sealed class WebhookDedupeTests
             """{"type":"payment_intent.canceled","data":{"object":{"id":"pi_test_1"}}}""");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Empty(reviews.Items);
+        Assert.Empty(ledger.Items);
+    }
+
+    /// <summary>
+    /// A signed payload this host cannot read is answered 400, not 500: Stripe retries a 500 until
+    /// it gives up, and an event that keeps failing is one nobody ever looks at.
+    /// </summary>
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("""{"id":"evt_no_type"}""")]
+    [InlineData("""{"id":"evt_bad_data","type":"payment_intent.payment_failed"}""")]
+    public async Task A_signed_payload_the_host_cannot_read_is_refused(string payload)
+    {
+        var ledger = new RecordingLedger();
+
+        await using var factory = new StripeFactory(ledger);
+        using var client = factory.CreateClient();
+
+        var response = await PostSignedAsync(client, payload);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(ledger.Items);
     }
 
     private static Task<HttpResponseMessage> PostSignedAsync(HttpClient client, string payload)
@@ -100,35 +118,40 @@ public sealed class WebhookDedupeTests
         return client.SendAsync(request, TestContext.Current.CancellationToken);
     }
 
+    /// <summary>
+    /// The first delivery of an event records it and keeps the item; a retry records the attempt and
+    /// keeps nothing, which is the whole contract the handler relies on.
+    /// </summary>
     private sealed class RecordingLedger : IWebhookEventLedger
     {
         private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
 
         public int Attempts { get; private set; }
 
-        public Task<bool> TryRecordAsync(
-            string eventId,
-            string type,
-            DateTimeOffset receivedAtUtc,
+        public List<ReviewItem> Items { get; } = [];
+
+        public Task<bool> TryAcceptAsync(
+            ProcessedWebhookEvent delivery,
+            ReviewItem? effect,
             CancellationToken cancellationToken)
         {
             Attempts++;
-            return Task.FromResult(_seen.Add(eventId));
+
+            if (!_seen.Add(delivery.EventId))
+            {
+                return Task.FromResult(false);
+            }
+
+            if (effect is not null)
+            {
+                Items.Add(effect);
+            }
+
+            return Task.FromResult(true);
         }
     }
 
-    private sealed class RecordingReviewQueue : IReviewQueue
-    {
-        public List<ReviewItem> Items { get; } = [];
-
-        public Task AddAsync(ReviewItem item, CancellationToken cancellationToken)
-        {
-            Items.Add(item);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class StripeFactory(RecordingLedger ledger, RecordingReviewQueue reviews)
+    private sealed class StripeFactory(RecordingLedger ledger)
         : WebApplicationFactory<global::WebAppAnchor>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -140,12 +163,8 @@ public sealed class WebhookDedupeTests
             builder.UseSetting("Payments:Stripe:WebhookSecret", WebhookSecret);
 
             // Registered after the host's own, which is what the request resolves: the default
-            // registrations would open PostgreSQL for both the ledger and the review row.
-            builder.ConfigureServices(services =>
-            {
-                services.AddSingleton<IWebhookEventLedger>(ledger);
-                services.AddSingleton<IReviewQueue>(reviews);
-            });
+            // registration would open PostgreSQL for the ledger.
+            builder.ConfigureServices(services => services.AddSingleton<IWebhookEventLedger>(ledger));
         }
     }
 }

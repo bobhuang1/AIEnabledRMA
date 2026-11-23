@@ -18,7 +18,8 @@ public sealed class ProcessedWebhookEvent
 }
 
 /// <summary>
-/// Records a delivery and answers whether this call is the one that recorded it.
+/// Records a delivery and, when this call is the one that records it, files what it asks for —
+/// answering whether the caller's effect was applied.
 /// </summary>
 /// <remarks>
 /// The answer is decided by the database's primary key rather than by a read followed by a write:
@@ -28,12 +29,18 @@ public sealed class ProcessedWebhookEvent
 public interface IWebhookEventLedger
 {
     /// <summary>
-    /// True when this is the first time the delivery was seen; false when it is a retry. Never
-    /// throws for a duplicate.
+    /// True when this is the first time the delivery was seen and <paramref name="effect"/> was
+    /// filed; false when it is a retry, in which case nothing is filed. Never throws for a duplicate.
     /// </summary>
-    Task<bool> TryRecordAsync(
-        string eventId,
-        string type,
-        DateTimeOffset receivedAtUtc,
+    /// <remarks>
+    /// The delivery and its effect are one transaction because the alternative loses money quietly.
+    /// Recorded first and filed second, a delivery whose filing failed — a deadlock, a restart, a
+    /// context that will not save — leaves a row saying "handled" and no review item at all, and
+    /// Stripe's retry is answered as a repeat, so the failed payment is never seen by a person. The
+    /// ledger is there to prevent a duplicate, not to trade it for a disappearance.
+    /// </remarks>
+    Task<bool> TryAcceptAsync(
+        ProcessedWebhookEvent delivery,
+        ReviewItem? effect,
         CancellationToken cancellationToken);
 }

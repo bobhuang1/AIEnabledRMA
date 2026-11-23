@@ -224,11 +224,31 @@ if (PaymentGatewayServiceCollectionExtensions.UsesStripe(app.Configuration))
     app.MapPost("/payments/stripe/webhook", async (
         HttpContext context,
         IOptions<StripeOptions> stripe,
-        AIEnabledRma.Domain.Operations.IReviewQueue reviews,
         AIEnabledRma.Domain.Operations.IWebhookEventLedger webhookEvents,
         TimeProvider time,
         ILogger<StripeOptions> log) =>
     {
+        // The row a failed or cancelled intent files. It stays next to the handler because the two
+        // read one payload shape for one reason: a payment that will not complete is a person's
+        // problem, and nothing else in the host files it.
+        static AIEnabledRma.Domain.Operations.ReviewItem FailedPaymentItem(
+            System.Text.Json.JsonElement root, string type, DateTimeOffset now)
+        {
+            var intent = root.GetProperty("data").GetProperty("object");
+            var rma = intent.TryGetProperty("metadata", out var meta) && meta.TryGetProperty("rma_number", out var n)
+                ? n.GetString()
+                : null;
+
+            return new AIEnabledRma.Domain.Operations.ReviewItem
+            {
+                Id = Guid.NewGuid(),
+                CreatedAtUtc = now,
+                Source = AIEnabledRma.Domain.Operations.ReviewSources.PaymentFailed,
+                Reason = "Stripe:" + type,
+                Explanation = $"PaymentIntent {intent.GetProperty("id").GetString()} for {rma ?? "an unknown return"}.",
+            };
+        }
+
         using var reader = new StreamReader(context.Request.Body);
         var payload = await reader.ReadToEndAsync(context.RequestAborted);
         if (payload.Length > 512 * 1024
@@ -242,48 +262,59 @@ if (PaymentGatewayServiceCollectionExtensions.UsesStripe(app.Configuration))
             return Results.BadRequest();
         }
 
-        using var json = System.Text.Json.JsonDocument.Parse(payload);
-        var type = json.RootElement.GetProperty("type").GetString();
+        // A signed payload this host cannot read must not be answered with a 500: Stripe retries a
+        // 500 until it gives up, and the event is then lost twice over — once here and once from the
+        // retry queue. Everything that reads the document happens inside the guard.
+        AIEnabledRma.Domain.Operations.ProcessedWebhookEvent delivery;
+        AIEnabledRma.Domain.Operations.ReviewItem? effect;
 
-        // Stripe retries a delivery until it is answered 2xx, and can deliver one twice even after
-        // that answer. Filing the retry would open a second review item for one failed payment, so
-        // the event id is recorded first and a repeat is acknowledged without being acted on. An
-        // event without an id cannot be deduplicated at all, which makes it unsafe to act on.
-        var eventId = json.RootElement.TryGetProperty("id", out var eventIdElement)
-            ? eventIdElement.GetString()
-            : null;
-        if (string.IsNullOrWhiteSpace(eventId))
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(payload);
+            var root = document.RootElement;
+
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object)
+            {
+                return Results.BadRequest();
+            }
+
+            var type = root.GetProperty("type").GetString();
+
+            // Stripe retries a delivery until it is answered 2xx, and can deliver one twice even
+            // after that answer. Filing the retry would open a second review item for one failed
+            // payment, so the delivery and the item it asks for are recorded together or not at
+            // all. An event without an id cannot be deduplicated, which makes it unsafe to act on.
+            var eventId = root.TryGetProperty("id", out var eventIdElement) ? eventIdElement.GetString() : null;
+            if (string.IsNullOrWhiteSpace(eventId))
+            {
+                return Results.BadRequest();
+            }
+
+            var now = time.GetUtcNow();
+            delivery = new AIEnabledRma.Domain.Operations.ProcessedWebhookEvent
+            {
+                EventId = eventId,
+                Type = type ?? "unknown",
+                ReceivedAtUtc = now,
+            };
+
+            effect = type is "payment_intent.payment_failed" or "payment_intent.canceled"
+                ? FailedPaymentItem(root, type, now)
+                : null;
+        }
+        catch (Exception failure) when (failure is System.Text.Json.JsonException
+            or InvalidOperationException or KeyNotFoundException)
         {
             return Results.BadRequest();
         }
 
-        if (!await webhookEvents.TryRecordAsync(
-                eventId,
-                type ?? "unknown",
-                time.GetUtcNow(),
-                context.RequestAborted))
+        if (!await webhookEvents.TryAcceptAsync(delivery, effect, context.RequestAborted))
         {
-            log.LogInformation("Stripe webhook {Type} {EventId} was already processed; ignored.", type, eventId);
+            log.LogInformation("Stripe webhook {Type} {EventId} was already accepted; ignored.", delivery.Type, delivery.EventId);
             return Results.Ok();
         }
 
-        if (type is "payment_intent.payment_failed" or "payment_intent.canceled")
-        {
-            var intent = json.RootElement.GetProperty("data").GetProperty("object");
-            var rma = intent.TryGetProperty("metadata", out var meta) && meta.TryGetProperty("rma_number", out var n) ? n.GetString() : null;
-            await reviews.AddAsync(
-                new AIEnabledRma.Domain.Operations.ReviewItem
-                {
-                    Id = Guid.NewGuid(),
-                    CreatedAtUtc = time.GetUtcNow(),
-                    Source = AIEnabledRma.Domain.Operations.ReviewSources.PaymentFailed,
-                    Reason = "Stripe:" + type,
-                    Explanation = $"PaymentIntent {intent.GetProperty("id").GetString()} for {rma ?? "an unknown return"}.",
-                },
-                context.RequestAborted);
-        }
-
-        log.LogInformation("Stripe webhook {Type} {EventId} accepted.", type, eventId);
+        log.LogInformation("Stripe webhook {Type} {EventId} accepted.", delivery.Type, delivery.EventId);
         return Results.Ok();
     });
 }

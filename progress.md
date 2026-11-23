@@ -672,3 +672,16 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   Mutation: dropping the provider state from the dashboard row fails
   `A_mismatch_row_names_the_return_the_provider_state_and_the_transaction` with "Not found: provider:
   Captured".
+- **A delivery is recorded and the item it files is written in one transaction.** The webhook handler
+  recorded the delivery first and filed the review item second, through `EfReviewQueue`, which opens a
+  scope and context of its own; the two could not share a transaction even in principle. A delivery
+  whose filing failed — a deadlock, a restart, a context that would not save — left a row saying
+  "handled" and no item, and Stripe's retry was answered as a repeat, so a failed payment was never
+  seen by a person. `IWebhookEventLedger` is now one `TryAcceptAsync(delivery, effect)`: the insert
+  goes in inside EF's execution strategy, a duplicate rolls back and answers false, and the item and
+  the ledger row commit together or not at all. The handler also answers a signed payload it cannot
+  read with 400 instead of 500, because Stripe retries a 500 until it gives up.
+- **Gate:** `suite` 603 passed, 0 skipped, 0 failed. Mutation: swallowing the item's save failure in
+  `EfWebhookEventLedger` makes `A_delivery_whose_item_could_not_be_filed_is_not_recorded` fail with
+  "No exception was thrown"; the other nine webhook tests still pass, so that one test is what pins
+  the atomicity.
