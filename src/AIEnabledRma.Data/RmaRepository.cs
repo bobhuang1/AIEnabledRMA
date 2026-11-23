@@ -70,6 +70,56 @@ public sealed class RmaRepository(RmaDbContext db) : IRmaRepository
                         && r.Status != RmaRequestStatus.Rejected)
             .ToListAsync(cancellationToken);
 
+    public Task<bool> TryRunGuardedAsync(
+        RmaRequest request,
+        Func<Task> transition,
+        CancellationToken cancellationToken)
+    {
+        // The context is registered with EnableRetryOnFailure, and EF refuses a user transaction
+        // started outside the strategy that retries it. The transition sits inside this scope on
+        // purpose: the lock only proves the row is unchanged while it is held, so the provider call
+        // and the write that follows it have to land before the row is released.
+        var strategy = _db.Database.CreateExecutionStrategy();
+
+        return strategy.ExecuteAsync(async () =>
+        {
+            var seen = request.RowVersion;
+
+            // The lock is taken first and released last. SELECT ... FOR UPDATE waits for a writer
+            // already inside a transaction, then holds the row until this one ends, so the version
+            // read under it is still true when the provider answers seconds later.
+            await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
+
+            // SqlQuery, not SqlQueryRaw: the id is a parameter here, and the build refuses raw SQL with
+            // an interpolated value in it.
+            var locked = await _db.Database
+                .SqlQuery<int>($"SELECT 1 AS \"Value\" FROM rma_requests WHERE id = {request.Id} FOR UPDATE")
+                .ToListAsync(cancellationToken);
+
+            if (locked.Count == 0)
+            {
+                return false;
+            }
+
+            // Reload rather than trust the instance this context already tracks: it was read when the
+            // operator's page was rendered, and only the stored row can say whether that is still what
+            // is about to be charged.
+            await _db.Entry(request).ReloadAsync(cancellationToken);
+
+            if (request.RowVersion != seen)
+            {
+                return false;
+            }
+
+            await transition();
+
+            await _db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            return true;
+        });
+    }
+
     /// <summary>
     /// Allocates the next reference for the year from a database sequence, padded to five
     /// digits so the strings sort lexicographically in the same order they sort numerically.

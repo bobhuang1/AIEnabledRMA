@@ -75,7 +75,7 @@ public sealed class RequestConcurrencyTests
     }
 
     [Fact]
-    public async Task A_stale_capture_is_refused_and_says_the_provider_may_already_hold_it()
+    public async Task A_stale_capture_is_refused_before_it_reaches_the_provider()
     {
         await using var database = new LiveDatabase("rma_concurrency");
         await database.InitializeAsync();
@@ -95,22 +95,34 @@ public sealed class RequestConcurrencyTests
         await using var first = database.CreateContext();
         await using var second = database.CreateContext();
 
+        // One provider, as two browser sessions of one deployment share. What matters is what it was
+        // asked to do, not which service object asked.
+        var gateway = new FakePaymentGateway();
+
         // Both operators have the capture form open on an item in Received.
         Assert.NotNull(await new RmaRepository(second).GetByIdAsync(request.Id, Ct));
 
-        var captured = await OperatorServiceFor(first).CaptureAsync(
+        var captured = await OperatorServiceFor(first, gateway).CaptureAsync(
             request.Id, "operator-one", "screen replaced under warranty", Ct);
         Assert.True(captured.Succeeded);
 
-        // The second operator submits the same form. Its status guard still reads Received, so the
-        // guard cannot refuse this one: only the token can. The provider was already called before
-        // the write, which is why the refusal must not claim the money stayed put.
-        var stale = await OperatorServiceFor(second).CaptureAsync(
+        // The live capture did reach the provider, so what follows is about the stale one rather than
+        // about a gateway that was never wired up.
+        Assert.Equal(new[] { "pi_stale_capture" }, gateway.Captures);
+
+        // The second operator submits the same form. Its copy still says Received, so the status
+        // guard cannot refuse this one: only the version check can — and it now runs under the row
+        // lock, before the provider is told anything.
+        var stale = await OperatorServiceFor(second, gateway).CaptureAsync(
             request.Id, "operator-two", "screen replaced under warranty", Ct);
 
         Assert.False(stale.Succeeded);
-        Assert.Contains("payment provider may already hold", stale.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("nothing was saved", stale.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("Captured", stale.Message, StringComparison.Ordinal);
+
+        // One capture at the provider for one return. Before the guard the second form charged the
+        // card and was only refused at the row write, which is money moved for nothing.
+        Assert.Single(gateway.Captures);
 
         await using var check = database.CreateContext();
         var stored = await check.RmaRequests.SingleAsync(r => r.Id == request.Id, Ct);
@@ -156,21 +168,23 @@ public sealed class RequestConcurrencyTests
         await using var first = database.CreateContext();
         await using var second = database.CreateContext();
 
+        var gateway = new FakePaymentGateway();
+
         // Both operators have the item open: one on the capture form, one on the cancel panel.
         Assert.NotNull(await new RmaRepository(second).GetByIdAsync(request.Id, Ct));
 
-        var voided = await OperatorServiceFor(first).VoidAsync(
+        var voided = await OperatorServiceFor(first, gateway).VoidAsync(
             request.Id, "operator-one", "customer withdrew the repair", Ct);
         Assert.True(voided.Succeeded);
 
-        // The stale capture. Its copy still says Received, so the status guard passes and only the
-        // token can refuse it; the provider is called before the write, which is why the refusal has
-        // to say the money may already be held.
-        var stale = await OperatorServiceFor(second).CaptureAsync(
+        // The stale capture. Its copy still says Received, so the status guard passes; the version
+        // check under the lock refuses it, and the provider is never asked to take the money.
+        var stale = await OperatorServiceFor(second, gateway).CaptureAsync(
             request.Id, "operator-two", "screen replaced under warranty", Ct);
 
         Assert.False(stale.Succeeded);
-        Assert.Contains("payment provider may already hold", stale.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("nothing was saved", stale.Message, StringComparison.Ordinal);
+        Assert.Empty(gateway.Captures);
 
         await using var check = database.CreateContext();
         var stored = await check.RmaRequests.SingleAsync(r => r.Id == request.Id, Ct);
@@ -299,6 +313,103 @@ public sealed class RequestConcurrencyTests
         Assert.Contains("changed since it was read", refused.Detail, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The void is the other money transition: it releases an authorisation at the provider before it
+    /// writes the row. A void built from a page that still said Received, sent after another operator
+    /// captured, would hand the customer the fee back while the return moved to repair.
+    /// </summary>
+    [Fact]
+    public async Task A_stale_void_never_releases_the_authorisation_another_operator_captured()
+    {
+        await using var database = new LiveDatabase("rma_concurrency");
+        await database.InitializeAsync();
+
+        var request = Request(RmaRequestStatus.Received);
+        request.PaymentTransactionId = "pi_captured_before_void";
+        request.DepositAmount = 69m;
+        request.CurrencyCode = "EUR";
+
+        await using (var seed = database.CreateContext())
+        {
+            await seed.Database.MigrateAsync(Ct);
+            seed.RmaRequests.Add(request);
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        await using var first = database.CreateContext();
+        await using var second = database.CreateContext();
+
+        var gateway = new FakePaymentGateway();
+
+        // One operator captures the fee; the other still has the cancel panel open on Received.
+        Assert.NotNull(await new RmaRepository(second).GetByIdAsync(request.Id, Ct));
+
+        var captured = await OperatorServiceFor(first, gateway).CaptureAsync(
+            request.Id, "operator-one", "screen replaced under warranty", Ct);
+        Assert.True(captured.Succeeded);
+
+        var stale = await OperatorServiceFor(second, gateway).VoidAsync(
+            request.Id, "operator-two", "customer withdrew the repair", Ct);
+
+        Assert.False(stale.Succeeded);
+        Assert.Contains("nothing was saved", stale.Message, StringComparison.Ordinal);
+
+        // The authorisation was never released: the capture the other operator took still stands at
+        // the provider, which is the only place that can undo the charge.
+        Assert.Empty(gateway.Voids);
+        Assert.Equal(new[] { "pi_captured_before_void" }, gateway.Captures);
+
+        await using var check = database.CreateContext();
+        var stored = await check.RmaRequests.SingleAsync(r => r.Id == request.Id, Ct);
+
+        Assert.Equal(RmaRequestStatus.InRepair, stored.Status);
+        Assert.Null(stored.CancellationReason);
+
+        var actions = await check.OperatorActions.ToListAsync(Ct);
+
+        Assert.Equal(2, actions.Count);
+        Assert.True(actions.Single(a => a.Action == "capture").Succeeded);
+        Assert.False(actions.Single(a => a.Action == "void").Succeeded);
+    }
+
+    /// <summary>
+    /// The other half of the same claim: a void from a current page still reaches the provider. A
+    /// guard that refused everything would pass the stale tests above and quietly break the release.
+    /// </summary>
+    [Fact]
+    public async Task A_current_void_releases_the_authorisation()
+    {
+        await using var database = new LiveDatabase("rma_concurrency");
+        await database.InitializeAsync();
+
+        var request = Request(RmaRequestStatus.Received);
+        request.PaymentTransactionId = "pi_current_void";
+        request.DepositAmount = 69m;
+        request.CurrencyCode = "EUR";
+
+        await using (var seed = database.CreateContext())
+        {
+            await seed.Database.MigrateAsync(Ct);
+            seed.RmaRequests.Add(request);
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        var gateway = new FakePaymentGateway();
+
+        await using var context = database.CreateContext();
+        var voided = await OperatorServiceFor(context, gateway).VoidAsync(
+            request.Id, "operator-one", "customer withdrew the repair", Ct);
+
+        Assert.True(voided.Succeeded);
+        Assert.Equal(new[] { "pi_current_void" }, gateway.Voids);
+
+        await using var check = database.CreateContext();
+        var stored = await check.RmaRequests.SingleAsync(r => r.Id == request.Id, Ct);
+
+        Assert.Equal(RmaRequestStatus.Cancelled, stored.Status);
+        Assert.Contains("customer withdrew the repair", stored.CancellationReason, StringComparison.Ordinal);
+    }
+
     private static RmaRequest Request(RmaRequestStatus status) => new()
     {
         Id = Guid.NewGuid(),
@@ -309,10 +420,10 @@ public sealed class RequestConcurrencyTests
         UpdatedAtUtc = Now,
     };
 
-    private static OperatorService OperatorServiceFor(RmaDbContext db) => new(
+    private static OperatorService OperatorServiceFor(RmaDbContext db, FakePaymentGateway? payments = null) => new(
         new RmaRepository(db),
         new EfOperationsRepository(db),
-        new FakePaymentGateway(),
+        payments ?? new FakePaymentGateway(),
         new EfUnitOfWork(db),
         new FakeClock(Now),
         NullLogger<OperatorService>.Instance);

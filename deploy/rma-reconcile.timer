@@ -1,0 +1,24 @@
+# Nightly payment reconciliation. The default --older-than window is six hours, so a daily run at
+# 02:40 is comfortably longer than the window it sweeps: nothing that a previous run already answered
+# is re-read, and a delivery lost overnight is found before the next working day.
+#
+# Persistent=true is what makes a missed night visible rather than lost: a host that was down at 02:40
+# runs the sweep when it comes back, instead of skipping the day silently.
+#
+# Install with the service beside it:
+#   sudo cp deploy/rma-reconcile.service deploy/rma-reconcile.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rma-reconcile.timer
+#   systemctl list-timers rma-reconcile.timer
+
+[Unit]
+Description=Nightly RMA payment reconciliation
+
+[Timer]
+OnCalendar=*-*-* 02:40:00
+# Spread across a fleet rather than every host asking the provider at the same second.
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

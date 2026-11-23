@@ -197,6 +197,22 @@ public interface IRmaRepository
     Task<string> NextRmaNumberAsync(DateOnly today, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Runs a transition on the return only if the row is still at the version the caller read, with
+    /// the row locked for the length of it; returns false, running nothing, when it is not.
+    /// </summary>
+    /// <remarks>
+    /// For the transitions that move money at a provider before they write the row. A version
+    /// compared and released proves only that nothing had changed at that instant, and the provider
+    /// call in between can take seconds; the lock is what makes the answer still true when the write
+    /// lands. On false the provider has not been called, which is the promise the caller can then
+    /// make to the operator.
+    /// </remarks>
+    Task<bool> TryRunGuardedAsync(
+        RmaRequest request,
+        Func<Task> transition,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns holding a payment transaction whose row has not been written since
     /// <paramref name="unchangedSince"/>: what a reconciliation run looks at. A webhook that arrived
     /// would have touched the row, so an untouched row carrying an authorisation is the shape of a

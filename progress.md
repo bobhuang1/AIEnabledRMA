@@ -655,3 +655,20 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   database the command prints the pinned table unchanged, `stats --json` prints one line and exits 0,
   and `stats --bogus` writes to stderr and exits 1. Mutation: putting every count in the `business`
   group fails both new tests.
+- **Three changes that had been waiting on a dead Docker engine, verified together.** The capture
+  path now proves its row before it charges: `IRmaRepository.TryRunGuardedAsync` opens a transaction
+  inside EF's retrying strategy, takes the row with `SELECT … FOR UPDATE`, reloads it and compares the
+  version the operator's page was rendered from, and only then runs the provider call and the write —
+  so a stale capture or void is refused with nothing sent to the gateway, and the refusal no longer
+  has to hedge about money that may have moved. `reconcile-payments` now has a scheduled form: a
+  one-shot compose service behind the `ops` profile, built from a new `tools/DbAdmin/Dockerfile`, with
+  `deploy/rma-reconcile.service` and `.timer` and README instructions for installing them (the pack's
+  postgres publishes no port, so the sweep runs on the pack's network rather than the host's crontab).
+  And a payment-mismatch review row now shows what it is about: `PaymentMismatchReason` decodes the
+  provider state from the reason code, `ReviewItem.ProviderStatus` exposes it, and `OperatorReviewRow`
+  joins the RMA number and transaction from the return, so the row reads "RMA: … · provider: Captured
+  · transaction: pi_…" without a psql session.
+- **Gate:** `suite` 598 passed, 0 skipped, 0 failed; EF model check clean; vulnerability audit clean.
+  Mutation: dropping the provider state from the dashboard row fails
+  `A_mismatch_row_names_the_return_the_provider_state_and_the_transaction` with "Not found: provider:
+  Captured".

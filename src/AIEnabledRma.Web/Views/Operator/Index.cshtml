@@ -22,15 +22,26 @@
         <table>
             <thead><tr><th>Filed</th><th>Source</th><th>Reason</th><th>Detail</th><th>Resolve</th></tr></thead>
             <tbody>
-            @foreach (var item in Model.ReviewItems)
+            @foreach (var row in Model.ReviewItems)
             {
                 <tr>
-                    <td>@item.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
-                    <td>@item.Source</td>
-                    <td>@item.Reason</td>
-                    <td>@item.Explanation @item.Serials</td>
+                    <td>@row.Item.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
+                    <td>@row.Item.Source</td>
+                    <td>@row.Item.Reason</td>
                     <td>
-                        <form method="post" asp-action="Resolve" asp-route-id="@item.Id">
+                        @row.Item.Explanation @row.Item.Serials
+                        @* The payment facts, in their own line: a mismatch is judged on which return,
+                           what the provider says and which transaction, and none of the three should
+                           need a psql session. *@
+                        @if (row.Item.ProviderStatus is not null || row.RmaNumber is not null)
+                        {
+                            <div class="payment">
+                                RMA: @row.RmaNumber · provider: @row.Item.ProviderStatus · transaction: @row.TransactionId
+                            </div>
+                        }
+                    </td>
+                    <td>
+                        <form method="post" asp-action="Resolve" asp-route-id="@row.Item.Id">
                             <label>Resolution <input name="resolution" required maxlength="2000" /></label>
                             <button class="btn" type="submit">Resolve</button>
                         </form>

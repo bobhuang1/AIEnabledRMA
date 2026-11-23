@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Operations;
 using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Rag;
@@ -20,6 +21,7 @@ namespace AIEnabledRma.Web.Controllers;
 public sealed class OperatorController(
     OperatorService operatorService,
     IOperationsRepository operations,
+    IRmaRepository requests,
     KnowledgeIndexHolder knowledge,
     IOptions<OperatorAuthOptions> authOptions,
     IServiceProvider services) : Controller
@@ -38,9 +40,34 @@ public sealed class OperatorController(
             ? await TryReadCaseReportAsync(store, cancellationToken)
             : null;
 
+        var reviewItems = await operations.OpenReviewItemsAsync(100, cancellationToken);
+
+        // The payment facts a mismatch is judged on, read from the return the item points at rather
+        // than copied onto the item: a copy can drift from the return it describes, and the queue is
+        // bounded at a hundred, so the lookups are too.
+        var returns = new Dictionary<Guid, RmaRequest>();
+
+        foreach (var id in reviewItems
+                     .Where(item => item.RmaRequestId is not null)
+                     .Select(item => item.RmaRequestId!.Value)
+                     .Distinct())
+        {
+            if (await requests.GetByIdAsync(id, cancellationToken) is { } named)
+            {
+                returns[id] = named;
+            }
+        }
+
         return View(new OperatorDashboard
         {
-            ReviewItems = await operations.OpenReviewItemsAsync(100, cancellationToken),
+            ReviewItems = reviewItems
+                .Select(item =>
+                {
+                    var named = item.RmaRequestId is { } id ? returns.GetValueOrDefault(id) : null;
+
+                    return new OperatorReviewRow(item, named?.RmaNumber, named?.PaymentTransactionId);
+                })
+                .ToList(),
             Requests = await operations.RequestsInStatusAsync(Waiting, 100, cancellationToken),
             UnreviewedArticles = knowledge.Current.Articles.Where(a => a.ReviewedBy is null || a.ReviewedAt is null).Select(a => (a.Id, a.Title, a.ContentHash)).ToList(),
             KnowledgeLoadErrors = knowledge.Current.LoadErrors,
@@ -145,9 +172,20 @@ public sealed class OperatorController(
     }
 }
 
+/// <summary>
+/// One row of the review queue: the item, plus the payment facts read from the return it names.
+/// </summary>
+/// <remarks>
+/// A mismatch item is judged on three things an operator used to have to get from the database: which
+/// return it is, what the provider says the transaction is, and which transaction. The provider state
+/// comes from the item itself (<see cref="ReviewItem.ProviderStatus"/>); the other two belong to the
+/// return, so they are read from it here instead of being duplicated onto the queue row.
+/// </remarks>
+public sealed record OperatorReviewRow(ReviewItem Item, string? RmaNumber, string? TransactionId);
+
 public sealed record OperatorDashboard
 {
-    public required IReadOnlyList<ReviewItem> ReviewItems { get; init; }
+    public required IReadOnlyList<OperatorReviewRow> ReviewItems { get; init; }
 
     public required IReadOnlyList<RmaRequest> Requests { get; init; }
 

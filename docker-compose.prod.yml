@@ -158,6 +158,31 @@ services:
       Rag__Admin__ApiKey: ${RAG_ADMIN_KEY:?set RAG_ADMIN_KEY}
     healthcheck: *http-readiness
 
+  # Payments reconciliation, one-shot. A lost webhook is the quiet failure this exists for: the
+  # provider holds the money and the return still says authorised, and nothing records that anybody
+  # asked. It used to run only when somebody typed it, so the deploy runs this on a timer instead.
+  #
+  # Behind the `ops` profile, so `up` never starts it, and `restart: "no"` after the anchor's
+  # `unless-stopped` because a run that finished is not a run that crashed: restarting it would
+  # sweep again every few seconds and bury the operator queue it is supposed to fill slowly.
+  reconcile-payments:
+    <<: *hardening
+    restart: "no"
+    build:
+      context: .
+      dockerfile: tools/DbAdmin/Dockerfile
+    profiles: ["ops"]
+    environment:
+      <<: *app-env
+      Payments__Provider: stripe
+      Payments__Stripe__SecretKey: ${STRIPE_SECRET_KEY:?set STRIPE_SECRET_KEY}
+      Payments__Stripe__WebhookSecret: ${STRIPE_WEBHOOK_SECRET:?set STRIPE_WEBHOOK_SECRET}
+    # Flags pass through from the command line: `... run --rm reconcile-payments --older-than 24`.
+    command: ["reconcile-payments"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   ollama:
   pgdata:

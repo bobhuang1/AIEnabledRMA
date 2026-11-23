@@ -1427,6 +1427,56 @@ public sealed class WebWizardTests : IAsyncLifetime
         Assert.All(actions, a => Assert.Equal("dev-operator", a.Operator));
     }
 
+    /// <summary>
+    /// A mismatch item used to reach the operator as an explanation and nothing else, so judging it
+    /// meant opening psql to find the return and asking the provider what the transaction is. The row
+    /// now carries the three facts: which return, what the provider says, and which transaction.
+    /// </summary>
+    [Fact]
+    public async Task A_mismatch_row_names_the_return_the_provider_state_and_the_transaction()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = OperatorHost();
+
+        var requestId = Guid.NewGuid();
+
+        await using (var db = CreateContext())
+        {
+            db.RmaRequests.Add(new RmaRequest
+            {
+                Id = requestId,
+                RmaNumber = "RMA-2026-09902",
+                Status = RmaRequestStatus.Received,
+                Kind = RmaRequestKind.PaidRepair,
+                DepositAmount = 69m,
+                CurrencyCode = "USD",
+                PaymentTransactionId = "pi_mismatch_visible",
+                CreatedAtUtc = AnchorInstant,
+                UpdatedAtUtc = AnchorInstant,
+            });
+
+            db.ReviewItems.Add(new AIEnabledRma.Domain.Operations.ReviewItem
+            {
+                Id = Guid.NewGuid(),
+                CreatedAtUtc = AnchorInstant,
+                Source = AIEnabledRma.Domain.Operations.ReviewSources.PaymentMismatch,
+                Reason = AIEnabledRma.Domain.Operations.PaymentMismatchReason.For(
+                    AIEnabledRma.Domain.Abstractions.PaymentStatus.Captured),
+                Explanation = "The payment provider reports Captured for a return this database calls Received.",
+                RmaRequestId = requestId,
+            });
+
+            await db.SaveChangesAsync(ct);
+        }
+
+        var client = await SignedInOperatorAsync(factory, ct);
+        var dashboard = await client.GetStringAsync("/Operator", ct);
+
+        Assert.Contains("RMA-2026-09902", dashboard, StringComparison.Ordinal);
+        Assert.Contains("provider: Captured", dashboard, StringComparison.Ordinal);
+        Assert.Contains("transaction: pi_mismatch_visible", dashboard, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_start_sent_to_human_review_is_queued_for_an_operator_and_can_be_resolved()
     {

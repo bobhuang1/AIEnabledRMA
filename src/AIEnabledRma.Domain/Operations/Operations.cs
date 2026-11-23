@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Common;
 using AIEnabledRma.Domain.Rma;
@@ -32,6 +33,18 @@ public sealed class ReviewItem
 
     public string Status { get; set; } = ReviewStatuses.Open;
 
+    /// <summary>
+    /// The provider's state, for the one kind of item that has one: a <see cref="ReviewSources.PaymentMismatch"/>.
+    /// </summary>
+    /// <remarks>
+    /// Computed from <see cref="Reason"/> rather than stored beside it, so there is one copy of the
+    /// fact and no column that can disagree with the code the queue was deduplicated on. The row is
+    /// what an operator judges a mismatch from: "the provider says Captured" has to be a field on the
+    /// dashboard, not a sentence they have to parse or a psql session they have to open.
+    /// </remarks>
+    [NotMapped]
+    public PaymentStatus? ProviderStatus => PaymentMismatchReason.ProviderStatusIn(Reason);
+
     public string? ResolvedBy { get; set; }
 
     public DateTimeOffset? ResolvedAtUtc { get; set; }
@@ -60,6 +73,28 @@ public static class ReviewSources
     /// moved there, while here something may have moved unrecorded.
     /// </summary>
     public const string PaymentMismatch = "payment-mismatch";
+}
+
+/// <summary>
+/// The reason code a payment-mismatch item carries, and the provider state encoded in it.
+/// </summary>
+/// <remarks>
+/// The code is the item's machine-readable half: an earlier run looks for it to avoid filing the
+/// same disagreement twice, and the dashboard reads the provider state back out of it. Keeping the
+/// two in one string is what makes "the provider says X" impossible to have two versions of.
+/// </remarks>
+public static class PaymentMismatchReason
+{
+    public const string Prefix = "PaymentMismatch:";
+
+    public static string For(PaymentStatus status) => Prefix + status;
+
+    /// <summary>The provider state a reason code names, or null when it is not a mismatch code.</summary>
+    public static PaymentStatus? ProviderStatusIn(string reason) =>
+        reason.StartsWith(Prefix, StringComparison.Ordinal)
+        && Enum.TryParse<PaymentStatus>(reason[Prefix.Length..], ignoreCase: false, out var status)
+            ? status
+            : null;
 }
 
 public static class ReviewStatuses
@@ -161,7 +196,7 @@ public sealed class OperatorService(
 
             request.Status = RmaRequestStatus.InRepair;
             return new OperatorResult(true, $"Captured {request.DepositAmount:0.00} {request.CurrencyCode}; moved to repair.");
-        }, cancellationToken);
+        }, cancellationToken, moneyMoves: true);
 
     /// <summary>Voids the authorisation and cancels the return, with a reason.</summary>
     public Task<OperatorResult> VoidAsync(Guid rmaId, string operatorName, string reason, CancellationToken cancellationToken) =>
@@ -190,7 +225,7 @@ public sealed class OperatorService(
             request.Status = RmaRequestStatus.Cancelled;
             request.CancellationReason = "Voided by an operator: " + Truncate(reason, 400);
             return new OperatorResult(true, "Authorisation voided and return cancelled.");
-        }, cancellationToken);
+        }, cancellationToken, moneyMoves: true);
 
     public async Task<OperatorResult> ResolveReviewItemAsync(Guid itemId, string operatorName, string resolution, CancellationToken cancellationToken)
     {
@@ -254,7 +289,8 @@ public sealed class OperatorService(
         string action,
         string? detail,
         Func<RmaRequest, Task<OperatorResult>> apply,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool moneyMoves = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operatorName);
 
@@ -264,6 +300,12 @@ public sealed class OperatorService(
             operations.AddAction(Action(operatorName, action, rmaId.ToString(), detail, false));
             await unitOfWork.SaveChangesAsync(cancellationToken);
             return new OperatorResult(false, "Return not found.");
+        }
+
+        if (moneyMoves)
+        {
+            return await GuardedAsync(
+                request, operatorName, action, detail, apply, cancellationToken);
         }
 
         var result = await apply(request);
@@ -299,13 +341,75 @@ public sealed class OperatorService(
                 action,
                 request.RmaNumber);
 
-            return new OperatorResult(
-                false,
-                action == "capture" ? ConflictCaptureMessage : ConflictMessage);
+            return new OperatorResult(false, ConflictMessage);
         }
 
         logger.LogInformation("Operator {Operator} {Action} {Rma}: {Outcome}", operatorName, action, request.RmaNumber, result.Succeeded ? "ok" : "refused");
         return result;
+    }
+
+    /// <summary>
+    /// A transition that moves money, run under a row lock that proves the return is still the one the
+    /// operator read.
+    /// </summary>
+    /// <remarks>
+    /// Capturing charges and voiding releases, both before the row is written, and the version token
+    /// only refuses the write — which arrives after the provider has already acted, for a return
+    /// another operator had voided or captured in the meantime. So the proof is a lock and it comes
+    /// first: a stale page is refused here, with nothing sent to the provider, and the operator is
+    /// told the money did not move because it did not. On the other side of the same lock the charge
+    /// and its write commit together, so the row cannot drift out from under a capture that stands.
+    /// </remarks>
+    private async Task<OperatorResult> GuardedAsync(
+        RmaRequest request,
+        string operatorName,
+        string action,
+        string? detail,
+        Func<RmaRequest, Task<OperatorResult>> apply,
+        CancellationToken cancellationToken)
+    {
+        OperatorResult? outcome = null;
+
+        var committed = await requests.TryRunGuardedAsync(
+            request,
+            async () =>
+            {
+                outcome = await apply(request);
+
+                if (outcome.Succeeded)
+                {
+                    request.UpdatedAtUtc = clock.UtcNow;
+                }
+
+                // The action row joins the same transaction as the status change: a capture that
+                // committed without its audit line would be a charge nobody can account for.
+                operations.AddAction(Action(operatorName, action, request.RmaNumber, detail, outcome.Succeeded));
+            },
+            cancellationToken);
+
+        if (!committed)
+        {
+            // Nothing was charged and nothing was released, so the attempt is the only thing to
+            // record — written on its own, outside the transition that was refused.
+            var refused = Action(operatorName, action, request.RmaNumber, detail, false);
+            refused.Detail = detail is null
+                ? ConflictDetail
+                : Truncate(detail + " " + ConflictDetail, 2000);
+            operations.AddAction(refused);
+
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+
+            logger.LogWarning(
+                "Operator {Operator} {Action} {Rma}: refused before the payment provider was called, the return changed since it was read",
+                operatorName,
+                action,
+                request.RmaNumber);
+
+            return new OperatorResult(false, ConflictMessage);
+        }
+
+        logger.LogInformation("Operator {Operator} {Action} {Rma}: {Outcome}", operatorName, action, request.RmaNumber, outcome!.Succeeded ? "ok" : "refused");
+        return outcome!;
     }
 
     private OperatorAction Action(string operatorName, string action, string target, string? detail, bool succeeded) => new()
@@ -323,15 +427,6 @@ public sealed class OperatorService(
     private const string ConflictMessage =
         "Another person changed this return while you were working on it, so nothing was saved. "
         + "Reload the return and check its current state before trying again.";
-
-    /// <summary>
-    /// Capturing is the one action that talks to the payment provider before it writes the row, so
-    /// a refusal there cannot promise the money did not move.
-    /// </summary>
-    private const string ConflictCaptureMessage =
-        "Another person changed this return while you were working on it, so nothing was recorded. "
-        + "The payment provider may already hold the capture for this authorisation, so check the "
-        + "transaction before trying again.";
 
     /// <summary>What the operator reads when another one resolved the item first.</summary>
     private const string ConflictReviewMessage =

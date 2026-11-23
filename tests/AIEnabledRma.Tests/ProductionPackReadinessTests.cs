@@ -88,10 +88,10 @@ public sealed class ProductionPackReadinessTests
             .Where(dependency => dependency.Condition == "condition: service_healthy")
             .ToList();
 
-        // Four today — proxy waits for web and mcp, and each of those waits for postgres — and the
-        // count is pinned so a parse that stops finding them fails here instead of reporting a pack
-        // with no waits.
-        Assert.Equal(4, waits.Count);
+        // Five today — proxy waits for web and mcp, those two wait for postgres, and the scheduled
+        // reconciliation one-shot waits for postgres as well — and the count is pinned so a parse
+        // that stops finding them fails here instead of reporting a pack with no waits.
+        Assert.Equal(5, waits.Count);
 
         foreach (var (_, to, _) in waits)
         {
@@ -139,7 +139,7 @@ public sealed class ProductionPackReadinessTests
         var dependencies = Dependencies(RepositoryFile(Pack));
 
         // Pinned: a parse that stopped finding entries would otherwise pass while checking nothing.
-        Assert.Equal(4, dependencies.Count);
+        Assert.Equal(5, dependencies.Count);
 
         foreach (var dependency in dependencies)
         {
@@ -155,6 +155,90 @@ public sealed class ProductionPackReadinessTests
         Assert.Contains("web:", proxy, StringComparison.Ordinal);
         Assert.Contains("mcp:", proxy, StringComparison.Ordinal);
         Assert.Equal(2, CountOccurrences(proxy, "condition: service_healthy"));
+    }
+
+    /// <summary>
+    /// The reconciliation sweep is the one service in the pack that is meant to finish. Started by
+    /// `up` it would run on every deploy and then sit there as a stopped container; given a restart
+    /// policy it would sweep every few seconds and bury the queue with the same review item, so the
+    /// two properties are asserted together with the profile that keeps it out of the default start.
+    /// </summary>
+    [Fact]
+    public void The_reconciliation_sweep_is_a_one_shot_outside_the_default_start()
+    {
+        var sweep = ServiceBlock(RepositoryFile(Pack), "reconcile-payments");
+
+        Assert.Contains("profiles: [\"ops\"]", sweep, StringComparison.Ordinal);
+        Assert.Contains("restart: \"no\"", sweep, StringComparison.Ordinal);
+        Assert.Contains("command: [\"reconcile-payments\"]", sweep, StringComparison.Ordinal);
+
+        // It reaches the database the way the application services do, from inside the pack.
+        Assert.Contains("<<: *app-env", sweep, StringComparison.Ordinal);
+        Assert.Contains("condition: service_healthy", sweep, StringComparison.Ordinal);
+
+        // And it asks the provider, so it needs the same Stripe settings the web host has.
+        Assert.Contains("Payments__Provider: stripe", sweep, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The image the sweep runs from. Without the tool inside it the service starts, fails with
+    /// "could not execute because the specified command was not found", and the timer reports a
+    /// broken sweep every night for a reason that has nothing to do with payments.
+    /// </summary>
+    [Fact]
+    public void The_sweep_image_runs_the_operator_tool()
+    {
+        var dockerfile = RepositoryFile("tools/DbAdmin/Dockerfile");
+
+        Assert.Contains("dotnet publish tools/DbAdmin", dockerfile, StringComparison.Ordinal);
+        Assert.Contains("ENTRYPOINT [\"dotnet\", \"AIEnabledRma.Tools.DbAdmin.dll\"]", dockerfile, StringComparison.Ordinal);
+
+        // Non-root, and pinned by digest like the other images: a tag is whatever was published last.
+        Assert.Contains("USER $APP_UID", dockerfile, StringComparison.Ordinal);
+        Assert.Contains("@sha256:", dockerfile, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The README has to say how to install it. `reconcile-payments` was documented as a command an
+    /// operator types, which is the state this change exists to replace: a schedule nobody can find
+    /// in the deploy notes is a schedule nobody installs.
+    /// </summary>
+    [Fact]
+    public void The_readme_says_how_to_install_the_scheduled_run()
+    {
+        var readme = RepositoryFile("README.md");
+
+        Assert.Contains("--profile ops run --rm reconcile-payments", readme, StringComparison.Ordinal);
+        Assert.Contains("sudo cp deploy/rma-reconcile.service deploy/rma-reconcile.timer /etc/systemd/system/", readme, StringComparison.Ordinal);
+        Assert.Contains("systemctl enable --now rma-reconcile.timer", readme, StringComparison.Ordinal);
+        Assert.Contains("systemctl list-timers rma-reconcile.timer", readme, StringComparison.Ordinal);
+        Assert.Contains("journalctl -u rma-reconcile.service", readme, StringComparison.Ordinal);
+
+        // The exit code that means "nobody could ask the provider" is the one a schedule has to
+        // report, not swallow.
+        Assert.Contains("exit 2", readme, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The units the README tells an operator to copy. A service that is not `oneshot` stays "active"
+    /// after the container exits, so the timer fires into a unit that is still running and the sweep
+    /// silently stops happening; a timer without `Persistent=true` loses the night the host was down.
+    /// </summary>
+    [Fact]
+    public void The_scheduled_units_run_one_sweep_nightly()
+    {
+        var service = RepositoryFile("deploy/rma-reconcile.service");
+        var timer = RepositoryFile("deploy/rma-reconcile.timer");
+
+        Assert.Contains("Type=oneshot", service, StringComparison.Ordinal);
+        Assert.Contains("--env-file prod.env", service, StringComparison.Ordinal);
+        Assert.Contains("--profile ops run --rm reconcile-payments", service, StringComparison.Ordinal);
+
+        Assert.Contains("OnCalendar=", timer, StringComparison.Ordinal);
+        Assert.Contains("Persistent=true", timer, StringComparison.Ordinal);
+
+        // Without this the timer cannot be enabled, so "systemctl enable --now" installs nothing.
+        Assert.Contains("WantedBy=timers.target", timer, StringComparison.Ordinal);
     }
 
     [Fact]

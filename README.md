@@ -190,6 +190,49 @@ Against the bundled fake gateway every process starts with an empty authorisatio
 development run reports those transactions as unanswered rather than as disagreements — that is the
 fake's memory, not the command's judgement; against Stripe the same run is the real check.
 
+### Scheduled reconciliation
+
+`reconcile-payments` only finds a lost delivery when it runs, so the production pack ships it as a
+one-shot service and the deployment runs that on a timer. It cannot run from the host's crontab: the
+pack's `postgres` publishes no port, and the sweep runs on the pack's network instead — a container
+that exits when the sweep is done. It sits behind the `ops` profile, so `docker compose up` never
+starts it, and it has no restart policy of its own, because a run that finished is not a run that
+crashed.
+
+```bash
+# one sweep, by hand
+docker compose -f docker-compose.prod.yml --env-file prod.env --profile ops run --rm reconcile-payments
+
+# flags pass through
+docker compose -f docker-compose.prod.yml --env-file prod.env --profile ops run --rm reconcile-payments --older-than 24 --take 200
+```
+
+Two units are in `deploy/`: `rma-reconcile.service` runs that one command, and `rma-reconcile.timer`
+fires it nightly at 02:40 with `Persistent=true`, so a night the host was down is swept when it comes
+back rather than skipped. Install them on the host that holds `prod.env`, adjusting `WorkingDirectory`
+and `User` in the service to that checkout:
+
+```bash
+sudo cp deploy/rma-reconcile.service deploy/rma-reconcile.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now rma-reconcile.timer
+systemctl list-timers rma-reconcile.timer      # when it next fires
+journalctl -u rma-reconcile.service -n 50      # what the last run said
+```
+
+A crontab line does the same where there is no systemd, at the cost of the journal:
+
+```cron
+40 2 * * * cd /srv/aienabledrma && docker compose -f docker-compose.prod.yml --env-file prod.env --profile ops run --rm reconcile-payments >> /var/log/rma-reconcile.log 2>&1
+```
+
+What the run means: exit 0 is every transaction answering as the return implies, exit 2 is the
+provider not answering about something — systemd records that as a failed unit, cron as a log line,
+and it is the case worth reading rather than retrying. The default `--older-than` window is six hours,
+so running it much more often than that mostly re-reads rows the previous run already answered;
+mismatches arrive in the operator queue as one open `payment-mismatch` item per return, and resolving
+one lets a later run file it again.
+
 ### Audit payments
 
 `audit-payments` is the sweep that finds a capture or a void the two sides disagree about, whichever

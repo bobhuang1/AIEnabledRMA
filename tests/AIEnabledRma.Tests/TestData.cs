@@ -288,6 +288,18 @@ internal sealed class FakeRmaRepository : IRmaRepository
                 .ThenBy(r => r.Id)
                 .Take(take ?? int.MaxValue)
                 .ToList());
+
+    /// <summary>
+    /// The in-memory repository hands out the only copy of each return, so there is no second writer
+    /// for the guard to lose to: the transition always runs. The workflow tests that use this fake
+    /// never reach a provider either, so the lock has nothing to protect.
+    /// </summary>
+    public async Task<bool> TryRunGuardedAsync(
+        RmaRequest request, Func<Task> transition, CancellationToken cancellationToken = default)
+    {
+        await transition();
+        return true;
+    }
 }
 
 /// <summary>A stub model that returns a canned completion, for pipeline tests.</summary>
@@ -352,6 +364,12 @@ internal sealed class FakePaymentGateway : IPaymentGateway
 
     public List<PaymentRequestContext> RequiredChecks { get; } = [];
 
+    /// <summary>Every authorisation the service asked this provider to capture, in order.</summary>
+    public List<string> Captures { get; } = [];
+
+    /// <summary>Every authorisation the service asked this provider to release, in order.</summary>
+    public List<string> Voids { get; } = [];
+
     public Task<bool> IsPaymentRequiredAsync(
         PaymentRequestContext context, CancellationToken cancellationToken = default)
     {
@@ -367,8 +385,11 @@ internal sealed class FakePaymentGateway : IPaymentGateway
     }
 
     public Task<Result<PaymentReceipt>> CaptureAsync(
-        string authorizationId, CancellationToken cancellationToken = default) =>
-        Task.FromResult<Result<PaymentReceipt>>(
+        string authorizationId, CancellationToken cancellationToken = default)
+    {
+        Captures.Add(authorizationId);
+
+        return Task.FromResult<Result<PaymentReceipt>>(
             Result<PaymentReceipt>.Success(
                 new PaymentReceipt
                 {
@@ -377,9 +398,14 @@ internal sealed class FakePaymentGateway : IPaymentGateway
                     Amount = default,
                     Status = PaymentStatus.Captured,
                 }));
+    }
 
-    public Task<Result> VoidAsync(string authorizationId, CancellationToken cancellationToken = default) =>
-        Task.FromResult(Result.Success());
+    public Task<Result> VoidAsync(string authorizationId, CancellationToken cancellationToken = default)
+    {
+        Voids.Add(authorizationId);
+
+        return Task.FromResult(Result.Success());
+    }
 
     /// <summary>What this double's provider would answer a reconciliation run with.</summary>
     public Dictionary<string, PaymentReceipt> ProviderState { get; } = new(StringComparer.Ordinal);

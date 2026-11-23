@@ -128,7 +128,7 @@ public sealed class PaymentReconciler(
                     Id = Guid.NewGuid(),
                     CreatedAtUtc = clock.UtcNow,
                     Source = ReviewSources.PaymentMismatch,
-                    Reason = $"PaymentMismatch:{provider}",
+                    Reason = PaymentMismatchReason.For(provider),
                     Explanation =
                         $"The payment provider reports {provider} for {transactionId}, but {request.RmaNumber} "
                         + $"is {request.Status} here and expects {expected}. A webhook may never have arrived; "

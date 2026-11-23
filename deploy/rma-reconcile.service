@@ -1,0 +1,28 @@
+# One reconciliation sweep: asks the payment provider about stale authorisations and files a review
+# item wherever its answer disagrees with the stored return.
+#
+# The sweep cannot run on the host directly: the production pack's postgres publishes no port, so it
+# runs as a one-shot container on the pack's network. That is why this unit calls `docker compose run`
+# rather than a DbAdmin binary: the command, its connection string and its provider key are the ones
+# the pack already holds, and nothing about them is retyped here.
+#
+# Install beside the checkout that holds prod.env:
+#   sudo cp deploy/rma-reconcile.service deploy/rma-reconcile.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rma-reconcile.timer
+
+[Unit]
+Description=RMA payment reconciliation (files review items for webhooks that never arrived)
+Documentation=file:///srv/aienabledrma/README.md
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust to the checkout that holds docker-compose.prod.yml and prod.env.
+WorkingDirectory=/srv/aienabledrma
+ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml --env-file prod.env --profile ops run --rm reconcile-payments
+# A sweep that could not ask the provider exits 2; systemd records the non-zero result as a failed
+# unit, which is the point — a schedule that swallows it is the failure this exists to end.
+User=rma
+Group=docker
