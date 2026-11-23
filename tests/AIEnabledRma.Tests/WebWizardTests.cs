@@ -1516,6 +1516,59 @@ public sealed class WebWizardTests : IAsyncLifetime
         Assert.Contains("transaction: pi_mismatch_visible", dashboard, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The mismatch a state column cannot show: both sides say captured and the sums differ. The row
+    /// carries the money the run saw, so the operator compares two numbers instead of reading them out
+    /// of the explanation sentence.
+    /// </summary>
+    [Fact]
+    public async Task A_mismatch_row_shows_the_two_sums_the_run_saw()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = OperatorHost();
+
+        var requestId = Guid.NewGuid();
+
+        await using (var db = CreateContext())
+        {
+            db.RmaRequests.Add(new RmaRequest
+            {
+                Id = requestId,
+                RmaNumber = "RMA-2026-09903",
+                Status = RmaRequestStatus.InRepair,
+                Kind = RmaRequestKind.PaidRepair,
+                DepositAmount = 70m,
+                CurrencyCode = "USD",
+                PaymentTransactionId = "pi_mismatch_money",
+                CreatedAtUtc = AnchorInstant,
+                UpdatedAtUtc = AnchorInstant,
+            });
+
+            db.ReviewItems.Add(new AIEnabledRma.Domain.Operations.ReviewItem
+            {
+                Id = Guid.NewGuid(),
+                CreatedAtUtc = AnchorInstant,
+                Source = AIEnabledRma.Domain.Operations.ReviewSources.PaymentMismatch,
+                Reason = AIEnabledRma.Domain.Operations.PaymentMismatchReason.For(
+                    AIEnabledRma.Domain.Abstractions.PaymentStatus.Captured),
+                Explanation = "The payment provider holds 69.00 USD where RMA-2026-09903 says 70.00 USD.",
+                ExpectedAmount = 70m,
+                ExpectedCurrencyCode = "USD",
+                ProviderAmount = 69m,
+                ProviderCurrencyCode = "USD",
+                RmaRequestId = requestId,
+            });
+
+            await db.SaveChangesAsync(ct);
+        }
+
+        var client = await SignedInOperatorAsync(factory, ct);
+        var dashboard = await client.GetStringAsync("/Operator", ct);
+
+        Assert.Contains("expected: 70.00 USD", dashboard, StringComparison.Ordinal);
+        Assert.Contains("provider holds: 69.00 USD", dashboard, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_start_sent_to_human_review_is_queued_for_an_operator_and_can_be_resolved()
     {

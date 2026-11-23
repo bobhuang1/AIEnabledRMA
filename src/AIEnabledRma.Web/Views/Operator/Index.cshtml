@@ -38,6 +38,16 @@
                             <div class="payment">
                                 RMA: @row.RmaNumber · provider: @row.Item.ProviderStatus · transaction: @row.TransactionId
                             </div>
+                            @* The money, beside the state: two equal states with two different sums
+                               is the mismatch only the amounts can show, and an operator should not
+                               have to read it out of the sentence above. Nothing is printed for an
+                               item that recorded no money (every item that is not a payment). *@
+                            @if (row.Item.ExpectedMoney is not null || row.Item.ProviderMoney is not null)
+                            {
+                                <div class="payment">
+                                    expected: @(row.Item.ExpectedMoney?.ToString() ?? "unknown") · provider holds: @(row.Item.ProviderMoney?.ToString() ?? "unknown")
+                                </div>
+                            }
                         }
                     </td>
                     <td>

@@ -139,6 +139,12 @@ public sealed class PaymentReconciliationTests : IAsyncLifetime
         // The sentence is about the money: repeating "Captured" twice would say nothing.
         Assert.Contains("70.00 EUR", item.Explanation!, StringComparison.Ordinal);
         Assert.Contains("69.00 EUR", item.Explanation!, StringComparison.Ordinal);
+
+        // And the sums are fields on the item, because they are what the operator's row shows: a
+        // sentence is something they would have to parse, and a status-only row reads clean exactly
+        // here, where both sides say Captured and the money is wrong.
+        Assert.Equal(new Money(70m, "EUR"), item.ExpectedMoney);
+        Assert.Equal(new Money(69m, "EUR"), item.ProviderMoney);
     }
 
     /// <summary>

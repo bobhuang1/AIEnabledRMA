@@ -45,11 +45,43 @@ public sealed class ReviewItem
     [NotMapped]
     public PaymentStatus? ProviderStatus => PaymentMismatchReason.ProviderStatusIn(Reason);
 
+    /// <summary>
+    /// What the provider held when a <see cref="ReviewSources.PaymentMismatch"/> was filed, and what
+    /// the return said the charge was. Stored rather than asked for again: the sums the operator judges
+    /// are the ones the run saw, and a later capture or re-price must not rewrite the history of the
+    /// item that reported it.
+    /// </summary>
+    /// <remarks>
+    /// An amount and its currency are two columns each, because a sum without its currency is not
+    /// money. Both halves are written together by the reconciler; a row that has only one is shown as
+    /// no amount at all rather than as a bare number.
+    /// </remarks>
+    public decimal? ProviderAmount { get; set; }
+
+    public string? ProviderCurrencyCode { get; set; }
+
+    public decimal? ExpectedAmount { get; set; }
+
+    public string? ExpectedCurrencyCode { get; set; }
+
+    /// <summary>The provider's sum as money, or null when the item never recorded one.</summary>
+    [NotMapped]
+    public Money? ProviderMoney => AsMoney(ProviderAmount, ProviderCurrencyCode);
+
+    /// <summary>What the return said the charge was, or null when the item never recorded one.</summary>
+    [NotMapped]
+    public Money? ExpectedMoney => AsMoney(ExpectedAmount, ExpectedCurrencyCode);
+
     public string? ResolvedBy { get; set; }
 
     public DateTimeOffset? ResolvedAtUtc { get; set; }
 
     public string? Resolution { get; set; }
+
+    private static Money? AsMoney(decimal? amount, string? currencyCode) =>
+        amount is { } value && !string.IsNullOrWhiteSpace(currencyCode)
+            ? new Money(value, currencyCode)
+            : null;
 
     /// <summary>
     /// Optimistic concurrency token, mapped to PostgreSQL's <c>xmin</c> system column. Resolving an

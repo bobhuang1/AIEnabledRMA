@@ -316,6 +316,14 @@ public sealed class ReviewItemConfiguration : IEntityTypeConfiguration<ReviewIte
         builder.Property(r => r.Explanation).HasMaxLength(2000);
         builder.Property(r => r.Serials).HasMaxLength(1000);
         builder.Property(r => r.Status).HasMaxLength(16).IsRequired();
+
+        // The two sums a payment mismatch is judged on, in the same shapes rma_requests uses for its
+        // money: a numeric amount and a three-letter code. Nullable, because every other review item
+        // has no money and an item filed before these columns existed must still load.
+        builder.Property(r => r.ProviderAmount).HasPrecision(18, 2);
+        builder.Property(r => r.ProviderCurrencyCode).HasMaxLength(3);
+        builder.Property(r => r.ExpectedAmount).HasPrecision(18, 2);
+        builder.Property(r => r.ExpectedCurrencyCode).HasMaxLength(3);
         builder.Property(r => r.ResolvedBy).HasMaxLength(256);
         builder.Property(r => r.Resolution).HasMaxLength(2000);
 

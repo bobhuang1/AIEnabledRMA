@@ -151,6 +151,12 @@ public sealed class PaymentReconciler(
                               + $"{transactionId}, but {request.RmaNumber} is {request.Status} here and "
                               + $"expects {expected} of {expectedAmount}.")
                         + " A webhook may never have arrived; check the transaction before changing anything.",
+                    // The two sums travel as fields as well as words: the row an operator judges the
+                    // mismatch from has to carry the money, or "both sides say captured" reads clean.
+                    ExpectedAmount = expectedAmount.Amount,
+                    ExpectedCurrencyCode = expectedAmount.CurrencyCode,
+                    ProviderAmount = answer.Amount.Amount,
+                    ProviderCurrencyCode = answer.Amount.CurrencyCode,
                     RmaRequestId = request.Id,
                     CustomerId = request.CustomerId,
                 },

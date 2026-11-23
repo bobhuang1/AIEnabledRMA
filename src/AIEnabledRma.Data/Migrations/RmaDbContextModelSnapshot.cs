@@ -546,10 +546,30 @@ namespace AIEnabledRma.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("customer_id");
 
+                    b.Property<decimal?>("ExpectedAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("expected_amount");
+
+                    b.Property<string>("ExpectedCurrencyCode")
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasColumnName("expected_currency_code");
+
                     b.Property<string>("Explanation")
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)")
                         .HasColumnName("explanation");
+
+                    b.Property<decimal?>("ProviderAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("provider_amount");
+
+                    b.Property<string>("ProviderCurrencyCode")
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasColumnName("provider_currency_code");
 
                     b.Property<string>("Reason")
                         .IsRequired()
