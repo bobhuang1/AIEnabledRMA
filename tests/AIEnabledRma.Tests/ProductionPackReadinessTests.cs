@@ -199,6 +199,28 @@ public sealed class ProductionPackReadinessTests
     }
 
     /// <summary>
+    /// A Dockerfile nobody builds is a Dockerfile that does not work. This one was excluded from the
+    /// build context by .dockerignore — that pattern was written when only the web, mcp and rag images
+    /// existed — so it failed at its first COPY with "packages.lock.json: not found", and the only
+    /// thing that would have noticed is the first night the sweep was supposed to run. Both halves are
+    /// pinned here: the image is in the gate that builds the others, and the context still contains
+    /// its sources.
+    /// </summary>
+    [Fact]
+    public void The_gate_builds_the_sweep_image_and_the_context_keeps_its_sources()
+    {
+        var gate = RepositoryFile("scripts/verify-images.sh");
+
+        Assert.Contains("check_image \"Ops\" \"tools/DbAdmin/Dockerfile\" \"$OPS_IMAGE\" empty", gate, StringComparison.Ordinal);
+        Assert.Contains("OPS_IMAGE=${OPS_IMAGE:-", gate, StringComparison.Ordinal);
+
+        var ignore = RepositoryFile(".dockerignore").Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        Assert.DoesNotContain("\ntools/\n", "\n" + ignore + "\n", StringComparison.Ordinal);
+    }
+
+
+    /// <summary>
     /// The README has to say how to install it. `reconcile-payments` was documented as a command an
     /// operator types, which is the state this change exists to replace: a schedule nobody can find
     /// in the deploy notes is a schedule nobody installs.

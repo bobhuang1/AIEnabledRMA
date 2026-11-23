@@ -31,11 +31,14 @@ docs/
 !README.md
 
 # Sources of things that are not built into the image. Restore and publish name the MCP and Web
-# projects directly, so the test suite, the retrieval evaluation set and the DbAdmin tool are never
-# compiled here; they only made the context bigger and every `COPY . .` layer different.
+# projects directly, so the test suite and the retrieval evaluation set are never compiled here;
+# they only made the context bigger and every `COPY . .` layer different.
+#
+# tools/ stays: the DbAdmin image is built from it, and excluding it fails that build at its first
+# COPY with "packages.lock.json: not found" — a failure nobody sees until the nightly sweep runs,
+# because the image is built by the pack rather than by the gate that checks the other three.
 tests/
 eval/
-tools/
 .githooks/
 .config/
 .freebuff/

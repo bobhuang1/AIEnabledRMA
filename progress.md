@@ -685,3 +685,11 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   `EfWebhookEventLedger` makes `A_delivery_whose_item_could_not_be_filed_is_not_recorded` fail with
   "No exception was thrown"; the other nine webhook tests still pass, so that one test is what pins
   the atomicity.
+- **The sweep's image is built by the gate, and its sources are in the build context.** `.dockerignore`
+  excluded `tools/`, a pattern written when only the web, mcp and rag images existed, so
+  `tools/DbAdmin/Dockerfile` failed at its first `COPY` with "packages.lock.json: not found" — and
+  the only thing that would have noticed is the first night the timer ran. The context keeps
+  `tools/` now, `verify-images.sh` builds the image as `Ops` (with `OPS_IMAGE` and the same
+  revision-label check as the other three), and a test pins both halves. Proven locally: the image
+  builds (376 MB) where before it could not.
+- **Gate:** `suite` 603 passed, 0 skipped, 0 failed, with the gate and context test in it.

@@ -40,6 +40,7 @@
 #   MCP_IMAGE  tag for the tool server image (default aienabledrma-mcp-http:corpus-check)
 #   WEB_IMAGE  tag for the web host image    (default aienabledrma-web:corpus-check)
 #   RAG_IMAGE  tag for the RAG host image    (default aienabledrma-rag:corpus-check)
+#   OPS_IMAGE  tag for the DbAdmin image, which the nightly sweep runs (default aienabledrma-dbadmin:corpus-check)
 #   RMA_IMAGE_CACHE=1    push and pull the layer cache through the GitHub Actions cache. Set by CI,
 #                        where the tool server's image is also built by the auth job; unset locally,
 #                        where there is no Actions cache to talk to.
@@ -53,6 +54,7 @@ set -euo pipefail
 MCP_IMAGE=${MCP_IMAGE:-aienabledrma-mcp-http:corpus-check}
 WEB_IMAGE=${WEB_IMAGE:-aienabledrma-web:corpus-check}
 RAG_IMAGE=${RAG_IMAGE:-aienabledrma-rag:corpus-check}
+OPS_IMAGE=${OPS_IMAGE:-aienabledrma-dbadmin:corpus-check}
 REVISION=${RMA_IMAGE_REVISION:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}
 PG_IMAGE=${PG_IMAGE:-pgvector/pgvector:pg16}
 
@@ -403,6 +405,9 @@ check_no_shell() {
 check_image "MCP" "src/AIEnabledRma.Mcp/Dockerfile" "$MCP_IMAGE" empty
 check_image "Web" "src/AIEnabledRma.Web/Dockerfile" "$WEB_IMAGE" corpus
 check_image "RAG" "src/AIEnabledRma.Rag/Dockerfile" "$RAG_IMAGE" corpus
+# The tool image is built by nobody else: the pack builds it when the sweep first runs, so a broken
+# Dockerfile or a .dockerignore that drops tools/ would be found by the night it mattered.
+check_image "Ops" "tools/DbAdmin/Dockerfile" "$OPS_IMAGE" empty
 check_no_shell "RAG" "$RAG_IMAGE"
 
 # The deployment's own composition, booted: this is the check that catches a required value missing
@@ -505,7 +510,7 @@ if [ "$failures" -eq 0 ]; then
 fi
 
 if [ "${KEEP_IMAGES:-0}" != 1 ] && [ "$failures" -eq 0 ]; then
-    docker rmi "$MCP_IMAGE" "$WEB_IMAGE" "$RAG_IMAGE" >/dev/null 2>&1 || true
+    docker rmi "$MCP_IMAGE" "$WEB_IMAGE" "$RAG_IMAGE" "$OPS_IMAGE" >/dev/null 2>&1 || true
 fi
 
 if [ "$failures" -ne 0 ]; then
