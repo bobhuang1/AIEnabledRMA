@@ -1,5 +1,7 @@
 using AIEnabledRma.Data;
+using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Operations;
+using AIEnabledRma.Domain.Rma;
 using Microsoft.EntityFrameworkCore;
 
 namespace AIEnabledRma.Tests;
@@ -21,6 +23,10 @@ public sealed class WebhookEventLedgerTests
         Explanation = "PaymentIntent pi_test for RMA-2026-00001.",
     };
 
+    /// <summary>An item and the return its delivery names, which the ledger links before filing it.</summary>
+    private static WebhookEffect Effect(Guid id, DateTimeOffset at, string? rmaNumber = null) =>
+        new(Item(id, at), rmaNumber);
+
     [Fact]
     public async Task The_same_delivery_is_recorded_once()
     {
@@ -40,19 +46,19 @@ public sealed class WebhookEventLedgerTests
 
             Assert.True(await ledger.TryAcceptAsync(
                 new ProcessedWebhookEvent { EventId = "evt_same", Type = "payment_intent.canceled", ReceivedAtUtc = at },
-                Item(Guid.NewGuid(), at),
+                Effect(Guid.NewGuid(), at),
                 TestContext.Current.CancellationToken));
 
             // The retry files nothing: the first delivery's item is the only one that should exist.
             Assert.False(await ledger.TryAcceptAsync(
                 new ProcessedWebhookEvent { EventId = "evt_same", Type = "payment_intent.canceled", ReceivedAtUtc = at },
-                Item(Guid.NewGuid(), at),
+                Effect(Guid.NewGuid(), at),
                 TestContext.Current.CancellationToken));
 
             // A refused delivery must not poison the context: the next distinct event has to be filed.
             Assert.True(await ledger.TryAcceptAsync(
                 new ProcessedWebhookEvent { EventId = "evt_other", Type = "payment_intent.payment_failed", ReceivedAtUtc = at },
-                Item(Guid.NewGuid(), at),
+                Effect(Guid.NewGuid(), at),
                 TestContext.Current.CancellationToken));
         }
 
@@ -61,6 +67,116 @@ public sealed class WebhookEventLedgerTests
             var ct = TestContext.Current.CancellationToken;
             Assert.Equal(2, await check.WebhookEvents.CountAsync(ct));
             Assert.Equal(2, await check.ReviewItems.CountAsync(ct));
+        }
+    }
+
+    /// <summary>
+    /// The item a failed payment files has to be openable from the queue. The delivery names the
+    /// return in the provider's metadata, and the ledger resolves it in the same transaction, so the
+    /// row points at the return instead of only quoting its number in a sentence.
+    /// </summary>
+    [Fact]
+    public async Task A_delivery_naming_a_return_links_the_item_to_it()
+    {
+        await using var database = new LiveDatabase("rma_webhook_link");
+        await database.InitializeAsync();
+
+        var ct = TestContext.Current.CancellationToken;
+        var at = DateTimeOffset.UtcNow;
+
+        var customer = new Customer
+        {
+            Id = Guid.NewGuid(),
+            FirstName = "Synthetic",
+            LastName = "Customer",
+            Email = "synthetic@example.test",
+            PhoneNumber = "+10000000000",
+            CreatedAtUtc = at,
+        };
+
+        var request = new RmaRequest
+        {
+            Id = Guid.NewGuid(),
+            RmaNumber = "RMA-2026-70001",
+            CustomerId = customer.Id,
+            Status = RmaRequestStatus.Approved,
+            Kind = RmaRequestKind.PaidRepair,
+            CreatedAtUtc = at,
+            UpdatedAtUtc = at,
+        };
+
+        await using (var setup = database.CreateContext())
+        {
+            await setup.Database.MigrateAsync(ct);
+            setup.Customers.Add(customer);
+            setup.RmaRequests.Add(request);
+            await setup.SaveChangesAsync(ct);
+        }
+
+        await using (var db = database.CreateContext())
+        {
+            var ledger = new EfWebhookEventLedger(db);
+
+            Assert.True(await ledger.TryAcceptAsync(
+                new ProcessedWebhookEvent
+                {
+                    EventId = "evt_link",
+                    Type = "payment_intent.payment_failed",
+                    ReceivedAtUtc = at,
+                },
+                Effect(Guid.NewGuid(), at, "RMA-2026-70001"),
+                ct));
+        }
+
+        await using (var check = database.CreateContext())
+        {
+            var item = await check.ReviewItems.SingleAsync(ct);
+
+            Assert.Equal(request.Id, item.RmaRequestId);
+            Assert.Equal(customer.Id, item.CustomerId);
+        }
+    }
+
+    /// <summary>
+    /// A number that matches nothing leaves the item unlinked rather than unmade: the payment still
+    /// failed, and dropping the delivery over the link would trade a visible payment for a tidy
+    /// foreign key.
+    /// </summary>
+    [Fact]
+    public async Task A_delivery_naming_a_return_that_does_not_exist_is_still_filed()
+    {
+        await using var database = new LiveDatabase("rma_webhook_link_missing");
+        await database.InitializeAsync();
+
+        var ct = TestContext.Current.CancellationToken;
+        var at = DateTimeOffset.UtcNow;
+
+        await using (var setup = database.CreateContext())
+        {
+            await setup.Database.MigrateAsync(ct);
+        }
+
+        await using (var db = database.CreateContext())
+        {
+            var ledger = new EfWebhookEventLedger(db);
+
+            Assert.True(await ledger.TryAcceptAsync(
+                new ProcessedWebhookEvent
+                {
+                    EventId = "evt_link_missing",
+                    Type = "payment_intent.payment_failed",
+                    ReceivedAtUtc = at,
+                },
+                Effect(Guid.NewGuid(), at, "RMA-2026-79999"),
+                ct));
+        }
+
+        await using (var check = database.CreateContext())
+        {
+            var item = await check.ReviewItems.SingleAsync(ct);
+
+            Assert.Null(item.RmaRequestId);
+            Assert.Null(item.CustomerId);
         }
     }
 
@@ -100,7 +216,7 @@ public sealed class WebhookEventLedgerTests
         {
             var ledger = new EfWebhookEventLedger(db);
 
-            await Assert.ThrowsAnyAsync<Exception>(() => ledger.TryAcceptAsync(delivery, Item(taken, at), ct));
+            await Assert.ThrowsAnyAsync<Exception>(() => ledger.TryAcceptAsync(delivery, Effect(taken, at), ct));
         }
 
         await using (var check = database.CreateContext())
@@ -114,7 +230,7 @@ public sealed class WebhookEventLedgerTests
         {
             var ledger = new EfWebhookEventLedger(db);
 
-            Assert.True(await ledger.TryAcceptAsync(delivery, Item(Guid.NewGuid(), at), ct));
+            Assert.True(await ledger.TryAcceptAsync(delivery, Effect(Guid.NewGuid(), at), ct));
         }
 
         await using (var check = database.CreateContext())

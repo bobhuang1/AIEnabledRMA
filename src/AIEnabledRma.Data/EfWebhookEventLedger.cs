@@ -25,7 +25,7 @@ public sealed class EfWebhookEventLedger(RmaDbContext db) : IWebhookEventLedger
 
     public async Task<bool> TryAcceptAsync(
         ProcessedWebhookEvent delivery,
-        ReviewItem? effect,
+        WebhookEffect? effect,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(delivery);
@@ -53,12 +53,45 @@ public sealed class EfWebhookEventLedger(RmaDbContext db) : IWebhookEventLedger
 
             if (effect is not null)
             {
-                db.ReviewItems.Add(effect);
+                await LinkAsync(effect, cancellationToken);
+
+                db.ReviewItems.Add(effect.Item);
                 await db.SaveChangesAsync(cancellationToken);
             }
 
             await transaction.CommitAsync(cancellationToken);
             return true;
         });
+    }
+
+    /// <summary>
+    /// Points the item at the return the delivery names, inside the transaction that files it.
+    /// </summary>
+    /// <remarks>
+    /// A number that matches nothing leaves the item unlinked rather than unmade: a payment that
+    /// failed is still a person's problem even when the return it mentions is gone or was never
+    /// created, and refusing the delivery over the link would trade a visible payment for a tidy
+    /// foreign key.
+    /// </remarks>
+    private async Task LinkAsync(WebhookEffect effect, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(effect.RmaNumber))
+        {
+            return;
+        }
+
+        var named = await db.RmaRequests
+            .AsNoTracking()
+            .Where(request => request.RmaNumber == effect.RmaNumber)
+            .Select(request => new { request.Id, request.CustomerId })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (named is null)
+        {
+            return;
+        }
+
+        effect.Item.RmaRequestId = named.Id;
+        effect.Item.CustomerId = named.CustomerId;
     }
 }

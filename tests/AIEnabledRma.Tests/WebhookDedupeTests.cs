@@ -47,6 +47,24 @@ public sealed class WebhookDedupeTests
         Assert.Equal(2, ledger.Attempts);
     }
 
+    /// <summary>
+    /// The handler is the only place that reads the provider's metadata, so it is the only place
+    /// that can tell the ledger which return a delivery is about. Losing the number here loses the
+    /// link, whatever the ledger does with it afterwards.
+    /// </summary>
+    [Fact]
+    public async Task A_delivery_passes_the_return_it_names_to_the_ledger()
+    {
+        var ledger = new RecordingLedger();
+
+        await using var factory = new StripeFactory(ledger);
+        using var client = factory.CreateClient();
+
+        await PostSignedAsync(client, CanceledIntent);
+
+        Assert.Equal("RMA-2026-00001", Assert.Single(ledger.Effects).RmaNumber);
+    }
+
     [Fact]
     public async Task A_delivery_of_a_different_event_is_still_processed()
     {
@@ -130,9 +148,11 @@ public sealed class WebhookDedupeTests
 
         public List<ReviewItem> Items { get; } = [];
 
+        public List<WebhookEffect> Effects { get; } = [];
+
         public Task<bool> TryAcceptAsync(
             ProcessedWebhookEvent delivery,
-            ReviewItem? effect,
+            WebhookEffect? effect,
             CancellationToken cancellationToken)
         {
             Attempts++;
@@ -144,7 +164,8 @@ public sealed class WebhookDedupeTests
 
             if (effect is not null)
             {
-                Items.Add(effect);
+                Effects.Add(effect);
+                Items.Add(effect.Item);
             }
 
             return Task.FromResult(true);

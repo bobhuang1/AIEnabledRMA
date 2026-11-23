@@ -228,27 +228,6 @@ if (PaymentGatewayServiceCollectionExtensions.UsesStripe(app.Configuration))
         TimeProvider time,
         ILogger<StripeOptions> log) =>
     {
-        // The row a failed or cancelled intent files. It stays next to the handler because the two
-        // read one payload shape for one reason: a payment that will not complete is a person's
-        // problem, and nothing else in the host files it.
-        static AIEnabledRma.Domain.Operations.ReviewItem FailedPaymentItem(
-            System.Text.Json.JsonElement root, string type, DateTimeOffset now)
-        {
-            var intent = root.GetProperty("data").GetProperty("object");
-            var rma = intent.TryGetProperty("metadata", out var meta) && meta.TryGetProperty("rma_number", out var n)
-                ? n.GetString()
-                : null;
-
-            return new AIEnabledRma.Domain.Operations.ReviewItem
-            {
-                Id = Guid.NewGuid(),
-                CreatedAtUtc = now,
-                Source = AIEnabledRma.Domain.Operations.ReviewSources.PaymentFailed,
-                Reason = "Stripe:" + type,
-                Explanation = $"PaymentIntent {intent.GetProperty("id").GetString()} for {rma ?? "an unknown return"}.",
-            };
-        }
-
         using var reader = new StreamReader(context.Request.Body);
         var payload = await reader.ReadToEndAsync(context.RequestAborted);
         if (payload.Length > 512 * 1024
@@ -266,7 +245,7 @@ if (PaymentGatewayServiceCollectionExtensions.UsesStripe(app.Configuration))
         // 500 until it gives up, and the event is then lost twice over — once here and once from the
         // retry queue. Everything that reads the document happens inside the guard.
         AIEnabledRma.Domain.Operations.ProcessedWebhookEvent delivery;
-        AIEnabledRma.Domain.Operations.ReviewItem? effect;
+        AIEnabledRma.Domain.Operations.WebhookEffect? effect;
 
         try
         {
@@ -290,17 +269,53 @@ if (PaymentGatewayServiceCollectionExtensions.UsesStripe(app.Configuration))
                 return Results.BadRequest();
             }
 
+            // Only a failed or cancelled intent is filed, and only those payloads are read as one: a
+            // delivery of some other event that happens to carry no data object is still a delivery
+            // this host accepts and records.
             var now = time.GetUtcNow();
-            delivery = new AIEnabledRma.Domain.Operations.ProcessedWebhookEvent
-            {
-                EventId = eventId,
-                Type = type ?? "unknown",
-                ReceivedAtUtc = now,
-            };
+            string? rmaNumber = null;
 
-            effect = type is "payment_intent.payment_failed" or "payment_intent.canceled"
-                ? FailedPaymentItem(root, type, now)
-                : null;
+            if (type is "payment_intent.payment_failed" or "payment_intent.canceled")
+            {
+                var intent = root.GetProperty("data").GetProperty("object");
+
+                rmaNumber = intent.TryGetProperty("metadata", out var metadata)
+                    && metadata.TryGetProperty("rma_number", out var number)
+                        ? number.GetString()
+                        : null;
+
+                delivery = new AIEnabledRma.Domain.Operations.ProcessedWebhookEvent
+                {
+                    EventId = eventId,
+                    Type = type,
+                    ReceivedAtUtc = now,
+                };
+
+                effect = new AIEnabledRma.Domain.Operations.WebhookEffect(
+                    new AIEnabledRma.Domain.Operations.ReviewItem
+                    {
+                        Id = Guid.NewGuid(),
+                        CreatedAtUtc = now,
+                        Source = AIEnabledRma.Domain.Operations.ReviewSources.PaymentFailed,
+                        Reason = "Stripe:" + type,
+                        // The id and the return are in the sentence because the ledger links the item,
+                        // and a reader of the queue sees the number even when no return matches it.
+                        Explanation =
+                            $"PaymentIntent {intent.GetProperty("id").GetString()} for {rmaNumber ?? "an unknown return"}.",
+                    },
+                    rmaNumber);
+            }
+            else
+            {
+                delivery = new AIEnabledRma.Domain.Operations.ProcessedWebhookEvent
+                {
+                    EventId = eventId,
+                    Type = type ?? "unknown",
+                    ReceivedAtUtc = now,
+                };
+
+                effect = null;
+            }
         }
         catch (Exception failure) when (failure is System.Text.Json.JsonException
             or InvalidOperationException or KeyNotFoundException)

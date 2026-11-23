@@ -18,6 +18,18 @@ public sealed class ProcessedWebhookEvent
 }
 
 /// <summary>
+/// What a delivery asks this host to file, and the return it names when the provider's metadata
+/// carries one.
+/// </summary>
+/// <remarks>
+/// The number travels with the effect rather than on <see cref="ProcessedWebhookEvent"/> because it
+/// is not a fact about the row that deduplicates a delivery: it is how the item is to be filed, and
+/// the ledger resolves it to a return inside the same transaction. Keeping it off the entity is also
+/// what lets the row's schema stay what it says it is — a record of which deliveries arrived.
+/// </remarks>
+public sealed record WebhookEffect(ReviewItem Item, string? RmaNumber);
+
+/// <summary>
 /// Records a delivery and, when this call is the one that records it, files what it asks for —
 /// answering whether the caller's effect was applied.
 /// </summary>
@@ -30,8 +42,14 @@ public interface IWebhookEventLedger
 {
     /// <summary>
     /// True when this is the first time the delivery was seen and <paramref name="effect"/> was
-    /// filed; false when it is a retry, in which case nothing is filed. Never throws for a duplicate.
+    /// filed — including the return it names, when it names one; false when it is a retry, in which
+    /// case nothing is filed. Never throws for a duplicate.
     /// </summary>
+    /// <remarks>
+    /// A delivery that names a return this database does not have still files its item: a payment
+    /// that failed is a person's problem whether or not the return still exists, and the item is
+    /// filed unlinked rather than withheld.
+    /// </remarks>
     /// <remarks>
     /// The delivery and its effect are one transaction because the alternative loses money quietly.
     /// Recorded first and filed second, a delivery whose filing failed — a deadlock, a restart, a
@@ -41,6 +59,6 @@ public interface IWebhookEventLedger
     /// </remarks>
     Task<bool> TryAcceptAsync(
         ProcessedWebhookEvent delivery,
-        ReviewItem? effect,
+        WebhookEffect? effect,
         CancellationToken cancellationToken);
 }
