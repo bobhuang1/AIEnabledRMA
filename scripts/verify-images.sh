@@ -406,8 +406,10 @@ check_image "MCP" "src/AIEnabledRma.Mcp/Dockerfile" "$MCP_IMAGE" empty
 check_image "Web" "src/AIEnabledRma.Web/Dockerfile" "$WEB_IMAGE" corpus
 check_image "RAG" "src/AIEnabledRma.Rag/Dockerfile" "$RAG_IMAGE" corpus
 # The tool image is built by nobody else: the pack builds it when the sweep first runs, so a broken
-# Dockerfile or a .dockerignore that drops tools/ would be found by the night it mattered.
-check_image "Ops" "tools/DbAdmin/Dockerfile" "$OPS_IMAGE" empty
+# Dockerfile or a .dockerignore that drops tools/ would be found by the night it mattered. It does
+# carry the corpus, because this image runs kb-ingest too and that command reads it next to itself;
+# the check asserts what the project decides, not what one of its commands needs.
+check_image "Ops" "tools/DbAdmin/Dockerfile" "$OPS_IMAGE" corpus
 check_no_shell "RAG" "$RAG_IMAGE"
 
 # The deployment's own composition, booted: this is the check that catches a required value missing

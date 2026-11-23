@@ -211,7 +211,7 @@ public sealed class ProductionPackReadinessTests
     {
         var gate = RepositoryFile("scripts/verify-images.sh");
 
-        Assert.Contains("check_image \"Ops\" \"tools/DbAdmin/Dockerfile\" \"$OPS_IMAGE\" empty", gate, StringComparison.Ordinal);
+        Assert.Contains("check_image \"Ops\" \"tools/DbAdmin/Dockerfile\" \"$OPS_IMAGE\" corpus", gate, StringComparison.Ordinal);
         Assert.Contains("OPS_IMAGE=${OPS_IMAGE:-", gate, StringComparison.Ordinal);
 
         var ignore = RepositoryFile(".dockerignore").Replace("\r\n", "\n", StringComparison.Ordinal);
