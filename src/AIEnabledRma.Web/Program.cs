@@ -9,6 +9,7 @@ using AIEnabledRma.Privacy;
 using AIEnabledRma.Rag;
 using AIEnabledRma.Web;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -354,6 +355,19 @@ var operatorKey = app.Configuration[RagAdminGate.ApiKeyConfigurationKey];
 // which files failed to parse and which model is answering, to whoever can reach the proxy. That is
 // a configuration nobody notices, so it stops the host instead.
 RagAdminGate.EnsureStartupAllowed(operatorKey, app.Environment.IsDevelopment());
+
+// The edge's uptime depends on this one path: deploy/Caddyfile probes it on a timer and takes this
+// host out of the upstream pool when the answer is not a 200, which is a 503 for every request
+// through the proxy. It therefore asks only what readiness means — can this host reach its database
+// — and says one word either way, because the path is reachable from the internet through the proxy
+// and a readiness answer is not the place to describe which dependency failed.
+//
+// The container probe asks /health instead, and the two questions are deliberately different: a host
+// that lost its database is still running, so liveness stays 200 while readiness turns 503.
+app.MapGet("/health/ready", async (RmaDbContext db, CancellationToken cancellationToken) =>
+    await db.Database.CanConnectAsync(cancellationToken)
+        ? Results.Ok(new { status = "ready" })
+        : Results.Json(new { status = "unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable));
 
 app.MapGet("/health", (
     HttpContext context,

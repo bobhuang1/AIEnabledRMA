@@ -1236,6 +1236,45 @@ public sealed class WebWizardTests : IAsyncLifetime
         Assert.DoesNotContain("provider", body, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Readiness is what the TLS front door asks, on a timer, to decide whether this host may receive
+    /// traffic. It has to answer while the database is reachable and stop answering when it is not:
+    /// a readiness endpoint that always says yes is a host that is routed to while it cannot serve.
+    /// </summary>
+    [Fact]
+    public async Task Readiness_answers_while_the_database_is_reachable_and_not_when_it_is_not()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        using var reachable = CreateClient();
+
+        var ready = await reachable.GetAsync("/health/ready", ct);
+
+        Assert.Equal(HttpStatusCode.OK, ready.StatusCode);
+
+        // A readiness answer is public: one word, nothing about the corpus or the provider.
+        Assert.Equal("{\"status\":\"ready\"}", await ready.Content.ReadAsStringAsync(ct));
+
+        // Nothing on the connection string is listening, which is the shape of a host that started
+        // before the database did and is still running.
+        using var unreachable = _factory!.WithWebHostBuilder(
+            builder => builder.UseSetting(
+                "ConnectionStrings:Rma",
+                "Host=127.0.0.1;Port=1;Database=none;Username=none;Password=none;Timeout=1"));
+
+        using var stranger = unreachable.CreateClient();
+
+        var notReady = await stranger.GetAsync("/health/ready", ct);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, notReady.StatusCode);
+        Assert.Equal("{\"status\":\"unavailable\"}", await notReady.Content.ReadAsStringAsync(ct));
+
+        // Liveness is a different question: the host is running, so /health stays 200.
+        var alive = await stranger.GetAsync("/health", ct);
+
+        Assert.Equal(HttpStatusCode.OK, alive.StatusCode);
+    }
+
     [Fact]
     public async Task Operator_health_shows_counts_only_with_the_admin_key()
     {

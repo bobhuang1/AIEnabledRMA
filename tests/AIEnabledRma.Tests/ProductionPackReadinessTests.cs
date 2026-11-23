@@ -71,6 +71,28 @@ public sealed class ProductionPackReadinessTests
     }
 
     /// <summary>
+    /// The edge does not ask whether the container is up: it asks the host on a timer and takes the
+    /// upstream out of the pool when the answer is not a 200. A probe path no host serves therefore
+    /// marks a working deployment down — Caddy answers 503 "no upstreams available" to every request
+    /// while `docker compose ps` still reports every container healthy. The compose probe and the
+    /// edge probe are two different paths, and only the compose one was pinned.
+    /// </summary>
+    [Fact]
+    public void The_edge_probes_a_path_the_web_host_answers()
+    {
+        var block = CaddyBlock("{$RMA_WEB_HOST}");
+
+        var uri = Regex.Match(block, @"health_uri\s+(?<path>\S+)").Groups["path"].Value;
+
+        Assert.False(string.IsNullOrWhiteSpace(uri), "the web site block has no health_uri");
+
+        Assert.Contains(
+            $"MapGet(\"{uri}\"",
+            RepositoryFile("src/AIEnabledRma.Web/Program.cs"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A service may only be waited on as healthy if it has a probe. Compose accepts the reference
     /// either way — the project resolves and `up --no-start` creates the container — so pointing
     /// `depends_on` at a service with no healthcheck is found at deployment, where the wait never
@@ -319,6 +341,24 @@ public sealed class ProductionPackReadinessTests
         }
 
         return dependencies;
+    }
+
+    /// <summary>
+    /// One site block of the Caddyfile, from its opening brace to the closing brace on its own line.
+    /// </summary>
+    private static string CaddyBlock(string site)
+    {
+        var file = RepositoryFile("deploy/Caddyfile");
+        var start = file.IndexOf(site, StringComparison.Ordinal);
+
+        Assert.True(start >= 0, $"{site} is not a site in deploy/Caddyfile");
+
+        var open = file.IndexOf('{', start);
+        var close = file.IndexOf("\n}", open, StringComparison.Ordinal);
+
+        Assert.True(open >= 0 && close > open, $"{site} is not a block");
+
+        return file[open..close];
     }
 
     private static int CountOccurrences(string text, string value)
