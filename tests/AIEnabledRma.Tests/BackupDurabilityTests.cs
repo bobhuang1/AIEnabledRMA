@@ -125,6 +125,12 @@ public sealed class BackupDurabilityTests
 
         // Only objects the key opens are listed, fetched or kept.
         Assert.Contains("--include \"*.dump.enc\"", script, StringComparison.Ordinal);
+
+        // And the unencrypted objects an earlier version wrote age out with the same window, on both
+        // sides. Retention that reached only the ciphertext would leave every return readable at the
+        // destination for ever, which is the exposure the encryption exists to end.
+        Assert.Contains("--include \"*.dump.enc\" --include \"*.dump\"", script, StringComparison.Ordinal);
+        Assert.Contains("-name '*.dump.enc' -o -name '*.dump'", script, StringComparison.Ordinal);
         Assert.Contains("does not decrypt back to a readable dump", script, StringComparison.Ordinal);
         Assert.Contains("is not a pg_dump archive", script, StringComparison.Ordinal);
     }
