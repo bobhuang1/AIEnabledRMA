@@ -1,0 +1,35 @@
+name: mutation
+
+# Nightly rather than per push: this runs thousands of mutants through the suite to answer a
+# different question from CI's — not "does it build and pass" but "would the tests notice if this
+# branch were wrong". Every batch in this repository has been mutation-checked by hand, which is
+# exactly the step that disappears under time pressure, so the count of survivors is committed in
+# mutation/baseline.json and scripts/mutation.sh fails the run when it rises.
+on:
+  schedule:
+    # 03:17 UTC. Off the hour on purpose: GitHub's scheduled runs are busiest at :00, and a delayed
+    # job is indistinguishable from a broken one when somebody is waiting for it.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    # The gate publishes nothing and needs no service container: scripts/mutation.sh starts its own
+    # PostgreSQL, because the live operation suites have to run for their mutants to be killed at
+    # all. Four hours is generous for two projects at standard mutation level; a run that hits it has
+    # hung rather than worked.
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Mutation-test the policy, the operations and the redactor against the committed budget
+        run: ./scripts/mutation.sh

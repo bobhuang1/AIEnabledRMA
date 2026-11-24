@@ -402,6 +402,37 @@ production images to answer one question is a cost already declined. The MCP hos
 unauthenticated and answers only `{"status":"ok"}`: a probe cannot present a token, and that host
 has no corpus or model detail to name.
 
+### Mutation testing
+
+A green suite says the tests pass; it does not say they would notice a wrong branch. Every change in
+this repository used to be mutation-checked by hand — break the code, watch a test go red, put it back
+— which is exactly the step that disappears when a change is rushed. `scripts/mutation.sh` does it
+mechanically over the types where a wrong branch is a wrong decision: the policy evaluator,
+`OperatorService`, the payment reconciler, the retention pruner, the webhook ledger, and `PiiRedactor`.
+
+```bash
+scripts/mutation.sh                      # both projects, about half an hour
+MUTATION_PROJECTS=privacy scripts/mutation.sh   # one of them, while working on it
+```
+
+It runs [Stryker.NET](https://stryker-mutator.io) inside the pinned SDK image (pinned in
+`.config/dotnet-tools.json`), starts its own PostgreSQL because the operation suites are live, counts
+what survived from the JSON report, and compares that number with `mutation/baseline.json`:
+
+```
+  killed:         168
+  survivors:      102 (budget 102)
+  never executed: 0 (budget 0)
+```
+
+The budget must not rise. A survivor is either a missing test or an equivalent mutant, and raising the
+budget is a decision that belongs in the change that causes it, with the reason in the message — a
+budget that moves silently is the hand-run step this replaced. Two numbers are compared: mutants no
+test killed (`survivors`) and mutants no test even reached (`never executed`).
+
+`.github/workflows/mutation.yml` runs it nightly at 03:17 UTC and on demand. It is deliberately not
+part of per-push CI: it mutates hundreds of code paths, and the answer changes over days, not minutes.
+
 ## Run the web wizard
 
 ```bash

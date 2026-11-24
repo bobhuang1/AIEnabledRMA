@@ -1,0 +1,27 @@
+{
+  "stryker-config": {
+    "project": "AIEnabledRma.Domain.csproj",
+    "mutate": [
+      "**/Rules/RmaPolicyEvaluator.cs",
+      "**/Rules/RmaDecisionReason.cs",
+      "**/Operations/Operations.cs",
+      "**/Operations/PaymentReconciler.cs",
+      "**/Operations/Retention.cs",
+      "**/Operations/WebhookEvents.cs"
+    ],
+    "test-case-filter": "FullyQualifiedName~Policy|FullyQualifiedName~Operator|FullyQualifiedName~Retention|FullyQualifiedName~Payment|FullyQualifiedName~Webhook|FullyQualifiedName~Concurrency|FullyQualifiedName~Review",
+    "reporters": [
+      "json",
+      "cleartext"
+    ],
+    "report-file-name": "domain",
+    "mutation-level": "Standard",
+    "coverage-analysis": "off",
+    "concurrency": 2,
+    "thresholds": {
+      "high": 100,
+      "low": 100,
+      "break": 0
+    }
+  }
+}

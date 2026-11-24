@@ -1,0 +1,22 @@
+{
+  "stryker-config": {
+    "project": "AIEnabledRma.Privacy.csproj",
+    "mutate": [
+      "**/PiiRedactor.cs"
+    ],
+    "test-case-filter": "FullyQualifiedName~PiiRedactor|FullyQualifiedName~Redact",
+    "reporters": [
+      "json",
+      "cleartext"
+    ],
+    "report-file-name": "privacy",
+    "mutation-level": "Standard",
+    "coverage-analysis": "off",
+    "concurrency": 2,
+    "thresholds": {
+      "high": 100,
+      "low": 100,
+      "break": 0
+    }
+  }
+}
