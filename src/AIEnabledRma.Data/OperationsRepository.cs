@@ -14,6 +14,13 @@ public sealed class EfOperationsRepository(RmaDbContext db) : IOperationsReposit
             .Take(take)
             .ToListAsync(cancellationToken);
 
+    public Task<SweepRun?> LastSweepAsync(string source, CancellationToken cancellationToken) =>
+        db.SweepRuns
+            .AsNoTracking()
+            .Where(run => run.Source == source)
+            .OrderByDescending(run => run.AtUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
     public Task<ReviewItem?> GetReviewItemAsync(Guid id, CancellationToken cancellationToken) =>
         db.ReviewItems.FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
 
@@ -33,6 +40,18 @@ public sealed class EfOperationsRepository(RmaDbContext db) : IOperationsReposit
         await db.OperatorActions.AsNoTracking().OrderByDescending(a => a.AtUtc).Take(take).ToListAsync(cancellationToken);
 
     public void AddAction(OperatorAction action) => db.OperatorActions.Add(action);
+}
+
+/// <summary>Records that a scheduled sweep ran, through a short-lived context of its own.</summary>
+public sealed class EfSweepLedger(IServiceScopeFactory scopes) : ISweepLedger
+{
+    public async Task RecordAsync(SweepRun run, CancellationToken cancellationToken)
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RmaDbContext>();
+        db.SweepRuns.Add(run);
+        await db.SaveChangesAsync(cancellationToken);
+    }
 }
 
 /// <summary>Files review items through a short-lived context of its own.</summary>

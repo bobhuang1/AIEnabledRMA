@@ -1,6 +1,7 @@
 using System.Threading.RateLimiting;
 using AIEnabledRma.Ai;
 using AIEnabledRma.Data;
+using AIEnabledRma.Domain.Operations;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Configuration;
 using AIEnabledRma.Domain.Rma;
@@ -372,7 +373,24 @@ app.MapGet("/health/ready", async (RmaDbContext db, CancellationToken cancellati
 app.MapGet("/health", (
     HttpContext context,
     KnowledgeIndexHolder holder,
-    IChatModel chatModel) =>
+    IChatModel chatModel,
+    IOperationsRepository operations,
+    IClock clock,
+    CancellationToken cancellationToken) =>
+    HealthDetailsAsync(context, operatorKey, holder, chatModel, operations, clock, cancellationToken));
+
+// The nightly reconciliation is a one-shot process on a timer, so a timer that stopped leaves an
+// empty review queue behind and nothing else: the same screen a healthy sweep leaves. Its own run
+// row is the difference, and the detail carries it beside the corpus and the model rather than
+// behind a second endpoint nobody would watch.
+static async Task<IResult> HealthDetailsAsync(
+    HttpContext context,
+    string? operatorKey,
+    KnowledgeIndexHolder holder,
+    IChatModel chatModel,
+    IOperationsRepository operations,
+    IClock clock,
+    CancellationToken cancellationToken)
 {
     if (!RagAdminGate.IsAllowed(context, operatorKey))
     {
@@ -390,8 +408,30 @@ app.MapGet("/health", (
             loadErrorCount = index.LoadErrors.Count,
         },
         ai = new { provider = chatModel.ProviderName },
+        reconciliation = await ReconciliationHealthAsync(operations, clock, cancellationToken),
     });
-});
+}
+
+static async Task<SweepHealthDetails> ReconciliationHealthAsync(
+    IOperationsRepository operations,
+    IClock clock,
+    CancellationToken cancellationToken)
+{
+    try
+    {
+        var last = await operations.LastSweepAsync(SweepSources.PaymentReconciliation, cancellationToken);
+
+        return SweepStatus
+            .For(SweepSources.PaymentReconciliation, last, clock.UtcNow, SweepStatus.NightlyStaleAfter)
+            .Health();
+    }
+    catch (Exception failure) when (failure is not OperationCanceledException)
+    {
+        // Still a liveness answer: the container probe reads this endpoint, so a database it cannot
+        // reach reports the sweep as unknown instead of turning /health into an error.
+        return SweepHealthDetails.Unknown(SweepSources.PaymentReconciliation, "the database did not answer");
+    }
+}
 
 // Whether the response answers an address that carries a capability. The wizard has no accounts, so
 // what identifies one customer's progress is a value they hold: a return id in the route, or the

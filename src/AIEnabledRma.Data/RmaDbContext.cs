@@ -38,6 +38,8 @@ public sealed class RmaDbContext(DbContextOptions<RmaDbContext> options) : DbCon
 
     public DbSet<ProcessedWebhookEvent> WebhookEvents => Set<ProcessedWebhookEvent>();
 
+    public DbSet<SweepRun> SweepRuns => Set<SweepRun>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // snake_case naming is applied by UseSnakeCaseNamingConvention() on the options
@@ -276,6 +278,21 @@ public sealed class McpCallStampConfiguration : IEntityTypeConfiguration<McpCall
         // the same predicate with an older cutoff. One index answers both.
         builder.HasIndex(s => new { s.Caller, s.Kind, s.AtUtc })
             .HasDatabaseName("ix_mcp_call_stamps_caller_kind_at");
+    }
+}
+
+public sealed class SweepRunConfiguration : IEntityTypeConfiguration<SweepRun>
+{
+    public void Configure(EntityTypeBuilder<SweepRun> builder)
+    {
+        builder.ToTable("sweep_runs");
+        builder.HasKey(r => r.Id);
+        builder.Property(r => r.Source).HasMaxLength(64).IsRequired();
+        builder.Property(r => r.Detail).HasMaxLength(1000);
+
+        // Every read is "the newest run of this sweep", and the queue's health is read on every
+        // dashboard view: one index answers all of them.
+        builder.HasIndex(r => new { r.Source, r.AtUtc }).HasDatabaseName("ix_sweep_runs_source_at");
     }
 }
 

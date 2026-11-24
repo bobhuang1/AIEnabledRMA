@@ -24,6 +24,7 @@ public sealed class OperatorController(
     IRmaRepository requests,
     KnowledgeIndexHolder knowledge,
     IOptions<OperatorAuthOptions> authOptions,
+    IClock clock,
     IServiceProvider services) : Controller
 {
     private static readonly RmaRequestStatus[] Waiting =
@@ -58,8 +59,14 @@ public sealed class OperatorController(
             }
         }
 
+        var lastSweep = await operations.LastSweepAsync(SweepSources.PaymentReconciliation, cancellationToken);
+
         return View(new OperatorDashboard
         {
+            // Read on every view and printed above the queue: a clean queue is what a healthy
+            // sweep and a stopped timer both leave behind, and this is the row that tells them apart.
+            Reconciliation = SweepStatus.For(
+                SweepSources.PaymentReconciliation, lastSweep, clock.UtcNow, SweepStatus.NightlyStaleAfter),
             ReviewItems = reviewItems
                 .Select(item =>
                 {
@@ -185,6 +192,9 @@ public sealed record OperatorReviewRow(ReviewItem Item, string? RmaNumber, strin
 
 public sealed record OperatorDashboard
 {
+    /// <summary>The nightly reconciliation's last run, so an empty queue has a date beside it.</summary>
+    public required SweepStatus Reconciliation { get; init; }
+
     public required IReadOnlyList<OperatorReviewRow> ReviewItems { get; init; }
 
     public required IReadOnlyList<RmaRequest> Requests { get; init; }

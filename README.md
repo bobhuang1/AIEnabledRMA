@@ -233,6 +233,16 @@ so running it much more often than that mostly re-reads rows the previous run al
 mismatches arrive in the operator queue as one open `payment-mismatch` item per return, and resolving
 one lets a later run file it again.
 
+Every run is recorded in `sweep_runs`, because a clean review queue is what a healthy nightly
+run and a timer that stopped a week ago both leave behind. `/health`'s gated details carry it
+under `reconciliation` (`outcome`, `lastRunAtUtc`, `ageHours`, `stale`, `needsAttention`, and the
+sentence in words), and the operator dashboard prints that sentence above the queue. A run the
+provider left half-answered is recorded as failed rather than as a quiet night, a run that
+crashed is recorded before the process exits, and no run at all reads as stale: 26 hours after
+the last one, because the timer fires at 02:40 and a missed night is exactly what that silence
+means. The sentence lives in one place, so the words an operator reads and the fields a monitor
+scrapes cannot disagree.
+
 ### Audit payments
 
 `audit-payments` is the sweep that finds a capture or a void the two sides disagree about, whichever

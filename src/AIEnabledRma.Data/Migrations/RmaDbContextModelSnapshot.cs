@@ -627,6 +627,53 @@ namespace AIEnabledRma.Data.Migrations
                     b.ToTable("review_items", (string)null);
                 });
 
+            modelBuilder.Entity("AIEnabledRma.Domain.Operations.SweepRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("AtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("at_utc");
+
+                    b.Property<int>("Checked")
+                        .HasColumnType("integer")
+                        .HasColumnName("checked");
+
+                    b.Property<string>("Detail")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("detail");
+
+                    b.Property<int>("Filed")
+                        .HasColumnType("integer")
+                        .HasColumnName("filed");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("source");
+
+                    b.Property<bool>("Succeeded")
+                        .HasColumnType("boolean")
+                        .HasColumnName("succeeded");
+
+                    b.Property<int>("Unanswered")
+                        .HasColumnType("integer")
+                        .HasColumnName("unanswered");
+
+                    b.HasKey("Id")
+                        .HasName("pk_sweep_runs");
+
+                    b.HasIndex("Source", "AtUtc")
+                        .HasDatabaseName("ix_sweep_runs_source_at");
+
+                    b.ToTable("sweep_runs", (string)null);
+                });
+
             modelBuilder.Entity("AIEnabledRma.Domain.Rma.RmaExclusion", b =>
                 {
                     b.Property<Guid>("Id")

@@ -11,6 +11,14 @@
     <p class="notice" role="status">@Model.Message</p>
 }
 
+@* Above the queue on purpose: a clean queue is what a healthy nightly sweep and a timer that
+   stopped a week ago both leave behind, so the sweep's own last run sits where the operator reads
+   the silence. *@
+<section>
+    <h2>Scheduled sweeps</h2>
+    <p>@Model.Reconciliation.Summary</p>
+</section>
+
 <section>
     <h2>Human review (@Model.ReviewItems.Count)</h2>
     @if (Model.ReviewItems.Count == 0)

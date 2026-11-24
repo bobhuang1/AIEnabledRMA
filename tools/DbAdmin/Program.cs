@@ -76,6 +76,7 @@ builder.Services.AddScoped<AIEnabledRma.Domain.Abstractions.IRmaRepository, RmaR
 builder.Services.AddScoped<AIEnabledRma.Domain.Abstractions.IUnitOfWork, EfUnitOfWork>();
 builder.Services.AddScoped<IOperationsRepository, EfOperationsRepository>();
 builder.Services.AddSingleton<IReviewQueue, EfReviewQueue>();
+builder.Services.AddSingleton<ISweepLedger, EfSweepLedger>();
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddScoped<PaymentReconciler>();
 builder.Services.AddScoped<PaymentAuditor>();
@@ -359,8 +360,46 @@ switch (command)
             return 1;
         }
 
-        var report = await scope.ServiceProvider.GetRequiredService<PaymentReconciler>()
-            .RunAsync(TimeSpan.FromHours(olderThanHours), take, CancellationToken.None);
+        var sweeps = scope.ServiceProvider.GetRequiredService<ISweepLedger>();
+        var clock = scope.ServiceProvider.GetRequiredService<IClock>();
+        PaymentReconciliationReport report;
+
+        try
+        {
+            report = await scope.ServiceProvider.GetRequiredService<PaymentReconciler>()
+                .RunAsync(TimeSpan.FromHours(olderThanHours), take, CancellationToken.None);
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException)
+        {
+            // A sweep that crashed did not run as far as anybody watching is concerned, and the
+            // row has to say so: without it the health detail keeps pointing at last night, which
+            // reads as a timer that stopped rather than a run that broke.
+            await RecordAsync(sweeps, new SweepRun
+            {
+                Id = Guid.NewGuid(),
+                Source = SweepSources.PaymentReconciliation,
+                AtUtc = clock.UtcNow,
+                Succeeded = false,
+                Detail = Truncate(failure.Message, 1000),
+            });
+
+            throw;
+        }
+
+        // Recorded before the report is printed, because the row is what the next reader of /health
+        // and the dashboard sees: a night whose row is missing is a night they call late.
+        await RecordAsync(sweeps, new SweepRun
+        {
+            Id = Guid.NewGuid(),
+            Source = SweepSources.PaymentReconciliation,
+            AtUtc = clock.UtcNow,
+            // "Could not ask" is not agreement: the command already exits 2 for it, and a sweep the
+            // provider left half-answered must not read as a quiet night.
+            Succeeded = report.Unanswered.Count == 0,
+            Checked = report.Checked,
+            Filed = report.Disagreements.Count,
+            Unanswered = report.Unanswered.Count,
+        });
 
         foreach (var line in ReconcilePaymentsReport.Format(report))
         {
@@ -464,6 +503,23 @@ switch (command)
 }
 
 return 0;
+
+static async Task RecordAsync(ISweepLedger sweeps, SweepRun run)
+{
+    try
+    {
+        await sweeps.RecordAsync(run, CancellationToken.None);
+    }
+    catch (Exception failure) when (failure is not OperationCanceledException)
+    {
+        // The run's own answer is what the exit code carries. Failing here would report a sweep
+        // that completed as one that crashed, so the cost of a ledger that cannot be written is a
+        // health reading that calls the sweep late - which is the honest reading of it.
+        Console.Error.WriteLine($"The run could not be recorded: {failure.Message}");
+    }
+}
+
+static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];
 
 static async Task PrintStatsAsync(RmaDbContext db)
 {

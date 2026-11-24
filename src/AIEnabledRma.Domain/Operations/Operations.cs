@@ -164,6 +164,12 @@ public interface IOperationsRepository
 {
     Task<IReadOnlyList<ReviewItem>> OpenReviewItemsAsync(int take, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The newest recorded run of one scheduled sweep, or null when it never recorded one: the row
+    /// that tells a quiet night from a timer that stopped, for the health detail and the dashboard.
+    /// </summary>
+    Task<SweepRun?> LastSweepAsync(string source, CancellationToken cancellationToken);
+
     Task<ReviewItem?> GetReviewItemAsync(Guid id, CancellationToken cancellationToken);
 
     /// <summary>Returns waiting on an operator: shipped to us, received, or in repair.</summary>
