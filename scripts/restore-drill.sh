@@ -321,6 +321,21 @@ else
     sed 's/^/          /' "$WORK/backup-1.txt"
 fi
 
+# The plaintext dump lives in the staging directory for the seconds between pg_dump and the cipher,
+# and the script sets the mode rather than trusting the umask. Asserted where the property exists: a
+# Windows checkout's chmod does not restrict anything, so there is nothing to measure there.
+if [ "$(uname -s)" = Linux ]; then
+    staging_mode=$(stat -c '%a' "$STAGING" 2>/dev/null || printf 'unknown')
+
+    if [ "$staging_mode" = 700 ]; then
+        pass "the staging directory is 700: the plaintext dump is not readable by other accounts"
+    else
+        fail "the staging copy is private" "staging is mode $staging_mode, expected 700"
+    fi
+else
+    printf 'note  staging mode not asserted on %s: chmod does not restrict there\n' "$(uname -s)"
+fi
+
 first=$(newest_matched "$STAGING" dump.enc)
 
 # A second dump, so "the newest" has something to be wrong about. The names carry a UTC timestamp

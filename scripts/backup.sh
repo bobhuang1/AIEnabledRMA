@@ -123,7 +123,7 @@ fi
 # The purge is the one mode that opens nothing: it lists what is readable at the destination and
 # deletes it. Requiring the passphrase there would leave the plaintext in place on exactly the host
 # that has lost its key, which is the one that has most to remove.
-if [ "$MODE" != purge-plaintext ]; then
+if [ "$MODE" != purge-plaintext ] && [ "$MODE" != list ]; then
     if [ ! -s "$BACKUP_KEY_FILE" ]; then
         # Uploading unencrypted instead would be the failure nobody notices: the schedule stays green
         # and the bucket holds every return in the database. There is no fallback.
@@ -133,7 +133,9 @@ if [ "$MODE" != purge-plaintext ]; then
         exit 2
     fi
 
-    backup_passphrase=$(head -n 1 "$BACKUP_KEY_FILE")
+    # tr -d '\r': a key file written by an editor on Windows carries a CR, and a passphrase that
+    # silently ends in one is a different key from the same sixteen characters typed on the host.
+    backup_passphrase=$(head -n 1 "$BACKUP_KEY_FILE" | tr -d '\r')
 
     if [ "${#backup_passphrase}" -lt 16 ]; then
         # The object is readable by anyone the destination admits, so a guessable key is no encryption.
@@ -234,7 +236,14 @@ decrypt() {
         -pass env:BACKUP_PASSPHRASE
 }
 
-mkdir -p "$BACKUP_STAGING"
+# The umask above applies when this creates the directory; a staging directory that already existed
+# - made by an operator, or by an older version of this script - can be 0755, and the plaintext dump
+# lives in it for the seconds between pg_dump and the cipher. Restricted here rather than assumed.
+if ! mkdir -p "$BACKUP_STAGING" || ! chmod 700 "$BACKUP_STAGING"; then
+    say "backup: $BACKUP_STAGING cannot be created or restricted to mode 700. An unencrypted dump"
+    say "        would be readable by every account on this host while it exists; refusing to run."
+    exit 1
+fi
 
 case "$MODE" in
     list)
@@ -282,6 +291,16 @@ case "$MODE" in
         # The plaintext exists only between the dump and the encryption, and every way out of here,
         # including the failures, deletes it.
         plain="$BACKUP_STAGING/${name%.enc}"
+
+        # The name is fixed to the second, and `rclone copyto` overwrites: a second run inside the
+        # same second would replace the copy the first one published, which is a night's backup lost
+        # quietly. The drill waits two seconds between its runs for the same reason, and this is the
+        # check that makes the wait a convenience rather than a requirement.
+        if [ -e "$file" ] || [ -e "$plain" ]; then
+            say "backup: $name is already in $BACKUP_STAGING; two runs in the same second would write"
+            say "        the same object. Nothing was dumped."
+            exit 1
+        fi
 
         say "backup: dumping into ${name%.enc} through docker compose exec postgres in $COMPOSE_FILE"
 

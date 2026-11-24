@@ -277,7 +277,32 @@ public sealed class BackupDurabilityTests
 
         // It opens nothing, so it does not need the key: the host that has lost its passphrase is
         // the one with the most plaintext to remove.
-        Assert.Contains("if [ \"$MODE\" != purge-plaintext ]; then", script, StringComparison.Ordinal);
+        Assert.Contains("if [ \"$MODE\" != purge-plaintext ] && [ \"$MODE\" != list ]; then", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_staging_copy_is_private_and_one_run_cannot_overwrite_another()
+    {
+        var script = Script().ReplaceLineEndings("\n");
+
+        // umask only applies when mkdir creates the directory. A staging directory that already
+        // existed at 0755 leaves the plaintext dump readable by every account on the host for the
+        // seconds between pg_dump and the cipher, so the mode is set rather than assumed.
+        Assert.Contains("chmod 700 \"$BACKUP_STAGING\"", script, StringComparison.Ordinal);
+
+        // A key file written by an editor on Windows carries a CR. A passphrase that silently ends
+        // in one is a different key from the same characters typed on the host, and nobody would
+        // think to look for it.
+        Assert.Contains("head -n 1 \"$BACKUP_KEY_FILE\" | tr -d '\\r'", script, StringComparison.Ordinal);
+
+        // The object name is fixed to the second and `rclone copyto` overwrites: a second run inside
+        // the same second would replace the copy the first published, which is a night's backup lost
+        // without a word.
+        Assert.Contains("is already in $BACKUP_STAGING", script, StringComparison.Ordinal);
+
+        // Inspecting a destination opens nothing, so it needs no key: a host that has lost the
+        // passphrase still has to be able to say what the destination is holding.
+        Assert.Contains("if [ \"$MODE\" != purge-plaintext ] && [ \"$MODE\" != list ]; then", script, StringComparison.Ordinal);
     }
 
     private static string Script() => RepositoryFile("scripts/backup.sh");
