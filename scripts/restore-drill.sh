@@ -360,6 +360,47 @@ else
     fail "nothing readable is at the destination" "$readable plaintext dump(s) at $OFFHOST"
 fi
 
+# A copy an earlier version uploaded before the encryption existed is also a readable dump at the
+# destination, and retention only ages it out: a fortnight of every return in the database, for
+# everyone the destination admits. The purge is the way to take it off now, so the drill plants one
+# and requires it gone -- named before it goes, and with the encrypted copies still there.
+LEGACY=rma-20200102T000000Z.dump
+printf 'PGDMP a dump uploaded before the encryption existed\n' >"$OFFHOST/$LEGACY"
+
+if ! backup purge-plaintext >"$WORK/purge.txt" 2>&1; then
+    fail "the purge removes the unencrypted copy" "scripts/backup.sh purge-plaintext failed:"
+    sed 's/^/          /' "$WORK/purge.txt"
+else
+    if grep -q "$LEGACY" "$WORK/purge.txt"; then
+        pass "the purge names the unencrypted object before it deletes it"
+    else
+        fail "the purge lists what it is about to delete" "$LEGACY was not named in:"
+        sed 's/^/          /' "$WORK/purge.txt"
+    fi
+
+    if [ -e "$OFFHOST/$LEGACY" ]; then
+        fail "the purge deletes the unencrypted object" "$LEGACY is still at $OFFHOST after purge-plaintext"
+    else
+        pass "the purge deleted $LEGACY, a copy an earlier version left in the clear"
+    fi
+
+    readable=$(count_matched "$OFFHOST" dump)
+
+    if [ "$readable" = 0 ]; then
+        pass "no readable dump is left at the destination after the purge"
+    else
+        fail "nothing readable is left after the purge" "$readable plaintext dump(s) at $OFFHOST"
+    fi
+
+    encrypted=$(count_matched "$OFFHOST" dump.enc)
+
+    if [ "$encrypted" = 2 ]; then
+        pass "the purge left both encrypted copies alone"
+    else
+        fail "the purge spares the ciphertext" "$encrypted *.dump.enc object(s) at $OFFHOST, expected 2"
+    fi
+fi
+
 # The key is what stands between the destination and every return in it, so the drill reads it with
 # the wrong one and requires the refusal. A copy that decrypts without the passphrase is not
 # encrypted, whatever the file name says.

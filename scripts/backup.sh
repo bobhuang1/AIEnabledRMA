@@ -19,6 +19,11 @@
 #   backup   dump, verify, encrypt, upload, prune (default)
 #   fetch    copy the newest dump back from BACKUP_REMOTE, decrypt it, print its name
 #   list     print the object names at BACKUP_REMOTE, oldest first
+#   purge-plaintext
+#            list the unencrypted *.dump objects an earlier version left at BACKUP_REMOTE and delete
+#            them. Retention would age them out eventually; this removes them now, and only them. It
+#            needs no key, because it deletes rather than opens: a host that has lost its passphrase
+#            still has to be able to take the plaintext copies off the destination.
 #
 # Environment:
 #   BACKUP_REMOTE       required. An rclone destination outside this host:
@@ -72,11 +77,14 @@ say() { printf '%s\n' "$*" >&2; }
 
 usage() {
     cat >&2 <<'EOF'
-usage: scripts/backup.sh [backup|fetch|list]
+usage: scripts/backup.sh [backup|fetch|list|purge-plaintext]
 
   backup  dump the database, encrypt the dump, copy it to BACKUP_REMOTE and prune the window
   fetch   copy the newest object back from BACKUP_REMOTE, decrypt it, and print its name
   list    print the object names at BACKUP_REMOTE, oldest first
+  purge-plaintext
+          list the unencrypted *.dump objects an earlier version left at BACKUP_REMOTE and delete
+          them, leaving every *.dump.enc alone
 
 BACKUP_REMOTE must name an rclone destination outside this host, for example
 s3:rma-prod-backups/postgres, sftp:backup.example.com:/srv/rma, or local:/mnt/offsite/rma.
@@ -87,7 +95,7 @@ EOF
 }
 
 case "$MODE" in
-    backup|fetch|list) ;;
+    backup|fetch|list|purge-plaintext) ;;
     -h|--help|help) usage; exit 0 ;;
     *) say "backup: unknown mode '$MODE'"; usage; exit 2 ;;
 esac
@@ -112,25 +120,31 @@ if [ -z "$BACKUP_REMOTE" ]; then
     exit 2
 fi
 
-if [ ! -s "$BACKUP_KEY_FILE" ]; then
-    # Uploading unencrypted instead would be the failure nobody notices: the schedule stays green
-    # and the bucket holds every return in the database. There is no fallback.
-    say "backup: BACKUP_KEY_FILE ($BACKUP_KEY_FILE) is missing or empty. Dumps are customer data and"
-    say "        are encrypted before they leave; create the passphrase beside rclone.conf:"
-    say "        openssl rand -base64 48 > $BACKUP_KEY_FILE"
-    exit 2
-fi
+# The purge is the one mode that opens nothing: it lists what is readable at the destination and
+# deletes it. Requiring the passphrase there would leave the plaintext in place on exactly the host
+# that has lost its key, which is the one that has most to remove.
+if [ "$MODE" != purge-plaintext ]; then
+    if [ ! -s "$BACKUP_KEY_FILE" ]; then
+        # Uploading unencrypted instead would be the failure nobody notices: the schedule stays green
+        # and the bucket holds every return in the database. There is no fallback.
+        say "backup: BACKUP_KEY_FILE ($BACKUP_KEY_FILE) is missing or empty. Dumps are customer data and"
+        say "        are encrypted before they leave; create the passphrase beside rclone.conf:"
+        say "        openssl rand -base64 48 > $BACKUP_KEY_FILE"
+        exit 2
+    fi
 
-backup_passphrase=$(head -n 1 "$BACKUP_KEY_FILE")
+    backup_passphrase=$(head -n 1 "$BACKUP_KEY_FILE")
 
-if [ "${#backup_passphrase}" -lt 16 ]; then
-    # The object is readable by anyone the destination admits, so a guessable key is no encryption.
-    say "backup: the passphrase in $BACKUP_KEY_FILE is shorter than 16 characters; refusing to use it"
-    exit 2
+    if [ "${#backup_passphrase}" -lt 16 ]; then
+        # The object is readable by anyone the destination admits, so a guessable key is no encryption.
+        say "backup: the passphrase in $BACKUP_KEY_FILE is shorter than 16 characters; refusing to use it"
+        exit 2
+    fi
+
+    command -v openssl >/dev/null 2>&1 || { say "backup: openssl is required to encrypt the dump"; exit 1; }
 fi
 
 command -v docker >/dev/null 2>&1 || { say "backup: docker is required"; exit 1; }
-command -v openssl >/dev/null 2>&1 || { say "backup: openssl is required to encrypt the dump"; exit 1; }
 
 # Docker needs a Windows path for a bind mount under Git Bash; a Linux host has nothing to convert.
 winpath() {
@@ -225,6 +239,41 @@ mkdir -p "$BACKUP_STAGING"
 case "$MODE" in
     list)
         rclone lsf "$REMOTE" --files-only --include "*.dump.enc" | sort
+        ;;
+
+    purge-plaintext)
+        # Objects an earlier version uploaded before the dump was encrypted. They are the exposure
+        # the encryption exists to end, and retention only ages them out: until the window closes,
+        # every return, address and payment reference in the database sits readable at the
+        # destination, for everyone its access policy admits. This removes them now -- and only
+        # them, because the pattern is the plaintext name and no object ending .dump.enc matches it.
+        #
+        # Listed and printed before deleting: a delete that says nothing leaves an operator unable to
+        # tell one stale object from a destination nobody ever purged.
+        plaintext=$(rclone lsf "$REMOTE" --files-only --include "*.dump" | sort)
+
+        if [ -z "$plaintext" ]; then
+            say "backup: no *.dump objects at $BACKUP_REMOTE; the destination holds ciphertext only"
+            exit 0
+        fi
+
+        plaintext_count=$(printf '%s\n' "$plaintext" | wc -l | tr -d ' ')
+        say "backup: $plaintext_count unencrypted *.dump object(s) at $BACKUP_REMOTE:"
+        printf '%s\n' "$plaintext" | sed 's/^/        /' >&2
+
+        rclone delete "$REMOTE" --include "*.dump"
+
+        # Asked again rather than assumed: the answer is the difference between a purge and a run
+        # that printed a list and changed nothing.
+        remaining=$(rclone lsf "$REMOTE" --files-only --include "*.dump" | sort)
+
+        if [ -n "$remaining" ]; then
+            say "backup: $BACKUP_REMOTE still lists *.dump objects after the purge:"
+            printf '%s\n' "$remaining" | sed 's/^/        /' >&2
+            exit 1
+        fi
+
+        say "backup: deleted $plaintext_count unencrypted *.dump object(s); every *.dump.enc is untouched"
         ;;
 
     backup)

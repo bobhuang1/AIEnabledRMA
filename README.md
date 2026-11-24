@@ -298,6 +298,7 @@ in the same run.
 BACKUP_REMOTE=s3:rma-prod-backups/postgres scripts/backup.sh backup   # dump, verify, encrypt, upload, prune
 BACKUP_REMOTE=s3:rma-prod-backups/postgres scripts/backup.sh list     # names at the destination
 BACKUP_REMOTE=s3:rma-prod-backups/postgres scripts/backup.sh fetch    # newest one back; name on stdout
+BACKUP_REMOTE=s3:rma-prod-backups/postgres scripts/backup.sh purge-plaintext  # delete the old *.dump objects
 ```
 
 `BACKUP_REMOTE` is an rclone destination, so one command covers object storage and a remote host:
@@ -344,6 +345,13 @@ Names are `rma-YYYYmmddTHHMMSSZ.dump.enc`: fixed-width UTC, which is what makes 
 sort rather than a guess — and what the drill and `fetch` both rely on. An unencrypted
 `*.dump` left by an earlier version is still inside the retention window, so it ages out instead
 of staying readable at the destination for ever; `fetch` never returns one.
+
+Aging out is not soon enough for a copy that is readable today. `purge-plaintext` lists the `*.dump`
+objects at the destination, prints them, deletes exactly those, and asks the destination again to
+prove they are gone; no `*.dump.enc` matches its pattern, so the backups stay. It needs no key — it
+deletes rather than opens — which is what lets a host that has lost its passphrase still take the
+plaintext off. The restore drill plants such a copy and fails unless the purge leaves no readable
+dump behind.
 
 `deploy/rma-backup.service` runs one backup and `deploy/rma-backup.timer` fires it nightly at 01:20,
 before the reconciliation sweep, with `Persistent=true` so a night the host was down is not skipped.

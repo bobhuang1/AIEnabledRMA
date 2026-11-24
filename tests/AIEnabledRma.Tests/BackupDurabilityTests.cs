@@ -250,6 +250,36 @@ public sealed class BackupDurabilityTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void The_purge_removes_the_unencrypted_objects_and_lists_them_first()
+    {
+        var script = Script().ReplaceLineEndings("\n");
+
+        // A dump uploaded before the encryption existed is readable at the destination until
+        // retention ages it out: a fortnight of every return in the database. The purge is the way
+        // to take it off now, and it names what it is about to delete — a silent delete leaves an
+        // operator unable to tell one stale object from a destination nobody ever purged.
+        Assert.Contains("purge-plaintext", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "rclone lsf \"$REMOTE\" --files-only --include \"*.dump\" | sort",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("holds ciphertext only", script, StringComparison.Ordinal);
+
+        // And it deletes exactly that pattern, then asks again. The encrypted objects are the
+        // backups: a purge that reached them would take the only copy off the destination.
+        Assert.Contains("rclone delete \"$REMOTE\" --include \"*.dump\"\n", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("rclone delete \"$REMOTE\" --include \"*.dump\" --include", script, StringComparison.Ordinal);
+
+        // And asked again afterwards: a run that printed a list and changed nothing has to fail
+        // rather than report a purge that did not happen.
+        Assert.Contains("still lists *.dump objects after the purge", script, StringComparison.Ordinal);
+
+        // It opens nothing, so it does not need the key: the host that has lost its passphrase is
+        // the one with the most plaintext to remove.
+        Assert.Contains("if [ \"$MODE\" != purge-plaintext ]; then", script, StringComparison.Ordinal);
+    }
+
     private static string Script() => RepositoryFile("scripts/backup.sh");
 
     /// <summary>
