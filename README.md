@@ -295,7 +295,7 @@ copy so a restore does not have to reach the network first, and prunes both to t
 in the same run.
 
 ```bash
-BACKUP_REMOTE=s3:rma-prod-backups/postgres scripts/backup.sh backup   # dump, verify, upload, prune
+BACKUP_REMOTE=s3:rma-prod-backups/postgres scripts/backup.sh backup   # dump, verify, encrypt, upload, prune
 BACKUP_REMOTE=s3:rma-prod-backups/postgres scripts/backup.sh list     # names at the destination
 BACKUP_REMOTE=s3:rma-prod-backups/postgres scripts/backup.sh fetch    # newest one back; name on stdout
 ```
@@ -308,14 +308,42 @@ Object-store and SFTP credentials live in `rclone.conf` on the host (`RCLONE_CON
 `/etc/aienabledrma`), never in `prod.env`: a storage key in the same file as the database password is
 one file to leak instead of two, and `prod.env` is copied into every container.
 
+The dump does not run on the host. `scripts/backup.sh` invokes it in the pack's own database
+service -- `docker compose -f docker-compose.prod.yml --env-file prod.env exec -T postgres` --
+because that server publishes no port and its container is where the credentials already are.
+`COMPOSE_FILE` and `ENV_FILE` name another pack if the database lives in one. It is the only
+route to the database, and the restore drill takes it too: the drill starts its throwaway server
+as a `postgres` service, so the command the 01:20 timer runs is the command the gate proves, and
+a service renamed on either side fails a test rather than a night's backup.
+
+The destination holds ciphertext. Every dump is encrypted -- AES-256, PBKDF2 at 200,000
+iterations, a fresh salt per run -- before it is uploaded, so a bucket, a backup host or a mounted
+disk is unreadable to the people its own access policy admits, who are not the people allowed to
+read this database. `fetch` decrypts the newest object back into `BACKUP_STAGING`, so a restore
+gets a dump rather than having to know how it was wrapped. The key is `BACKUP_KEY_FILE`, default
+`$RCLONE_CONFIG_DIR/backup.passphrase` -- a file beside `rclone.conf`, never a value in
+`prod.env`, which is copied into every container:
+
+```bash
+openssl rand -base64 48 > /etc/aienabledrma/backup.passphrase
+chmod 600 /etc/aienabledrma/backup.passphrase
+```
+
+Keep a copy of that file somewhere other than the destination. A dump without its passphrase is a
+bucket of noise, and losing the key loses every copy at once. The script refuses to run without
+it, and refuses a passphrase shorter than 16 characters, because a guessable key is the same as
+none.
+
 Two checks run before the file leaves. It must be larger than a kilobyte (an empty dump uploads
 happily and is found at the restore), and `pg_restore --list` must read it (a file the restore tool
 cannot open is not a dump). Either failing deletes the file, uploads nothing, and exits non-zero.
 
 Retention is `BACKUP_KEEP_DAYS` (default 14) and applies on the destination and in `BACKUP_STAGING`
 (default `/var/backups/aienabledrma`), so neither side grows without somebody deciding it should.
-Names are `rma-YYYYmmddTHHMMSSZ.dump`: fixed-width UTC, which is what makes "the newest" a sort
-rather than a guess -- and what the drill and `fetch` both rely on.
+Names are `rma-YYYYmmddTHHMMSSZ.dump.enc`: fixed-width UTC, which is what makes "the newest" a
+sort rather than a guess — and what the drill and `fetch` both rely on. An unencrypted
+`*.dump` left by an earlier version is still inside the retention window, so it ages out instead
+of staying readable at the destination for ever; `fetch` never returns one.
 
 `deploy/rma-backup.service` runs one backup and `deploy/rma-backup.timer` fires it nightly at 01:20,
 before the reconciliation sweep, with `Persistent=true` so a night the host was down is not skipped.
@@ -337,10 +365,12 @@ failure this job exists to make impossible.
 
 A dump is a backup only if it can be restored into a database this application can migrate and read
 back. `scripts/restore-drill.sh` proves that end to end, and it restores what the deployment's own
-backup wrote off the host rather than a dump it made a moment earlier: throwaway PostgreSQL, seeded
+backup wrote off the host rather than a dump it made a moment earlier: throwaway PostgreSQL started as the pack's `postgres` service, so the dump goes through
+`docker compose exec postgres` exactly as the timer's does, seeded
 through `DbAdmin seed`, `scripts/backup.sh` run twice against a destination beside the drill (so
-there is a newest copy to choose and a copy past the window to prune), the local copies deleted,
-`fetch` bringing the newest one back, `pg_restore --exit-on-error` into a second database, `DbAdmin
+there is a newest copy to choose and a copy past the window to prune), a fetch with the wrong
+passphrase that has to be refused, the local copies deleted, `fetch` bringing the newest one back
+decrypted, `pg_restore --exit-on-error` into a second database, `DbAdmin
 migrate` with nothing left pending, and every row count read back through the application's own
 context and compared with the source.
 

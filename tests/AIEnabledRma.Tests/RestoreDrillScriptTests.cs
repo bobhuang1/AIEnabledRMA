@@ -25,6 +25,12 @@ public sealed class RestoreDrillScriptTests
         Assert.Contains("rm -f \"$STAGING\"/*.dump", script, StringComparison.Ordinal);
         Assert.Contains("docker cp", script, StringComparison.Ordinal);
 
+        // The backup is pointed at a compose file rather than at a container name, so it takes the
+        // same `docker compose exec` branch the nightly timer takes -- which a container of the
+        // drill's own, named by hand, never did.
+        Assert.Contains("COMPOSE_FILE=", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("BACKUP_DB_CONTAINER", script, StringComparison.Ordinal);
+
         // Restore into a different database, failing on any skipped object.
         Assert.Contains("CREATE DATABASE", script, StringComparison.Ordinal);
         Assert.Contains("pg_restore", script, StringComparison.Ordinal);
