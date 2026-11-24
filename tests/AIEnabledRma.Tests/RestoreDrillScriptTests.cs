@@ -92,6 +92,21 @@ public sealed class RestoreDrillScriptTests
         Assert.Contains("set -- suite auth images restore", gate, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void The_drill_counts_the_destination_without_ls()
+    {
+        var script = Script("restore-drill.sh");
+
+        // "Nothing matched" is a normal answer here: the destination holds ciphertext only, and a
+        // first run finds it empty. `ls` exits 2 on an unmatched glob, and under `set -e` with
+        // pipefail a command substitution that returns 2 ends the drill -- which is what its first
+        // CI run did, right after it had put two encrypted dumps off the host. A nullglob turns no
+        // match into an empty list instead.
+        Assert.DoesNotContain("ls \"$OFFHOST\"", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("ls \"$STAGING\"", script, StringComparison.Ordinal);
+        Assert.Contains("shopt -s nullglob", script, StringComparison.Ordinal);
+    }
+
     private static string Script(string name)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

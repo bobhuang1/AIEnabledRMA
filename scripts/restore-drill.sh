@@ -72,6 +72,33 @@ fail() {
     failures=$((failures + 1))
 }
 
+# The destination is counted, and "nothing matched" is one of its normal states: it holds ciphertext
+# only, and a first run finds it empty. `ls` reports 2 for an unmatched glob, and under `set -e` with
+# pipefail a command substitution that returns 2 ends the script -- which is how the first CI run of
+# this drill died, at the check meant to pass when only ciphertext is at the destination. These
+# build the list with a nullglob, so no match is an empty list and nothing fails.
+count_matched() {
+    local found=()
+    shopt -s nullglob
+    found=("$1"/*."$2")
+    shopt -u nullglob
+    printf '%s' "${#found[@]}"
+}
+
+newest_matched() {
+    local found=()
+    shopt -s nullglob
+    found=("$1"/*."$2")
+    shopt -u nullglob
+
+    if [ ${#found[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    printf '%s
+' "${found[@]##*/}" | sort | tail -n 1
+}
+
 cleanup() {
     if [ "${KEEP:-0}" = 1 ]; then
         printf '\nkept: container %s, working directory %s\n' "$SERVER" "$WORK"
@@ -294,7 +321,7 @@ else
     sed 's/^/          /' "$WORK/backup-1.txt"
 fi
 
-first=$(ls "$STAGING"/*.dump.enc 2>/dev/null | xargs -r -n1 basename | sort | tail -n 1)
+first=$(newest_matched "$STAGING" dump.enc)
 
 # A second dump, so "the newest" has something to be wrong about. The names carry a UTC timestamp
 # fixed to the second, which is what makes sorting them chronological rather than alphabetical luck.
@@ -307,7 +334,7 @@ if ! backup backup >"$WORK/backup-2.txt" 2>&1; then
     exit 1
 fi
 
-second=$(ls "$STAGING"/*.dump.enc 2>/dev/null | xargs -r -n1 basename | sort | tail -n 1)
+second=$(newest_matched "$STAGING" dump.enc)
 
 if [ -e "$OFFHOST/$DECOY" ]; then
     fail "retention deletes the copy past the window" "$DECOY is still at $OFFHOST after $KEEP_DAYS days of retention"
@@ -315,7 +342,7 @@ else
     pass "retention deleted the copy older than $KEEP_DAYS days"
 fi
 
-offhost_count=$(ls "$OFFHOST"/*.dump.enc 2>/dev/null | wc -l | tr -d ' ')
+offhost_count=$(count_matched "$OFFHOST" dump.enc)
 
 if [ "$offhost_count" = 2 ] && [ -n "$first" ] && [ "$first" != "$second" ]; then
     pass "two encrypted dumps are off the host, the newest being $second"
@@ -325,7 +352,7 @@ fi
 
 # And no readable dump is there: an object an operator could open with pg_restore is the exposure
 # the encryption exists to end, and a run that uploaded one anyway has to fail here.
-readable=$(ls "$OFFHOST"/*.dump 2>/dev/null | wc -l | tr -d ' ')
+readable=$(count_matched "$OFFHOST" dump)
 
 if [ "$readable" = 0 ]; then
     pass "the destination holds ciphertext only: no *.dump object was written there"
