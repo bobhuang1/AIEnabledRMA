@@ -4,7 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>@ViewData["Title"] &middot; Returns</title>
-    <link rel="stylesheet" href="~/css/site.css" />
+    @* Versioned like the script below: without it a browser keeps the stylesheet it cached across a
+       deployment, and a layout fix ships to the server and not to the person looking at it. *@
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
 </head>
 <body>
     <a class="skip" href="#main">Skip to main content</a>

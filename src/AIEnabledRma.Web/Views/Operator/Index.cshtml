@@ -27,52 +27,55 @@
     }
     else
     {
-        <table>
-            <thead><tr><th>Filed</th><th>Source</th><th>Reason</th><th>Detail</th><th>Resolve</th></tr></thead>
-            <tbody>
-            @foreach (var row in Model.ReviewItems)
-            {
-                <tr>
-                    <td>@row.Item.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
-                    <td>@row.Item.Source</td>
-                    <td>@row.Item.Reason</td>
-                    <td>
-                        @row.Item.Explanation @row.Item.Serials
-                        @* The payment facts, in their own line: a mismatch is judged on which return,
-                           what the provider says and which transaction, and none of the three should
-                           need a psql session. *@
-                        @if (row.Item.ProviderStatus is not null || row.RmaNumber is not null)
-                        {
-                            <div class="payment">
-                                RMA: @row.RmaNumber · provider: @row.Item.ProviderStatus · transaction: @row.TransactionId
-                            </div>
-                            @* The money, beside the state: two equal states with two different sums
-                               is the mismatch only the amounts can show, and an operator should not
-                               have to read it out of the sentence above. Nothing is printed for an
-                               item that recorded no money (every item that is not a payment). *@
-                            @if (row.Item.ExpectedMoney is not null || row.Item.ProviderMoney is not null)
-                            {
-                                <div class="payment">
-                                    expected: @(row.Item.ExpectedMoney?.ToString() ?? "unknown") · provider holds: @(row.Item.ProviderMoney?.ToString() ?? "unknown")
-                                </div>
-                            }
-                        }
-                    </td>
-                    <td>
-                        <form method="post" asp-action="Resolve" asp-route-id="@row.Item.Id">
-                            <label>Resolution <input name="resolution" required maxlength="2000" /></label>
-                            <button class="btn" type="submit">Resolve</button>
-                        </form>
-                    </td>
-                </tr>
-            }
-            </tbody>
-        </table>
+        @*
+         * One item per block, not a row: an explanation is prose and a reason code has nowhere to
+         * break, so five columns inside the page's reading measure crushed the detail - and the
+         * money line under it - into a strip a few characters wide. Stacked, each fact gets the width
+         * it needs, and the sums stay on the line with the state they belong to.
+         *@
+        @foreach (var row in Model.ReviewItems)
+        {
+            <article class="review-item">
+                <p class="review-meta">
+                    <span class="money">@row.Item.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm")</span>
+                    · @row.Item.Source · @row.Item.Reason
+                </p>
+                <p>@row.Item.Explanation @row.Item.Serials</p>
+
+                @* The payment facts, on their own lines: a mismatch is judged on which return, what
+                   the provider says and which transaction, and none of the three should need a psql
+                   session. *@
+                @if (row.Item.ProviderStatus is not null || row.RmaNumber is not null)
+                {
+                    <p class="payment">
+                        RMA: @row.RmaNumber · provider: @row.Item.ProviderStatus · transaction: @row.TransactionId
+                    </p>
+
+                    @* The money, beside the state: two equal states with two different sums is the
+                       mismatch only the amounts can show, and an operator should not have to read it
+                       out of the sentence above. Nothing is printed for an item that recorded no
+                       money (every item that is not a payment). *@
+                    @if (row.Item.ExpectedMoney is not null || row.Item.ProviderMoney is not null)
+                    {
+                        <p class="payment">
+                            expected: <span class="money">@(row.Item.ExpectedMoney?.ToString() ?? "unknown")</span>
+                            · provider holds: <span class="money">@(row.Item.ProviderMoney?.ToString() ?? "unknown")</span>
+                        </p>
+                    }
+                }
+
+                <form method="post" asp-action="Resolve" asp-route-id="@row.Item.Id" class="review-resolve">
+                    <label>Resolution <input name="resolution" required maxlength="2000" /></label>
+                    <button class="btn" type="submit">Resolve</button>
+                </form>
+            </article>
+        }
     }
 </section>
 
 <section>
     <h2>Returns in progress (@Model.Requests.Count)</h2>
+    <div class="table-scroll">
     <table>
         <thead><tr><th>RMA</th><th>Status</th><th>Kind</th><th>Fee</th><th>Actions</th></tr></thead>
         <tbody>
@@ -107,6 +110,7 @@
         }
         </tbody>
     </table>
+    </div>
 </section>
 
 <section>

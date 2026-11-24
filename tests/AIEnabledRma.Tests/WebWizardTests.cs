@@ -1565,8 +1565,18 @@ public sealed class WebWizardTests : IAsyncLifetime
         var client = await SignedInOperatorAsync(factory, ct);
         var dashboard = await client.GetStringAsync("/Operator", ct);
 
-        Assert.Contains("expected: 70.00 USD", dashboard, StringComparison.Ordinal);
-        Assert.Contains("provider holds: 69.00 USD", dashboard, StringComparison.Ordinal);
+        // The text the operator reads, not the markup around it: each sum sits in its own element so a
+        // narrow column cannot break it between the amount and the currency, and an assertion on the
+        // source formatting would punish exactly that.
+        var visible = Regex.Replace(dashboard, "<[^>]+>", string.Empty);
+
+        Assert.Contains("expected: 70.00 USD", visible, StringComparison.Ordinal);
+        Assert.Contains("provider holds: 69.00 USD", visible, StringComparison.Ordinal);
+
+        // And both sums reach the browser inside the site's document. Without a view start the page
+        // shipped as a bare fragment with no stylesheet, which is what let the queue's columns - and
+        // the money line under them - collapse into each other.
+        Assert.Contains("/css/site.css", dashboard, StringComparison.Ordinal);
     }
 
     [Fact]

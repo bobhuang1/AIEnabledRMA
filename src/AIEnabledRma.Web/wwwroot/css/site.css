@@ -222,6 +222,46 @@ th, td {
 
 th { font-size: 0.85rem; color: var(--muted); font-weight: 600; }
 
+/*
+ * Back-office cells carry identifiers with nowhere to break: an RMA number, or a reason code like
+ * PaymentMismatch:Captured. One too wide for its column used to spill over the border and read as
+ * if the next column's text started with it, which is how the queue's detail line came out garbled.
+ */
+th, td { overflow-wrap: break-word; }
+
+/*
+ * A sum is two tokens, and a column narrow enough to break between them reads as if the currency
+ * belonged to something else: "69.00" at the end of one line, "USD" at the start of the next.
+ * The amount and its currency stay together; the separator around them is where a line may break.
+ */
+.money { white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/*
+ * The queue and the returns table have five columns each; on a narrow screen they scroll inside the
+ * page rather than spilling past its edge. Wide enough to fit, they stay exactly as they are.
+ */
+.table-scroll { overflow-x: auto; }
+
+/*
+ * A review item is a block rather than a table row: its explanation is prose, its reason code has
+ * nowhere to break, and the payment facts under it are three short lines an operator scans. Given
+ * a column each inside the page's measure, every one of them was squeezed instead.
+ */
+.review-item {
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.8rem;
+}
+
+.review-item p { margin: 0 0 0.4rem; }
+
+.review-meta { color: var(--muted); font-size: 0.9rem; }
+
+.review-resolve { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; margin-top: 0.6rem; }
+
+.payment { font-variant-numeric: tabular-nums; }
+
 .radio-card {
     display: block;
     border: 1px solid var(--line);

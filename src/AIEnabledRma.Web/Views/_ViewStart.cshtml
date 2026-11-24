@@ -1,0 +1,7 @@
+@{
+    // Every view here is a fragment: the document around it, the stylesheet and the skip link live in
+    // one layout. Nothing sets that layout without this file, so until it existed every page was
+    // served as a bare fragment - no stylesheet, no page title, no footer - and the operator queue's
+    // columns collided because site.css was never linked at all.
+    Layout = "_Layout";
+}
