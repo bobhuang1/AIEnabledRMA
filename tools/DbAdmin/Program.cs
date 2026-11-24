@@ -1,4 +1,5 @@
 using AIEnabledRma.Data;
+using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Catalog;
 using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Operations;
@@ -36,6 +37,9 @@ using Microsoft.Extensions.Options;
 //   DbAdmin audit-payments [--take <n>]
 //                                ask the provider about every return carrying a transaction and
 //                                list the captures and voids only one side has; reads, never writes
+//   DbAdmin review-queue [--take <n>]
+//                                list the open review items with the return, transaction and the two
+//                                sums a reconciliation run stored; reads, never resolves
 
 // The content root defaults to the current working directory, which would make the tool
 // fail with a bare "ConnectionStrings:Rma is not configured" when it is run as
@@ -408,8 +412,54 @@ switch (command)
         return AuditPaymentsReport.ExitCode(audit);
     }
 
+    case "review-queue":
+    {
+        var take = ReviewQueueReport.DefaultTake;
+
+        for (var i = 1; i < args.Length; i++)
+        {
+            var flag = args[i].ToLowerInvariant();
+            var value = i + 1 < args.Length ? args[i + 1] : null;
+
+            if (flag == "--take" && value is not null
+                && int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var count)
+                && count > 0)
+            {
+                take = count;
+                i++;
+                continue;
+            }
+
+            // A mistyped flag must not fall back to the default bound: a queue printed short looks
+            // exactly like a queue with nothing else in it.
+            Console.Error.WriteLine(
+                $"review-queue does not understand '{args[i]}'. Use --take <count> to bound the list.");
+            return 1;
+        }
+
+        // The dashboard shows this queue behind a sign-in. A headless operator has none, so the
+        // same open items are read here, with the return and transaction the item only points at
+        // resolved the way the dashboard resolves them.
+        var queue = await ReviewQueueReport.ReadAsync(
+            scope.ServiceProvider.GetRequiredService<IOperationsRepository>(),
+            scope.ServiceProvider.GetRequiredService<IRmaRepository>(),
+            take,
+            CancellationToken.None);
+
+        foreach (var line in ReviewQueueReport.Format(queue))
+        {
+            Console.WriteLine(line);
+        }
+
+        Console.WriteLine(ReviewQueueReport.Summary(queue));
+
+        // 0 even when items are waiting: this is a listing, and an item on the queue is not a
+        // failure of the command that printed it.
+        return 0;
+    }
+
     default:
-        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats [--json]|reconcile-payments [--older-than <hours>] [--take <n>]|audit-payments [--take <n>]|prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events]|kb-ingest [--rebuild] [--path <dir>]|kb-cases --file <json> [--report <path>] [--publish --reviewed-by <name>]>");
+        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats [--json]|reconcile-payments [--older-than <hours>] [--take <n>]|audit-payments [--take <n>]|review-queue [--take <n>]|prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events]|kb-ingest [--rebuild] [--path <dir>]|kb-cases --file <json> [--report <path>] [--publish --reviewed-by <name>]>");
         return 1;
 }
 

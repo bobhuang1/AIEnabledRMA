@@ -255,6 +255,28 @@ be asked about something, and 0 means every transaction agreed. Against the bund
 process starts with an empty authorisation book, so a development run reports those transactions as
 unanswered rather than as drift; against Stripe it is the real comparison.
 
+### The review queue
+
+The operator dashboard is where a review item is resolved, but a headless deployment has no
+browser and no sign-in, and the payment mismatch the 02:40 sweep files is a row only a psql
+session could see until now. `review-queue` prints the open items with the five facts one is
+judged on: its source, its reason, the return it names, the transaction, and the two sums the
+reconciliation run stored.
+
+```bash
+dotnet run --project tools/DbAdmin -- review-queue            # every open item, up to 100
+dotnet run --project tools/DbAdmin -- review-queue --take 50  # the oldest 50, and the report says so
+```
+
+Each line ends in `expected` and `provider holds`, and says `unknown` where the item recorded
+nothing rather than printing a bare amount or a zero: an item that is not about money has no sum,
+which is a different answer from one that recorded 0.00. An item that names no return -- a start
+the policy sent to a person creates none -- prints `(no return)` instead of a blank. The two
+sums are there because the reason code cannot carry them: two equal states holding two different
+amounts is money that moved unrecorded, and a queue that printed only the states would call it a
+match. It reads and never resolves; the dashboard is still the only place that closes an item,
+and it exits 0 whatever the queue holds, because items waiting is not a failure of the listing.
+
 ### Database backups
 
 A dump on the host that holds the database is not a backup: it fails with the disk, the host and the
