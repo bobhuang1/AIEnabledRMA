@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.RegularExpressions;
 
 namespace AIEnabledRma.Tests;
@@ -17,8 +16,17 @@ namespace AIEnabledRma.Tests;
 /// manifest anyway. That made "the MCP image carries the corpus" true about bytes and false about
 /// behaviour, which is the kind of check that passes while telling nobody anything.
 /// </remarks>
-public sealed class PublishLayoutTests
+public sealed class PublishLayoutTests : IClassFixture<PublishLayoutFixture>
 {
+    private readonly PublishLayoutFixture _publish;
+
+    /// <remarks>
+    /// The fixture publishes the three hosts once, in one invocation, before any test in this class
+    /// runs. Each test below reads that output rather than publishing its own copy, so the three
+    /// assertions judge the same bytes and the shared dependency graph is built once.
+    /// </remarks>
+    public PublishLayoutTests(PublishLayoutFixture publish) => _publish = publish;
+
     /// <summary>
     /// The corpus is declared once, in <c>Directory.Build.props</c>, for the hosts that read it. A
     /// project that declares the same files again publishes them twice and drifts from that one list.
@@ -61,35 +69,27 @@ public sealed class PublishLayoutTests
     }
 
     [Fact]
-    public async Task The_published_web_host_carries_the_corpus()
+    public void The_published_web_host_carries_the_corpus()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var root = RepositoryRoot();
-        var output = Path.Combine(Path.GetTempPath(), $"rma-publish-{Guid.NewGuid():N}");
+        _publish.RequirePublished();
 
-        try
-        {
-            await PublishAsync("AIEnabledRma.Web", root, output, ct);
+        var published = Path.Combine(_publish.Output(PublishLayoutFixture.Web), "knowledge-base");
+        var manifest = Path.Combine(published, "REVIEWED.sha256");
 
-            var published = Path.Combine(output, "knowledge-base");
-            var manifest = Path.Combine(published, "REVIEWED.sha256");
+        // The manifest is separate from the articles: without it a host that requires provenance
+        // refuses to start, which is a different failure than an empty corpus but just as silent.
+        Assert.True(File.Exists(manifest), "the published Web host has no knowledge-base/REVIEWED.sha256");
 
-            // The manifest is separate from the articles: without it a host that requires provenance
-            // refuses to start, which is a different failure than an empty corpus but just as silent.
-            Assert.True(File.Exists(manifest), "the published Web host has no knowledge-base/REVIEWED.sha256");
+        var shipped = Directory.GetFiles(published, "*.md", SearchOption.AllDirectories);
+        var checkedIn = Directory.GetFiles(
+            Path.Combine(_publish.RepositoryRoot, "knowledge-base"),
+            "*.md",
+            SearchOption.AllDirectories);
 
-            var shipped = Directory.GetFiles(published, "*.md", SearchOption.AllDirectories);
-            var checkedIn = Directory.GetFiles(Path.Combine(root, "knowledge-base"), "*.md", SearchOption.AllDirectories);
-
-            // Every article, not just one: a partial copy silently changes what the retriever can
-            // answer, and the count is the cheapest way to say so in the failure message.
-            Assert.Equal(checkedIn.Length, shipped.Length);
-            Assert.NotEmpty(shipped);
-        }
-        finally
-        {
-            Delete(output);
-        }
+        // Every article, not just one: a partial copy silently changes what the retriever can
+        // answer, and the count is the cheapest way to say so in the failure message.
+        Assert.Equal(checkedIn.Length, shipped.Length);
+        Assert.NotEmpty(shipped);
     }
 
     /// <summary>
@@ -104,35 +104,32 @@ public sealed class PublishLayoutTests
     /// still ship the assemblies, and an image is the thing that has to stay small.
     /// </remarks>
     [Fact]
-    public async Task The_published_rag_host_carries_no_orm()
+    public void The_published_rag_host_carries_no_orm()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var root = RepositoryRoot();
-        var output = Path.Combine(Path.GetTempPath(), $"rma-publish-{Guid.NewGuid():N}");
+        _publish.RequirePublished();
 
-        try
-        {
-            await PublishAsync("AIEnabledRma.Rag", root, output, ct);
+        // Published at all, before anything is claimed about what it holds: an output directory that
+        // was never written satisfies "carries no ORM" by being empty, and a shared invocation that
+        // dropped this host would pass here and fail only in an image build.
+        Assert.True(
+            Directory.Exists(_publish.Output(PublishLayoutFixture.Rag))
+            && Directory.GetFiles(_publish.Output(PublishLayoutFixture.Rag)).Length > 0,
+            "the shared publish wrote nothing for the RAG host");
 
-            var published = Directory.GetFiles(output)
-                .Select(Path.GetFileName)
-                .OfType<string>()
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var published = Directory.GetFiles(_publish.Output(PublishLayoutFixture.Rag))
+            .Select(Path.GetFileName)
+            .OfType<string>()
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            Assert.DoesNotContain("AIEnabledRma.Data.dll", published);
-            Assert.DoesNotContain("Npgsql.EntityFrameworkCore.PostgreSQL.dll", published);
-            Assert.DoesNotContain(
-                published,
-                file => file.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("AIEnabledRma.Data.dll", published);
+        Assert.DoesNotContain("Npgsql.EntityFrameworkCore.PostgreSQL.dll", published);
+        Assert.DoesNotContain(
+            published,
+            file => file.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.OrdinalIgnoreCase));
 
-            // The vector store still talks to PostgreSQL directly, so the assertions above are about
-            // the ORM rather than about a publish that lost database access altogether.
-            Assert.Contains("Npgsql.dll", published);
-        }
-        finally
-        {
-            Delete(output);
-        }
+        // The vector store still talks to PostgreSQL directly, so the assertions above are about the
+        // ORM rather than about a publish that lost database access altogether.
+        Assert.Contains("Npgsql.dll", published);
     }
 
     /// <summary>
@@ -145,26 +142,23 @@ public sealed class PublishLayoutTests
     /// test is the place that decision is recorded.
     /// </remarks>
     [Fact]
-    public async Task The_published_tool_server_carries_no_corpus()
+    public void The_published_tool_server_carries_no_corpus()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var root = RepositoryRoot();
-        var output = Path.Combine(Path.GetTempPath(), $"rma-publish-{Guid.NewGuid():N}");
+        _publish.RequirePublished();
 
-        try
-        {
-            await PublishAsync("AIEnabledRma.Mcp", root, output, ct);
+        // The same precondition, and for the same reason: "no knowledge-base/" is true of a publish
+        // that never ran, so the tool server has to have published something for its silence about
+        // the corpus to mean anything.
+        Assert.True(
+            Directory.Exists(_publish.Output(PublishLayoutFixture.Mcp))
+            && Directory.GetFiles(_publish.Output(PublishLayoutFixture.Mcp)).Length > 0,
+            "the shared publish wrote nothing for the tool server");
 
-            Assert.False(
-                Directory.Exists(Path.Combine(output, "knowledge-base")),
-                "the tool server published a knowledge-base/ that nothing in that host reads; either it "
-                + "gains a corpus-backed tool (with AddRag, so the startup check runs) or the project "
-                + "stops declaring the content.");
-        }
-        finally
-        {
-            Delete(output);
-        }
+        Assert.False(
+            Directory.Exists(Path.Combine(_publish.Output(PublishLayoutFixture.Mcp), "knowledge-base")),
+            "the tool server published a knowledge-base/ that nothing in that host reads; either it "
+            + "gains a corpus-backed tool (with AddRag, so the startup check runs) or the project "
+            + "stops declaring the content.");
     }
 
     /// <summary>
@@ -259,113 +253,22 @@ public sealed class PublishLayoutTests
     [Fact]
     public void A_publish_does_not_leave_a_child_holding_its_output_pipe()
     {
-        var publish = PublishStartInfo("AIEnabledRma.Web", root: ".", output: "out");
+        var publish = PublishLayoutFixture.Invocation(
+            traversal: "publish-hosts.proj",
+            layoutRoot: "out",
+            layoutProps: "layout.props");
 
         Assert.True(publish.RedirectStandardOutput);
         Assert.True(publish.RedirectStandardError);
         Assert.Equal("1", publish.Environment["MSBUILDDISABLENODEREUSE"]);
         Assert.Equal("0", publish.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"]);
         Assert.Contains("-p:UseSharedCompilation=false", publish.ArgumentList);
-    }
 
-    /// <summary>
-    /// A publish that leaves an MSBuild node behind leaves its output pipes open as well: the node
-    /// inherits the redirected handles and outlives the process whose output is being read. The
-    /// parent exits, the node does not, and the read below waits for an EOF that arrives only when
-    /// the node reaches its idle timeout. That is a silent quarter of an hour on a workstation with
-    /// the test host alive and idle, and it is the local-only shape of the stall: the same suite on
-    /// a fresh CI runner passes, which made it look like a flake rather than a leaked child. Reuse
-    /// is therefore off, the shared compiler server (the same kind of child) is off for this build,
-    /// and the CLI is told not to start a server that would survive the publish for the same reason.
-    /// </summary>
-    private static ProcessStartInfo PublishStartInfo(string project, string root, string output)
-    {
-        var publish = new ProcessStartInfo("dotnet")
-        {
-            WorkingDirectory = root,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-
-        foreach (var argument in new[]
-        {
-            "publish",
-            Path.Combine("src", project, project + ".csproj"),
-
-            // Release, which is what the images publish, and also the only configuration that cannot
-            // overwrite the Debug binaries this test is running out of — on Windows that lock would
-            // fail the publish for a reason that has nothing to do with the corpus.
-            "-c", "Release",
-            "-o", output,
-            "--no-restore",
-            "-p:UseSharedCompilation=false",
-        })
-        {
-            publish.ArgumentList.Add(argument);
-        }
-
-        publish.Environment["MSBUILDDISABLENODEREUSE"] = "1";
-        publish.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
-
-        return publish;
-    }
-
-    /// <summary>
-    /// A cold Release build of every referenced project fits comfortably; a publish that has not
-    /// finished by then is failing the gate anyway, and it must fail with a message rather than
-    /// hold the run open until a leaked child decides to exit.
-    /// </summary>
-    private static readonly TimeSpan PublishTimeout = TimeSpan.FromMinutes(10);
-
-    /// <summary>
-    /// Publishes one project into <paramref name="output"/> and fails with the tool's own output.
-    /// </summary>
-    private static async Task PublishAsync(
-        string project,
-        string root,
-        string output,
-        CancellationToken cancellationToken)
-    {
-        using var process = Process.Start(PublishStartInfo(project, root, output))
-            ?? throw new InvalidOperationException("could not start dotnet publish");
-
-        // Both streams read concurrently: a build that fills one pipe buffer while the test waits on
-        // the other deadlocks instead of failing.
-        var stdout = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
-        var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
-
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(PublishTimeout);
-
-        string log;
-        try
-        {
-            await process.WaitForExitAsync(deadline.Token);
-            log = await stdout.WaitAsync(deadline.Token) + await stderr.WaitAsync(deadline.Token);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-
-            throw new InvalidOperationException(
-                $"dotnet publish {project} did not finish within {PublishTimeout.TotalMinutes:0} minutes. "
-                + "A child that outlives the publish keeps the redirected output pipe open, so the log "
-                + "never reaches EOF; node reuse and the shared compiler are disabled to prevent that.");
-        }
-
-        Assert.True(process.ExitCode == 0, $"dotnet publish {project} failed:{Environment.NewLine}{log}");
-    }
-
-    private static void Delete(string output)
-    {
-        if (Directory.Exists(output))
-        {
-            Directory.Delete(output, recursive: true);
-        }
+        // And it is one invocation for all three hosts, which is the point: three `dotnet publish`
+        // runs spent 88 seconds on a cold tree building the same graph three times, and one
+        // invocation measured 69 with identical output.
+        Assert.Contains("-t:PublishAll", publish.ArgumentList);
+        Assert.Contains(publish.ArgumentList, a => a.StartsWith("-p:PublishLayoutRoot=", StringComparison.Ordinal));
     }
 
     /// <summary>Every project a project references, transitively, by assembly name.</summary>
@@ -406,22 +309,8 @@ public sealed class PublishLayoutTests
     }
 
     /// <summary>
-    /// Walks up from the test binary to the checkout. The output directory carries a corpus copy of its
-    /// own, so stopping at the first directory that has one would publish from a build artefact.
+    /// The checkout the shared publish ran from, found by the fixture so that the file-reading tests
+    /// and the publish cannot disagree about which tree is under test.
     /// </summary>
-    private static string RepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (directory is not null
-               && !(Directory.Exists(Path.Combine(directory.FullName, "knowledge-base"))
-                    && File.Exists(Path.Combine(directory.FullName, "AIEnabledRma.slnx"))))
-        {
-            directory = directory.Parent;
-        }
-
-        Assert.NotNull(directory);
-
-        return directory!.FullName;
-    }
+    private static string RepositoryRoot() => PublishLayoutFixture.FindRepositoryRoot();
 }
