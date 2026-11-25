@@ -34,7 +34,9 @@
 #            needs no key, because it deletes rather than opens: a host that has lost its passphrase
 #            still has to be able to take the plaintext copies off the destination. With --dry-run
 #            it prints the same list and stops there, so the one mode that destroys data can be read
-#            before it is trusted.
+#            before it is trusted. Afterwards it reads the destination again, and again for a few
+#            seconds: some object stores keep listing an object they have just deleted, and one
+#            reading of that would report a purge that worked as one that failed.
 #
 # Environment:
 #   BACKUP_REMOTE       required. An rclone destination outside this host:
@@ -246,8 +248,8 @@ if [ -f "$RCLONE_CONFIG_DIR/rclone.conf" ]; then
     RCLONE_CONFIG_FILE=/config/rclone.conf
 fi
 
-# One place that knows how rclone is invoked, so `backup`, `fetch` and `list` cannot disagree about
-# which config or which mount they used.
+# One place that knows how rclone is invoked, so `backup`, `fetch`, `list` and the purge cannot
+# disagree about which config or which mount they used.
 rclone() {
     docker run --rm \
         -v "$(winpath "$BACKUP_STAGING"):/dumps" \
@@ -255,6 +257,13 @@ rclone() {
         ${RCLONE_MOUNTS[@]+"${RCLONE_MOUNTS[@]}"} \
         -e "RCLONE_CONFIG=$RCLONE_CONFIG_FILE" \
         "$RCLONE_IMAGE" "$@"
+}
+
+# What the destination says is holding an unencrypted dump. The purge reads it twice -- once to
+# print what it is about to delete, once to check that the delete happened -- and both readings have
+# to be of the same thing, or the check is of a different list from the one the operator approved.
+plaintext_at_remote() {
+    rclone lsf "$REMOTE" --files-only --include "*.dump" | sort
 }
 
 # The database, reached the way the pack reaches it: inside its own container, where the credentials
@@ -342,7 +351,7 @@ case "$MODE" in
         #
         # Listed and printed before deleting: a delete that says nothing leaves an operator unable to
         # tell one stale object from a destination nobody ever purged.
-        plaintext=$(rclone lsf "$REMOTE" --files-only --include "*.dump" | sort)
+        plaintext=$(plaintext_at_remote)
 
         if [ -z "$plaintext" ]; then
             say "backup: no *.dump objects at $BACKUP_REMOTE; the destination holds ciphertext only"
@@ -365,13 +374,48 @@ case "$MODE" in
         rclone delete "$REMOTE" --include "*.dump"
 
         # Asked again rather than assumed: the answer is the difference between a purge and a run
-        # that printed a list and changed nothing.
-        remaining=$(rclone lsf "$REMOTE" --files-only --include "*.dump" | sort)
+        # that printed a list and changed nothing. Asked more than once, though, because a delete is
+        # not always a delete by the time the next listing is served -- an object store can go on
+        # listing an object it has already removed, which is exactly the destination this purge is
+        # for. A single reading would turn a purge that worked into a failure, and the operator it
+        # sends looking would find nothing to find.
+        #
+        # Settling, not waiting: the first reading is taken at once, because the usual answer is that
+        # they are gone and there is nothing to wait for. A bound rather than a loop that retries
+        # for ever, because a destination that keeps listing them is a failed purge, not a slow one.
+        purge_attempts=15
+        purge_interval=2
+        purge_checks=0
+
+        while :; do
+            remaining=$(plaintext_at_remote)
+            purge_checks=$((purge_checks + 1))
+
+            if [ -z "$remaining" ]; then
+                break
+            fi
+
+            if [ "$purge_checks" -ge "$purge_attempts" ]; then
+                # The bound, reached with the objects still listed. The verdict is given below, once,
+                # where the other one is: this loop asks, and does not decide.
+                break
+            fi
+
+            sleep "$purge_interval"
+        done
 
         if [ -n "$remaining" ]; then
-            say "backup: $BACKUP_REMOTE still lists *.dump objects after the purge:"
+            say "backup: $BACKUP_REMOTE still lists *.dump objects after the purge, $purge_checks"
+            say "        listing(s) over $((purge_attempts * purge_interval))s:"
             printf '%s\n' "$remaining" | sed 's/^/        /' >&2
             exit 1
+        fi
+
+        if [ "$purge_checks" -gt 1 ]; then
+            # Not hidden: a purge that took half a minute is the lag this loop exists to survive, and
+            # an operator who reads the log should see why it was slow rather than wonder.
+            say "backup: the destination needed $purge_checks listings to stop showing them; a listing"
+            say "        can lag a delete at some object stores"
         fi
 
         say "backup: deleted $plaintext_count unencrypted *.dump object(s); every *.dump.enc is untouched"

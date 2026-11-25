@@ -360,11 +360,13 @@ sort rather than a guess — and what the drill and `fetch` both rely on. An une
 of staying readable at the destination for ever; `fetch` never returns one.
 
 Aging out is not soon enough for a copy that is readable today. `purge-plaintext` lists the `*.dump`
-objects at the destination, prints them, deletes exactly those, and asks the destination again to
-prove they are gone; no `*.dump.enc` matches its pattern, so the backups stay. It needs no key — it
-deletes rather than opens — which is what lets a host that has lost its key still take the
-plaintext off. The restore drill plants such a copy and fails unless the purge leaves no readable
-dump behind.
+objects at the destination, prints them, deletes exactly those, and reads the destination again until
+it stops listing them. Not once: an object store can still list an object it has just deleted, and a
+single reading would call a purge that worked a failure. The wait is bounded — a destination that
+still lists them after half a minute is a purge that failed, and the run says so and names them —
+and no `*.dump.enc` matches its pattern, so the backups stay. It needs no key — it deletes rather
+than opens — which is what lets a host that has lost its key still take the plaintext off. The
+restore drill plants such a copy and fails unless the purge leaves no readable dump behind.
 
 Because it is the mode that destroys something at the destination, it can be read first:
 `purge-plaintext --dry-run` prints the same list and stops, saying that nothing was deleted. The

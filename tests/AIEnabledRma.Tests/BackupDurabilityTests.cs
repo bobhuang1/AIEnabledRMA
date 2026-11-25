@@ -320,6 +320,56 @@ public sealed class BackupDurabilityTests
         Assert.True(delete > dryRun, "the purge deletes before it checks for --dry-run");
     }
 
+    /// <summary>
+    /// The re-check is what turns the purge into a claim rather than a printout, and one reading of
+    /// the destination makes that claim wrong at the stores the purge is for: S3 and the services
+    /// that copy it can still list an object they have just deleted. A purge that worked would report
+    /// itself as failed, and the operator it sends to look for plaintext would be looking for
+    /// something that is already gone. The re-check therefore settles -- asked again, with a pause
+    /// between, up to a bound -- and fails only on a reading taken after that bound.
+    /// </summary>
+    [Fact]
+    public void The_purge_recheck_settles_before_it_reports_a_failure()
+    {
+        var script = Script().ReplaceLineEndings("\n");
+
+        // The list that is printed and the list that is checked are the same reading of the same
+        // destination, or the check is of a different thing from the one the operator approved.
+        Assert.Contains("plaintext_at_remote() {", script, StringComparison.Ordinal);
+        Assert.Contains("rclone lsf \"$REMOTE\" --files-only --include \"*.dump\" | sort", script, StringComparison.Ordinal);
+        Assert.Contains("plaintext=$(plaintext_at_remote)", script, StringComparison.Ordinal);
+        Assert.Contains("remaining=$(plaintext_at_remote)", script, StringComparison.Ordinal);
+
+        var delete = script.IndexOf("rclone delete \"$REMOTE\" --include \"*.dump\"\n", StringComparison.Ordinal);
+
+        Assert.True(delete > 0, "the purge no longer deletes the unencrypted objects");
+
+        // The re-check is a loop that reads the destination again and pauses before the next reading.
+        var settle = script.IndexOf("while :; do", delete, StringComparison.Ordinal);
+        var listed = settle < 0 ? -1 : script.IndexOf("remaining=$(plaintext_at_remote)", settle, StringComparison.Ordinal);
+        var empty = listed < 0 ? -1 : script.IndexOf("if [ -z \"$remaining\" ]; then", listed, StringComparison.Ordinal);
+        var pause = empty < 0 ? -1 : script.IndexOf("sleep ", empty, StringComparison.Ordinal);
+        var done = pause < 0 ? -1 : script.IndexOf("\n        done\n", pause, StringComparison.Ordinal);
+
+        Assert.True(settle > delete, "the purge asks the destination again without retrying the question");
+        Assert.True(listed > settle, "the settling loop does not read the destination");
+        Assert.True(empty > listed, "the settling loop does not stop when the destination already agrees");
+        Assert.True(pause > empty, "the purge pauses even when the first answer is that they are gone");
+        Assert.True(done > pause, "the settling loop has no end");
+
+        // Bounded, so a destination that never settles is reported rather than waited on for ever.
+        Assert.Contains("purge_attempts=15", script, StringComparison.Ordinal);
+        Assert.Contains("if [ \"$purge_checks\" -ge \"$purge_attempts\" ]; then", script, StringComparison.Ordinal);
+
+        // And both verdicts are outside the loop: only a reading taken after the bound can call the
+        // purge failed, so the first listing that still shows the objects is not one.
+        var failure = script.IndexOf("still lists *.dump objects after the purge", StringComparison.Ordinal);
+        var success = script.IndexOf("every *.dump.enc is untouched", StringComparison.Ordinal);
+
+        Assert.True(failure > done, "the purge reports failure from inside the settling loop");
+        Assert.True(success > done, "the purge reports success from inside the settling loop");
+    }
+
     [Fact]
     public void The_staging_copy_is_private_and_one_run_cannot_overwrite_another()
     {
