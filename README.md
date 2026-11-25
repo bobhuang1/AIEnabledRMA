@@ -415,6 +415,13 @@ then remove its reader, rather than leaving both:
 - in `scripts/restore-drill.sh`: step 9 of its header comment, the date it reads and the decision
   built on it, the object it writes in the old format, the fetch that has to open it, and the run
   that expects a refusal without a passphrase;
+- in `tests/AIEnabledRma.Tests/BackupDurabilityTests.cs`:
+  `The_retirement_of_the_old_cipher_is_dated_and_the_drill_reads_that_date`, and the comment above
+  it. That test is the gate every bullet here is written against — it reads both dates out of
+  `scripts/backup.sh`, requires this section to be dated with `BACKUP_LEGACY_RETIRES`, and requires
+  the drill to read the date rather than spell it — so it leaves in the same change as the dates.
+  Left behind, it fails on the removal this step has just asked for, and the suite is red for
+  following the step;
 - in this file: this section, and the sentence above that points at it.
 
 `scripts/verify-all.sh restore` is the gate on the date, and it is why the date lives in the script
@@ -422,6 +429,9 @@ rather than in a note: while the window is open the drill opens a legacy object 
 match the dump it was written from, and from 2026-12-08 it fails until the branch and
 `BACKUP_KEY_FILE` are gone, naming this section. A drill that went on proving the branch after its
 copies could not exist is how a retired cipher and a passphrase outlive the data they were for.
+`scripts/verify-all.sh suite` is the gate on this list: the same test reads the dates, this section
+and the drill together, so a removal done by halves fails there rather than going half-done. That
+is why the bullets above are one change and not a series of them.
 
 Do not do it early: an object written on the last night before the migration stays restorable for a
 full window afterwards, and the restore that lands the day before this date needs the branch. A

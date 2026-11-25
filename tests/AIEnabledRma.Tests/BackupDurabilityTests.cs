@@ -415,6 +415,14 @@ public sealed class BackupDurabilityTests
         Assert.Contains("`openssl enc -d`", readme, StringComparison.Ordinal);
         Assert.Contains("Do not do it early", readme, StringComparison.Ordinal);
 
+        // And the list of what to remove includes this test, by name. Deleting the dates and the
+        // section while it stood would leave the suite red for following the step, and the next
+        // reader would take the step for the mistake rather than the test. The suite is the gate on
+        // the list being complete, and the runbook says so.
+        Assert.Contains("tests/AIEnabledRma.Tests/BackupDurabilityTests.cs", readme, StringComparison.Ordinal);
+        Assert.Contains(nameof(The_retirement_of_the_old_cipher_is_dated_and_the_drill_reads_that_date), readme, StringComparison.Ordinal);
+        Assert.Contains("`scripts/verify-all.sh suite` is the gate on this list", readme, StringComparison.Ordinal);
+
         // The drill takes the date from the script and does not spell it: a second copy is what would
         // keep the branch in the gate after the runbook said to remove it.
         Assert.Contains("sed -n 's/^BACKUP_LEGACY_RETIRES=//p' \"$REPO_ROOT/scripts/backup.sh\"", drill, StringComparison.Ordinal);
