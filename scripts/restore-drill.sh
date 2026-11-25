@@ -18,11 +18,15 @@
 #      server are its code, not a second copy of them written here
 #   4. runs it twice, so there is a newest copy for the fetch to have to choose, beside a copy already
 #      past the retention window, which the same run has to delete
-#   5. reads the destination with the wrong passphrase and asserts it cannot be read, deletes the local
+#   5. reads the destination with the wrong identity and asserts it cannot be read, deletes the local
 #      copies, and fetches the newest object back, decrypted
 #   6. restores that copy with `pg_restore --exit-on-error` into a *different* database on the server
 #   7. migrates the restored database (`DbAdmin migrate`) and asserts nothing is left pending
 #   8. reads it back (`DbAdmin stats`) and compares every count against the source
+#   9. writes an object in the format the script used before the migration to age, fetches it with the
+#      identity that opens everything since, and requires it to open: the retention window contains a
+#      fortnight of copies in the old format, and a restore in that fortnight is the one that finds
+#      out whether the legacy branch still works.
 #
 # Usage:
 #   scripts/restore-drill.sh
@@ -38,8 +42,11 @@
 # because a drill that dumps its own file and restores it proves the dump format and says nothing
 # about the backup path -- the copy that left the host yesterday is the one a disaster needs.
 #
-# Requirements: docker. Nothing else: there is no host dotnet on the machines this was written on,
-# so DbAdmin is published and run in the SDK container, the same way the suite does it.
+# Requirements: docker, and age with age-keygen (the cipher scripts/backup.sh uses, and the reason the
+# drill generates an identity rather than a passphrase). Nothing else: there is no host dotnet on the
+# machines this was written on, so DbAdmin is published and run in the SDK container, the same way the
+# suite does it. openssl is used for one thing -- writing the object in the old format so the legacy
+# branch has something to open.
 
 set -euo pipefail
 
@@ -149,10 +156,14 @@ dbadmin() {
         "$SDK_IMAGE" dotnet AIEnabledRma.Tools.DbAdmin.dll "$@"
 }
 
-command -v docker >/dev/null 2>&1 || {
-    echo "docker is required" >&2
-    exit 1
-}
+# age is the cipher scripts/backup.sh uses. A machine without it fails here instead of halfway
+# through a drill whose first backup would be the check that noticed.
+for tool in docker age age-keygen; do
+    command -v "$tool" >/dev/null 2>&1 || {
+        echo "$tool is required" >&2
+        exit 1
+    }
+done
 
 printf '\n== restore drill: dump a seeded database, restore it into a scratch one, migrate and read it\n'
 
@@ -278,25 +289,47 @@ OFFHOST="$WORK/offhost"
 STAGING="$WORK/staging"
 KEEP_DAYS=14
 DECOY=rma-20200101T000000Z.dump.enc
-PASSPHRASE_FILE="$WORK/backup.passphrase"
-WRONG_PASSPHRASE_FILE="$WORK/wrong.passphrase"
+# Through winpath, because age is a native binary: under Git Bash it cannot open '/c/...', the way
+# the rclone container cannot be handed one either. On a Linux host winpath is the identity, so the
+# drill and the production path pass the same thing.
+IDENTITY_FILE=$(winpath "$WORK/backup.age.key")
+WRONG_IDENTITY_FILE=$(winpath "$WORK/wrong.age.key")
+LEGACY_PASSPHRASE_FILE="$WORK/backup.passphrase"
+NO_KEY="$WORK/no-such-passphrase"
 
 mkdir -p "$OFFHOST"
 
-# The passphrase lives beside the key file the way the deployment keeps it beside rclone.conf, and
-# it is what the destination cannot be read without.
-printf '%s\n' 'restore-drill-passphrase-not-a-real-key' >"$PASSPHRASE_FILE"
-printf '%s\n' 'wrong-passphrase-also-not-a-real-key' >"$WRONG_PASSPHRASE_FILE"
+# The identity lives beside rclone.conf the way the deployment keeps it, and it is what the
+# destination cannot be read without. Generated rather than written by hand, because age-keygen is
+# the only thing that can make one -- which is also why this failing is reported rather than worked
+# around: a hand-written key would not be one, and the drill would then be proving nothing.
+if ! age-keygen -o "$IDENTITY_FILE" >/dev/null 2>&1 || ! age-keygen -o "$WRONG_IDENTITY_FILE" >/dev/null 2>&1; then
+    fail "age-keygen writes an identity" "age-keygen could not write $IDENTITY_FILE"
+    printf '\n%d check(s) failed\n' "$failures"
+    exit 1
+fi
 
-backup() {
+# Only the object written in the old format below needs it. The nightly unit does not: the last check
+# in this drill is that a backup still runs with the identity alone.
+printf '%s\n' 'restore-drill-passphrase-not-a-real-key' >"$LEGACY_PASSPHRASE_FILE"
+
+run_backup() {
+    local key_file=$1
+    shift
+
     COMPOSE_FILE="$(winpath "$COMPOSE")" \
     ENV_FILE="$(winpath "$DRILL_ENV")" \
     BACKUP_REMOTE="local:$OFFHOST" \
     BACKUP_STAGING="$STAGING" \
     BACKUP_KEEP_DAYS="$KEEP_DAYS" \
-    BACKUP_KEY_FILE="$PASSPHRASE_FILE" \
+    BACKUP_AGE_IDENTITY="$IDENTITY_FILE" \
+    BACKUP_KEY_FILE="$key_file" \
     RCLONE_IMAGE="$RCLONE_IMAGE" \
         "$REPO_ROOT/scripts/backup.sh" "$@"
+}
+
+backup() {
+    run_backup "$LEGACY_PASSPHRASE_FILE" "$@"
 }
 
 # A copy already past the window, with a name an oldest-first rule would choose. Retention has to
@@ -365,6 +398,17 @@ else
     fail "the backups are off the host" "$offhost_count object(s) at $OFFHOST, named '$first' and '$second'"
 fi
 
+# Which cipher wrote it, read off the bytes that left the host: age v1, whose header names the format
+# and whose payload is authenticated. A script that still encrypted with the old cipher would produce
+# an object indistinguishable in name from this one, and indistinguishable in the drill.
+object_header=$(head -c 21 "$OFFHOST/$second" 2>/dev/null | tr -c '[:print:]' '.')
+
+if [ "$object_header" = 'age-encryption.org/v1' ]; then
+    pass "the newest object is an age v1 file: authenticated, and it names its own format"
+else
+    fail "the dump leaving the host is age v1" "$second starts with '$object_header', not an age header"
+fi
+
 # And no readable dump is there: an object an operator could open with pg_restore is the exposure
 # the encryption exists to end, and a run that uploaded one anyway has to fail here.
 readable=$(count_matched "$OFFHOST" dump)
@@ -416,13 +460,14 @@ else
     fi
 fi
 
-# The key is what stands between the destination and every return in it, so the drill reads it with
-# the wrong one and requires the refusal. A copy that decrypts without the passphrase is not
-# encrypted, whatever the file name says.
+# The key is what stands between the destination and every return in it, so the drill opens it with
+# the wrong identity and requires the refusal. A copy that opens without the identity is not
+# encrypted, whatever the file name says -- and with age this is not a matter of a padding check
+# happening to fail: the payload's tag does not verify under any other key.
 WRONG_STAGING="$WORK/wrong-staging"
 mkdir -p "$WRONG_STAGING"
 
-if BACKUP_KEY_FILE="$WRONG_PASSPHRASE_FILE" \
+if BACKUP_AGE_IDENTITY="$WRONG_IDENTITY_FILE" \
     COMPOSE_FILE="$(winpath "$COMPOSE")" \
     ENV_FILE="$(winpath "$DRILL_ENV")" \
     BACKUP_REMOTE="local:$OFFHOST" \
@@ -431,9 +476,9 @@ if BACKUP_KEY_FILE="$WRONG_PASSPHRASE_FILE" \
     RCLONE_IMAGE="$RCLONE_IMAGE" \
         "$REPO_ROOT/scripts/backup.sh" fetch >"$WORK/wrong-fetch.txt" 2>&1; then
     fail "the destination is encrypted" \
-        "a fetch with the wrong passphrase returned a dump; the objects are readable without the key"
+        "a fetch with the wrong identity returned a dump; the objects are readable without the key"
 else
-    pass "the destination is ciphertext: the wrong passphrase cannot decrypt it"
+    pass "the destination is ciphertext: the wrong identity cannot open it"
 fi
 
 # The local copies go first, so the restore below cannot quietly use one of them: the only way back
@@ -510,6 +555,52 @@ if ! diff -u "$WORK/seed-counts.txt" "$WORK/scratch-counts.txt" >"$WORK/counts.d
     sed 's/^/          /' "$WORK/counts.diff"
 else
     pass "every row count matches the source"
+fi
+
+# The migration's other half. Everything above proves what the script writes today; the copies it
+# wrote before are still inside the retention window, and the restore that matters inside that window
+# is the one that has to open one of them. So the drill writes an object in the old format, names it
+# so `fetch` chooses it, and compares what comes back with the dump it was encrypted from -- "it
+# returned something" is not the claim; "it returned that dump" is.
+LEGACY_ENC=rma-20991231T235959Z.dump.enc
+
+if ! openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
+    -pass file:"$(winpath "$LEGACY_PASSPHRASE_FILE")" <"$STAGING/$fetched" >"$OFFHOST/$LEGACY_ENC"; then
+    fail "an object in the old format can be written" "openssl would not write $LEGACY_ENC"
+else
+    if ! legacy_fetched=$(backup fetch 2>"$WORK/legacy-fetch.txt"); then
+        fail "fetch opens an object written before the migration" \
+            "scripts/backup.sh fetch failed on $LEGACY_ENC:"
+        tail -8 "$WORK/legacy-fetch.txt" | sed 's/^/          /'
+    elif [ "$legacy_fetched" = "${LEGACY_ENC%.enc}" ] && cmp -s "$STAGING/$legacy_fetched" "$STAGING/$fetched"; then
+        pass "the legacy branch opened $LEGACY_ENC, byte for byte the dump it was written from"
+    else
+        fail "the legacy branch opens the old format" \
+            "fetch returned '$legacy_fetched', and it does not match the dump it was made from"
+    fi
+
+    # And without its passphrase it has to refuse, and say which file it needs. A branch that quietly
+    # returned nothing, or fell through to the identity, would leave an operator with a restore that
+    # is missing a file and a run that reported success.
+    if run_backup "$NO_KEY" fetch >"$WORK/legacy-nokey.txt" 2>&1; then
+        fail "the legacy branch needs its passphrase" \
+            "a fetch of $LEGACY_ENC succeeded with no passphrase file at $NO_KEY"
+    elif grep -q 'written before the migration to age' "$WORK/legacy-nokey.txt"; then
+        pass "without the passphrase the legacy branch refuses, and names the file it needs"
+    else
+        fail "the legacy branch says why it refused" "the refusal did not name the migration:"
+        tail -8 "$WORK/legacy-nokey.txt" | sed 's/^/          /'
+    fi
+
+    # And the identity alone still publishes. Retiring the old passphrase must not stop the nightly
+    # unit: that is the difference between a key being retired and a key still required.
+    if run_backup "$NO_KEY" backup >"$WORK/no-passphrase-backup.txt" 2>&1; then
+        pass "a backup still runs with the identity alone, so the old passphrase can be retired"
+    else
+        fail "the nightly run does not need the old passphrase" \
+            "scripts/backup.sh backup failed without a passphrase file:"
+        tail -8 "$WORK/no-passphrase-backup.txt" | sed 's/^/          /'
+    fi
 fi
 
 if [ "$failures" -ne 0 ]; then

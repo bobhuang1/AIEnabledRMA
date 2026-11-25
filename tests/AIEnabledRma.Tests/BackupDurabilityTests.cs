@@ -104,19 +104,25 @@ public sealed class BackupDurabilityTests
     {
         var script = Script();
 
-        // Encrypt on the way out, decrypt on the way back, with the key derived rather than the
-        // passphrase used as a key.
-        Assert.Contains("openssl enc -aes-256-cbc -pbkdf2 -iter 200000", script, StringComparison.Ordinal);
-        Assert.Contains("openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000", script, StringComparison.Ordinal);
+        // age v1 to an X25519 identity: the payload is authenticated, and the header names the
+        // format. The CBC it replaced could be altered in place at the destination and said nothing
+        // about what wrote it.
+        Assert.Contains("age --encrypt --recipient \"$age_recipient\"", script, StringComparison.Ordinal);
+        Assert.Contains("age --decrypt --identity \"$(winpath \"$BACKUP_AGE_IDENTITY\")\"", script, StringComparison.Ordinal);
+        Assert.Contains("age-keygen -y \"$(winpath \"$BACKUP_AGE_IDENTITY\")\"", script, StringComparison.Ordinal);
 
-        // Beside rclone.conf by default: deriving the key from that directory is what binds the two
-        // credentials, and a test that only saw a path would pass on any path.
+        // And nothing writes the old cipher any more: the only openssl left in the script opens the
+        // objects that pre-date the change.
+        Assert.DoesNotContain("openssl enc -aes-256-cbc -pbkdf2", script, StringComparison.Ordinal);
+
+        // Beside rclone.conf by default: deriving the recipient from that directory is what binds
+        // the two credentials, and a test that only saw a path would pass on any path.
         Assert.Contains(
-            "BACKUP_KEY_FILE=${BACKUP_KEY_FILE:-$RCLONE_CONFIG_DIR/backup.passphrase}",
+            "BACKUP_AGE_IDENTITY=${BACKUP_AGE_IDENTITY:-$RCLONE_CONFIG_DIR/backup.age.key}",
             script,
             StringComparison.Ordinal);
         Assert.Contains("is missing or empty", script, StringComparison.Ordinal);
-        Assert.Contains("shorter than 16 characters", script, StringComparison.Ordinal);
+        Assert.Contains("does not hold an age identity", script, StringComparison.Ordinal);
 
         // No unencrypted fallback: prod.env does not carry the key, and nothing encrypts only when a
         // variable happens to be set.
@@ -171,9 +177,9 @@ public sealed class BackupDurabilityTests
     {
         var drill = RepositoryFile("scripts/restore-drill.sh").ReplaceLineEndings("\n");
 
-        Assert.Contains("BACKUP_KEY_FILE=\"$PASSPHRASE_FILE\"", drill, StringComparison.Ordinal);
-        Assert.Contains("WRONG_PASSPHRASE_FILE", drill, StringComparison.Ordinal);
-        Assert.Contains("fetch with the wrong passphrase returned a dump", drill, StringComparison.Ordinal);
+        Assert.Contains("BACKUP_AGE_IDENTITY=\"$IDENTITY_FILE\"", drill, StringComparison.Ordinal);
+        Assert.Contains("BACKUP_AGE_IDENTITY=\"$WRONG_IDENTITY_FILE\"", drill, StringComparison.Ordinal);
+        Assert.Contains("fetch with the wrong identity returned a dump", drill, StringComparison.Ordinal);
 
         // No plaintext object at the destination, and the drill's own copies are ciphertext.
         Assert.Contains("no *.dump object was written there", drill, StringComparison.Ordinal);
@@ -230,9 +236,14 @@ public sealed class BackupDurabilityTests
 
         // The key, and how to make one: documented beside the destination rather than left to a
         // reader to invent.
+        Assert.Contains("BACKUP_AGE_IDENTITY", readme, StringComparison.Ordinal);
+        Assert.Contains("$RCLONE_CONFIG_DIR/backup.age.key", readme, StringComparison.Ordinal);
+        Assert.Contains("age-keygen -o /etc/aienabledrma/backup.age.key", readme, StringComparison.Ordinal);
+
+        // And the passphrase of the objects written before the migration, with the window it can be
+        // retired in: a reader who deletes it on the day of the upgrade loses a fortnight of copies.
         Assert.Contains("BACKUP_KEY_FILE", readme, StringComparison.Ordinal);
         Assert.Contains("$RCLONE_CONFIG_DIR/backup.passphrase", readme, StringComparison.Ordinal);
-        Assert.Contains("openssl rand -base64 48", readme, StringComparison.Ordinal);
         Assert.Contains("sudo cp deploy/rma-backup.service deploy/rma-backup.timer /etc/systemd/system/", readme, StringComparison.Ordinal);
         Assert.Contains("systemctl enable --now rma-backup.timer", readme, StringComparison.Ordinal);
         Assert.Contains("journalctl -u rma-backup.service", readme, StringComparison.Ordinal);
@@ -303,6 +314,74 @@ public sealed class BackupDurabilityTests
         // Inspecting a destination opens nothing, so it needs no key: a host that has lost the
         // passphrase still has to be able to say what the destination is holding.
         Assert.Contains("if [ \"$MODE\" != purge-plaintext ] && [ \"$MODE\" != list ]; then", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The migration has two halves, and the second one is only worth anything while old copies
+    /// exist: every object at the destination older than the change is in a format the new code did
+    /// not write, inside a retention window that guarantees there are some. The branch that opens
+    /// them is chosen by what the object is rather than by its name, because both formats carry the
+    /// same `*.dump.enc` name and an operator fetching one does not know which it is.
+    /// </summary>
+    [Fact]
+    public void The_dumps_written_before_the_migration_stay_restorable_until_the_window_closes()
+    {
+        var script = Script().ReplaceLineEndings("\n");
+
+        // `openssl enc -salt` writes these eight bytes ahead of the ciphertext; age writes its own
+        // header there instead. A check on the name would be a check on nothing.
+        Assert.Contains(
+            "if [ \"$(head -c 8 \"$source\")\" != 'Salted__' ]; then",
+            script,
+            StringComparison.Ordinal);
+
+        // The old cipher survives in exactly one place, and only to read.
+        Assert.Contains("openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000", script, StringComparison.Ordinal);
+        Assert.Contains("-in \"$(winpath \"$source\")\"", script, StringComparison.Ordinal);
+
+        // Without its passphrase the legacy branch refuses and names the file, rather than returning
+        // nothing or falling through to the identity that cannot open it.
+        Assert.Contains("was written before the migration to age", script, StringComparison.Ordinal);
+        Assert.Contains("which is missing or empty. Nothing was staged.", script, StringComparison.Ordinal);
+
+        // And the passphrase is not required up front: a key being retired must not be able to stop
+        // the nightly backup, which is what a guard around every mode would have done.
+        Assert.Contains(
+            "BACKUP_KEY_FILE=${BACKUP_KEY_FILE:-$RCLONE_CONFIG_DIR/backup.passphrase}",
+            script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("backup_passphrase=", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A drill that only ever exercises the format written today proves nothing about the fortnight
+    /// of copies the migration left behind. This is the gate on both paths: what leaves the host is
+    /// age, an object in the old format still opens, and the passphrase is needed for that object and
+    /// for nothing else.
+    /// </summary>
+    [Fact]
+    public void The_drill_proves_both_the_new_format_and_the_one_before_it()
+    {
+        var drill = RepositoryFile("scripts/restore-drill.sh").ReplaceLineEndings("\n");
+
+        // Only age-keygen can make an identity, so its absence is a failure rather than a skip.
+        Assert.Contains("age-keygen -o \"$IDENTITY_FILE\"", drill, StringComparison.Ordinal);
+
+        // What left the host is recognised by its own header, not by the name it was given.
+        Assert.Contains("age-encryption.org/v1", drill, StringComparison.Ordinal);
+
+        // An object in the old format is written deliberately, named so `fetch` chooses it, and
+        // compared with the dump it was made from -- restoring something is not the claim.
+        Assert.Contains("openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt", drill, StringComparison.Ordinal);
+        Assert.Contains("LEGACY_ENC=rma-20991231T235959Z.dump.enc", drill, StringComparison.Ordinal);
+        Assert.Contains(
+            "cmp -s \"$STAGING/$legacy_fetched\" \"$STAGING/$fetched\"",
+            drill,
+            StringComparison.Ordinal);
+
+        // The branch is shown to need its passphrase, and the nightly run shown not to.
+        Assert.Contains("run_backup \"$NO_KEY\" fetch", drill, StringComparison.Ordinal);
+        Assert.Contains("run_backup \"$NO_KEY\" backup", drill, StringComparison.Ordinal);
     }
 
     private static string Script() => RepositoryFile("scripts/backup.sh");

@@ -6,7 +6,7 @@
 # dump written into the database container, or into a directory on the host that holds the
 # database's own volume, survives exactly the failures a backup exists for -- the disk, the host,
 # the account. This script is the copy that leaves: it dumps through the pack's own PostgreSQL
-# image, checks the file with `pg_restore --list`, encrypts it with the passphrase beside
+# image, checks the file with `pg_restore --list`, encrypts it to the age identity beside
 # rclone.conf, copies it to BACKUP_REMOTE through rclone, and deletes what is past the window on both
 # sides.
 #
@@ -14,6 +14,15 @@
 # database, and a destination -- a bucket, a backup host, a mounted disk -- is read by everyone its
 # own access control admits, which is a different set of people from the ones allowed to read this
 # database. The object that leaves is ciphertext and nothing else.
+#
+# The cipher is age (https://age-encryption.org/v1), encrypting to the X25519 identity beside
+# rclone.conf. It replaced `openssl enc -aes-256-cbc`, which had no authentication and no version
+# identifier: a CBC object is malleable at the destination, the only thing that noticed was a
+# pg_dump magic check at the other end, and a file whose job is to still open in ten years carried
+# nothing that says what wrote it. age authenticates its payload (ChaCha20-Poly1305 over a key
+# derived through X25519 and HKDF), so a wrong identity or a damaged object fails rather than
+# decrypting to something padding-shaped, and its header names the format version. Objects written
+# before the change stay restorable until retention deletes the last of them -- see decrypt().
 #
 # Modes:
 #   backup   dump, verify, encrypt, upload, prune (default)
@@ -33,17 +42,22 @@
 #   COMPOSE_FILE        the pack that holds the database service, default docker-compose.prod.yml
 #   ENV_FILE            its env file, default prod.env
 #   RCLONE_CONFIG_DIR   directory holding rclone.conf, default /etc/aienabledrma
-#   BACKUP_KEY_FILE     the passphrase that encrypts every dump, default
-#                       $RCLONE_CONFIG_DIR/backup.passphrase -- beside rclone.conf, because the two
+#   BACKUP_AGE_IDENTITY the age X25519 identity that encrypts every dump, default
+#                       $RCLONE_CONFIG_DIR/backup.age.key -- beside rclone.conf, because the two
 #                       are the credentials that open the destination and neither belongs in prod.env
+#   BACKUP_KEY_FILE     the passphrase of the objects written before the migration to age, default
+#                       $RCLONE_CONFIG_DIR/backup.passphrase. Read only when one of those is opened,
+#                       so the nightly unit does not depend on a file that is being retired; it can
+#                       go once retention has deleted the last object older than the window.
 #   RCLONE_IMAGE        default the pinned rclone image below
 #
-# Requirements: docker, and openssl for the cipher. PostgreSQL and rclone are run as containers, so
-# the host needs neither a database client nor rclone of its own -- the same reason the pack's other
-# scheduled job calls compose instead of a database client. openssl is the exception: it is on every
-# Debian and Ubuntu base image, while the pinned images the pack runs carry no cipher of their own,
-# and a further image pulled onto a production host for one command is a dependency with its own
-# upgrade schedule.
+# Requirements: docker, and `age` with `age-keygen` for the cipher (Debian and Ubuntu package them
+# as `age`). PostgreSQL and rclone are run as containers, so the host needs neither a database
+# client nor rclone of its own -- the same reason the pack's other scheduled job calls compose
+# instead of a database client. age is the exception: it is a few hundred kilobytes with no
+# dependencies, where pulling a further image onto a production host for one command is a dependency
+# with its own upgrade schedule. openssl is needed only while an object from before the migration is
+# still inside the window, and only to open it.
 
 set -euo pipefail
 
@@ -71,6 +85,10 @@ RCLONE_IMAGE=${RCLONE_IMAGE:-rclone/rclone:1.68.1@sha256:e78b765d51301e1934c376e
 # Beside rclone.conf, not in prod.env: prod.env is the file an operator copies around to say what a
 # deployment is configured with, and it is handed to every container. The key must not travel with
 # the objects it opens.
+BACKUP_AGE_IDENTITY=${BACKUP_AGE_IDENTITY:-$RCLONE_CONFIG_DIR/backup.age.key}
+# The passphrase the objects written before the migration were encrypted with, beside the identity
+# for the same reason. Only read when one of those objects is opened, so retiring it cannot stop the
+# nightly run -- only the fetch of a copy older than the migration.
 BACKUP_KEY_FILE=${BACKUP_KEY_FILE:-$RCLONE_CONFIG_DIR/backup.passphrase}
 
 say() { printf '%s\n' "$*" >&2; }
@@ -89,8 +107,11 @@ usage: scripts/backup.sh [backup|fetch|list|purge-plaintext]
 BACKUP_REMOTE must name an rclone destination outside this host, for example
 s3:rma-prod-backups/postgres, sftp:backup.example.com:/srv/rma, or local:/mnt/offsite/rma.
 
-BACKUP_KEY_FILE must name the passphrase file, by default beside rclone.conf. Without it nothing is
+BACKUP_AGE_IDENTITY must name the age identity, by default beside rclone.conf. Without it nothing is
 uploaded: the destination holds ciphertext, and a dump with no key is a bucket of noise.
+
+BACKUP_KEY_FILE names the passphrase of the objects written before the migration to age. It is only
+read when one of those is fetched, and it can be retired once retention has aged them out.
 EOF
 }
 
@@ -120,35 +141,10 @@ if [ -z "$BACKUP_REMOTE" ]; then
     exit 2
 fi
 
-# The purge is the one mode that opens nothing: it lists what is readable at the destination and
-# deletes it. Requiring the passphrase there would leave the plaintext in place on exactly the host
-# that has lost its key, which is the one that has most to remove.
-if [ "$MODE" != purge-plaintext ] && [ "$MODE" != list ]; then
-    if [ ! -s "$BACKUP_KEY_FILE" ]; then
-        # Uploading unencrypted instead would be the failure nobody notices: the schedule stays green
-        # and the bucket holds every return in the database. There is no fallback.
-        say "backup: BACKUP_KEY_FILE ($BACKUP_KEY_FILE) is missing or empty. Dumps are customer data and"
-        say "        are encrypted before they leave; create the passphrase beside rclone.conf:"
-        say "        openssl rand -base64 48 > $BACKUP_KEY_FILE"
-        exit 2
-    fi
-
-    # tr -d '\r': a key file written by an editor on Windows carries a CR, and a passphrase that
-    # silently ends in one is a different key from the same sixteen characters typed on the host.
-    backup_passphrase=$(head -n 1 "$BACKUP_KEY_FILE" | tr -d '\r')
-
-    if [ "${#backup_passphrase}" -lt 16 ]; then
-        # The object is readable by anyone the destination admits, so a guessable key is no encryption.
-        say "backup: the passphrase in $BACKUP_KEY_FILE is shorter than 16 characters; refusing to use it"
-        exit 2
-    fi
-
-    command -v openssl >/dev/null 2>&1 || { say "backup: openssl is required to encrypt the dump"; exit 1; }
-fi
-
-command -v docker >/dev/null 2>&1 || { say "backup: docker is required"; exit 1; }
-
-# Docker needs a Windows path for a bind mount under Git Bash; a Linux host has nothing to convert.
+# A path as a host binary sees it. Docker needs a Windows path for a bind mount under Git Bash, and so
+# does `age`, which is a native executable there and cannot open '/c/...'; a Linux host has nothing to
+# convert, so this is the path itself. Used at every point a path is handed to age, age-keygen or
+# openssl, and never for rclone, whose paths are the container's.
 winpath() {
     if command -v cygpath >/dev/null 2>&1; then
         cygpath -w "$1"
@@ -156,6 +152,34 @@ winpath() {
         printf '%s' "$1"
     fi
 }
+
+# The purge is the one mode that opens nothing: it lists what is readable at the destination and
+# deletes it. Requiring the passphrase there would leave the plaintext in place on exactly the host
+# that has lost its key, which is the one that has most to remove.
+if [ "$MODE" != purge-plaintext ] && [ "$MODE" != list ]; then
+    if [ ! -s "$BACKUP_AGE_IDENTITY" ]; then
+        # Uploading unencrypted instead would be the failure nobody notices: the schedule stays green
+        # and the bucket holds every return in the database. There is no fallback.
+        say "backup: BACKUP_AGE_IDENTITY ($BACKUP_AGE_IDENTITY) is missing or empty. Dumps are customer"
+        say "        data and are encrypted before they leave; create an X25519 identity beside"
+        say "        rclone.conf and keep a copy of it somewhere other than the destination:"
+        say "        age-keygen -o $BACKUP_AGE_IDENTITY && chmod 600 $BACKUP_AGE_IDENTITY"
+        exit 2
+    fi
+
+    command -v age >/dev/null 2>&1 || { say "backup: age is required to encrypt and decrypt the dump"; exit 1; }
+    command -v age-keygen >/dev/null 2>&1 || { say "backup: age-keygen is required to read $BACKUP_AGE_IDENTITY"; exit 1; }
+
+    # The recipient is derived from the identity rather than kept in a second file: a recipient file
+    # that drifted from the key beside it is a dump nobody can open, and it would fail at the restore
+    # rather than here. An identity age cannot parse fails now, at 01:20, and not after the upload.
+    if ! age_recipient=$(age-keygen -y "$(winpath "$BACKUP_AGE_IDENTITY")" 2>/dev/null) || [ -z "$age_recipient" ]; then
+        say "backup: $BACKUP_AGE_IDENTITY does not hold an age identity; nothing was done"
+        exit 2
+    fi
+fi
+
+command -v docker >/dev/null 2>&1 || { say "backup: docker is required"; exit 1; }
 
 # The remote as rclone sees it inside its container. `local:` is mounted under a fixed path, because
 # the container cannot see this host's filesystem otherwise -- that is the mounted-disk and NFS case,
@@ -220,20 +244,54 @@ db() {
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T postgres "$@"
 }
 
-# The cipher. AES-256-CBC with PBKDF2 key derivation (200k iterations) and a random salt per run is
-# what openssl gives without adding an image; the pinned rclone image carries no cipher, and the
-# pack's PostgreSQL image is there to dump, not to be a toolbox.
+# The cipher. Everything this script writes is age v1, encrypted to the recipient of the identity
+# beside rclone.conf.
 #
-# The passphrase reaches openssl in an environment variable rather than on its command line, where
-# `ps` would show it to every account on the host.
+# The identity is the recipient's other half, so the key never has to be typed, passed in an
+# environment variable, or written into an argument list where `ps` would show it. age does not
+# encrypt symmetrically to a passphrase without asking for one interactively (its `-p` mode is
+# designed not to be scriptable), which is the reason the key is a file rather than a string.
 encrypt() {
-    BACKUP_PASSPHRASE=$backup_passphrase openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
-        -pass env:BACKUP_PASSPHRASE
+    age --encrypt --recipient "$age_recipient"
 }
 
+# Objects written before this script moved to age are AES-256-CBC with PBKDF2 and a per-run salt, and
+# they stay restorable until retention deletes the last of them: no copy at the destination can be
+# older than BACKUP_KEEP_DAYS, so the branch has an end date rather than an owner.
+#
+# The two formats are told apart by content, not by name -- both are *.dump.enc, and an operator
+# fetching last week's copy should not have to know which one it is. `openssl enc -salt` writes the
+# eight literal bytes "Salted__" first; age writes its own header there instead.
 decrypt() {
-    BACKUP_PASSPHRASE=$backup_passphrase openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
-        -pass env:BACKUP_PASSPHRASE
+    local source=$1
+
+    if [ "$(head -c 8 "$source")" != 'Salted__' ]; then
+        age --decrypt --identity "$(winpath "$BACKUP_AGE_IDENTITY")" "$(winpath "$source")"
+        return
+    fi
+
+    if [ ! -s "$BACKUP_KEY_FILE" ]; then
+        # Refusing beats guessing. The object is a legacy one, and the identity that opens everything
+        # written since does not open it -- saying so is the difference between a restore that is
+        # missing one file and a restore that quietly produces garbage.
+        say "backup: $source was written before the migration to age, and opening it needs the"
+        say "        passphrase in $BACKUP_KEY_FILE, which is missing or empty. Nothing was staged."
+        exit 1
+    fi
+
+    command -v openssl >/dev/null 2>&1 || {
+        say "backup: openssl is required to open $source, written before the migration to age"
+        exit 1
+    }
+
+    # tr -d '\r': a passphrase file written by an editor on Windows carries a CR, and a passphrase
+    # that silently ends in one is a different key from the same characters typed on the host.
+    legacy_passphrase=$(head -n 1 "$BACKUP_KEY_FILE" | tr -d '\r')
+
+    # In the environment rather than on the command line, where `ps` would show it to every account
+    # on the host.
+    BACKUP_PASSPHRASE=$legacy_passphrase openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+        -pass env:BACKUP_PASSPHRASE -in "$(winpath "$source")"
 }
 
 # The umask above applies when this creates the directory; a staging directory that already existed
@@ -302,7 +360,7 @@ case "$MODE" in
             exit 1
         fi
 
-        say "backup: dumping into ${name%.enc} through docker compose exec postgres in $COMPOSE_FILE"
+        say "backup: dumping into ${name%.enc} through docker compose exec postgres in $COMPOSE_FILE, encrypting to $age_recipient"
 
         # -Fc is the format the operator instructions use (compressed, selective restore,
         # pg_restore-able), and the same format the staged copy is checked in.
@@ -340,7 +398,7 @@ case "$MODE" in
         # What leaves has to be what the key opens, and it has to still be a dump once opened. A
         # ciphertext that stopped being restorable is found here, at 01:20, rather than on the night
         # somebody needs it.
-        if ! decrypt <"$file" | db pg_restore --list >/dev/null 2>&1; then
+        if ! decrypt "$file" | db pg_restore --list >/dev/null 2>&1; then
             rm -f "$file"
             say "backup: $name does not decrypt back to a readable dump; refusing to publish it"
             exit 1
@@ -377,15 +435,16 @@ case "$MODE" in
             exit 1
         fi
 
-        # The object is ciphertext; a restore needs the dump inside it. openssl fails on a wrong
-        # passphrase and on a damaged file, so this is the key doing the work rather than a promise
-        # about it.
+        # The object is ciphertext; a restore needs the dump inside it. age fails on a wrong identity
+        # and on a damaged file -- its payload is authenticated, so this is the key doing the work
+        # rather than a promise about it -- and for an object from before the migration, openssl does
+        # the same job with the passphrase.
         plain=${latest%.enc}
 
-        if ! decrypt <"$BACKUP_STAGING/$latest" >"$BACKUP_STAGING/$plain"; then
+        if ! decrypt "$BACKUP_STAGING/$latest" >"$BACKUP_STAGING/$plain"; then
             rm -f "$BACKUP_STAGING/$plain"
-            say "backup: $latest did not decrypt with the passphrase in $BACKUP_KEY_FILE (wrong key,"
-            say "        or the object is damaged); nothing was staged"
+            say "backup: $latest did not open with $BACKUP_AGE_IDENTITY (wrong identity, or the object"
+            say "        is damaged or was tampered with); nothing was staged"
             exit 1
         fi
 

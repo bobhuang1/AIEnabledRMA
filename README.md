@@ -317,23 +317,36 @@ route to the database, and the restore drill takes it too: the drill starts its 
 as a `postgres` service, so the command the 01:20 timer runs is the command the gate proves, and
 a service renamed on either side fails a test rather than a night's backup.
 
-The destination holds ciphertext. Every dump is encrypted -- AES-256, PBKDF2 at 200,000
-iterations, a fresh salt per run -- before it is uploaded, so a bucket, a backup host or a mounted
-disk is unreadable to the people its own access policy admits, who are not the people allowed to
-read this database. `fetch` decrypts the newest object back into `BACKUP_STAGING`, so a restore
-gets a dump rather than having to know how it was wrapped. The key is `BACKUP_KEY_FILE`, default
-`$RCLONE_CONFIG_DIR/backup.passphrase` -- a file beside `rclone.conf`, never a value in
-`prod.env`, which is copied into every container:
+The destination holds ciphertext. Every dump is encrypted with [age](https://age-encryption.org/v1)
+to an X25519 identity before it is uploaded, so a bucket, a backup host or a mounted disk is
+unreadable to the people its own access policy admits, who are not the people allowed to read this
+database. age authenticates what it writes: a wrong key, a damaged object or one altered at the
+destination fails to open instead of decrypting to something shaped like a dump, and the header names
+the format version -- which is what a file whose job is to still open in ten years needs. `fetch`
+opens the newest object back into `BACKUP_STAGING`, so a restore gets a dump rather than having to
+know how it was wrapped.
+
+The identity is `BACKUP_AGE_IDENTITY`, default `$RCLONE_CONFIG_DIR/backup.age.key` -- beside
+`rclone.conf`, never in `prod.env`, which is copied into every container. `age` is packaged for
+Debian and Ubuntu; nothing else on the host is needed.
 
 ```bash
-openssl rand -base64 48 > /etc/aienabledrma/backup.passphrase
-chmod 600 /etc/aienabledrma/backup.passphrase
+sudo apt install age
+age-keygen -o /etc/aienabledrma/backup.age.key
+chmod 600 /etc/aienabledrma/backup.age.key
 ```
 
-Keep a copy of that file somewhere other than the destination. A dump without its passphrase is a
-bucket of noise, and losing the key loses every copy at once. The script refuses to run without
-it, and refuses a passphrase shorter than 16 characters, because a guessable key is the same as
-none.
+Keep a copy of that file somewhere other than the destination. A dump without its identity is a
+bucket of noise, and losing the key loses every copy at once. The script refuses to run without it,
+and it derives the recipient from the identity on every run rather than keeping a second file that
+can drift from the key beside it.
+
+Copies written before the move to age are AES-256-CBC, and they stay restorable until retention
+deletes the last of them. The two formats are told apart by the object's first bytes rather than its
+name, so fetching a fortnight-old copy works without an operator having to know which one it is. That
+branch reads `BACKUP_KEY_FILE`, default `$RCLONE_CONFIG_DIR/backup.passphrase`, and nothing else
+does: it can be removed once `BACKUP_KEEP_DAYS` has passed since the migration, and a host that has
+already lost it can still write and fetch everything written since.
 
 Two checks run before the file leaves. It must be larger than a kilobyte (an empty dump uploads
 happily and is found at the restore), and `pg_restore --list` must read it (a file the restore tool
@@ -349,8 +362,8 @@ of staying readable at the destination for ever; `fetch` never returns one.
 Aging out is not soon enough for a copy that is readable today. `purge-plaintext` lists the `*.dump`
 objects at the destination, prints them, deletes exactly those, and asks the destination again to
 prove they are gone; no `*.dump.enc` matches its pattern, so the backups stay. It needs no key — it
-deletes rather than opens — which is what lets a host that has lost its passphrase still take the
-plaintext off. The restore drill plants such a copy and fails unless the purge leaves no readable
+deletes rather than opens — which is what lets a host that has lost its key still take the plaintext
+off. The restore drill plants such a copy and fails unless the purge leaves no readable
 dump behind.
 
 `deploy/rma-backup.service` runs one backup and `deploy/rma-backup.timer` fires it nightly at 01:20,

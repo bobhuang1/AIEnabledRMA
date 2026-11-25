@@ -30,6 +30,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      # The cipher is age, and the image on the runner does not carry it. Without this the drill
+      # stops at "age is required" -- a red run about the runner rather than about the backup.
+      - name: Install age
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq age
+
       # The command the runbook documents, not the script directly: a schedule that checks a different
       # entry point can stay green while the command a person types is broken.
       - name: Dump a seeded database, restore it into a scratch one, migrate it and query it
