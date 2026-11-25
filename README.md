@@ -362,9 +362,14 @@ of staying readable at the destination for ever; `fetch` never returns one.
 Aging out is not soon enough for a copy that is readable today. `purge-plaintext` lists the `*.dump`
 objects at the destination, prints them, deletes exactly those, and asks the destination again to
 prove they are gone; no `*.dump.enc` matches its pattern, so the backups stay. It needs no key — it
-deletes rather than opens — which is what lets a host that has lost its key still take the plaintext
-off. The restore drill plants such a copy and fails unless the purge leaves no readable
+deletes rather than opens — which is what lets a host that has lost its key still take the
+plaintext off. The restore drill plants such a copy and fails unless the purge leaves no readable
 dump behind.
+
+Because it is the mode that destroys something at the destination, it can be read first:
+`purge-plaintext --dry-run` prints the same list and stops, saying that nothing was deleted. The
+flag is accepted there and nowhere else — a `backup` that silently accepted it would look like a
+rehearsal and behave like every other night.
 
 `deploy/rma-backup.service` runs one backup and `deploy/rma-backup.timer` fires it nightly at 01:20,
 before the reconciliation sweep, with `Persistent=true` so a night the host was down is not skipped.

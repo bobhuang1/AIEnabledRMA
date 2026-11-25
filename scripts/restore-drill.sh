@@ -426,6 +426,22 @@ fi
 LEGACY=rma-20200102T000000Z.dump
 printf 'PGDMP a dump uploaded before the encryption existed\n' >"$OFFHOST/$LEGACY"
 
+# Before it deletes: the one mode that destroys data has to be readable first. The list it prints
+# already names the objects, so the dry run is the same list with the delete left out -- and the copy
+# has to still be at the destination afterwards, or "dry run" is a name for a purge.
+if ! backup purge-plaintext --dry-run >"$WORK/purge-dry.txt" 2>&1; then
+    fail "the purge can be read before it deletes" "scripts/backup.sh purge-plaintext --dry-run failed:"
+    sed 's/^/          /' "$WORK/purge-dry.txt"
+else
+    if grep -q "$LEGACY" "$WORK/purge-dry.txt" && grep -q 'nothing was deleted' "$WORK/purge-dry.txt" && [ -e "$OFFHOST/$LEGACY" ]; then
+        pass "purge-plaintext --dry-run names $LEGACY and leaves it at the destination"
+    else
+        fail "the dry run prints the list and deletes nothing" \
+            "$LEGACY was not named, or the object is gone after --dry-run, or the run did not say it deleted nothing:"
+        sed 's/^/          /' "$WORK/purge-dry.txt"
+    fi
+fi
+
 if ! backup purge-plaintext >"$WORK/purge.txt" 2>&1; then
     fail "the purge removes the unencrypted copy" "scripts/backup.sh purge-plaintext failed:"
     sed 's/^/          /' "$WORK/purge.txt"

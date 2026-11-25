@@ -28,11 +28,13 @@
 #   backup   dump, verify, encrypt, upload, prune (default)
 #   fetch    copy the newest dump back from BACKUP_REMOTE, decrypt it, print its name
 #   list     print the object names at BACKUP_REMOTE, oldest first
-#   purge-plaintext
+#   purge-plaintext [--dry-run]
 #            list the unencrypted *.dump objects an earlier version left at BACKUP_REMOTE and delete
 #            them. Retention would age them out eventually; this removes them now, and only them. It
 #            needs no key, because it deletes rather than opens: a host that has lost its passphrase
-#            still has to be able to take the plaintext copies off the destination.
+#            still has to be able to take the plaintext copies off the destination. With --dry-run
+#            it prints the same list and stops there, so the one mode that destroys data can be read
+#            before it is trusted.
 #
 # Environment:
 #   BACKUP_REMOTE       required. An rclone destination outside this host:
@@ -72,7 +74,28 @@ cd "$REPO_ROOT"
 # 077 keeps both from being readable by every account on the host.
 umask 077
 
+# Everything this script says about itself goes to stderr, so a mode's stdout stays the answer and
+# not a log: `fetch` prints the name it restored and `list` prints names. Declared before the
+# argument parsing, because refusing a bad argument is the first thing it is used for.
+say() { printf '%s\n' "$*" >&2; }
+
 MODE=${1:-backup}
+DRY_RUN=no
+
+if [ "${2:-}" = --dry-run ]; then
+    DRY_RUN=yes
+elif [ -n "${2:-}" ]; then
+    say "backup: unknown argument '${2}'. The only flag is --dry-run."
+    exit 2
+fi
+
+if [ "$DRY_RUN" = yes ] && [ "$MODE" != purge-plaintext ]; then
+    # Refused rather than ignored. The one mode this belongs to is the one that deletes at the
+    # destination; a flag that was quietly accepted everywhere would let an operator believe a
+    # scheduled backup had been rehearsed when the command ran exactly as usual.
+    say "backup: --dry-run applies to purge-plaintext, the only mode that deletes at the destination."
+    exit 2
+fi
 
 BACKUP_REMOTE=${BACKUP_REMOTE:-}
 BACKUP_KEEP_DAYS=${BACKUP_KEEP_DAYS:-14}
@@ -91,11 +114,9 @@ BACKUP_AGE_IDENTITY=${BACKUP_AGE_IDENTITY:-$RCLONE_CONFIG_DIR/backup.age.key}
 # nightly run -- only the fetch of a copy older than the migration.
 BACKUP_KEY_FILE=${BACKUP_KEY_FILE:-$RCLONE_CONFIG_DIR/backup.passphrase}
 
-say() { printf '%s\n' "$*" >&2; }
-
 usage() {
     cat >&2 <<'EOF'
-usage: scripts/backup.sh [backup|fetch|list|purge-plaintext]
+usage: scripts/backup.sh [backup|fetch|list|purge-plaintext] [--dry-run]
 
   backup  dump the database, encrypt the dump, copy it to BACKUP_REMOTE and prune the window
   fetch   copy the newest object back from BACKUP_REMOTE, decrypt it, and print its name
@@ -103,6 +124,10 @@ usage: scripts/backup.sh [backup|fetch|list|purge-plaintext]
   purge-plaintext
           list the unencrypted *.dump objects an earlier version left at BACKUP_REMOTE and delete
           them, leaving every *.dump.enc alone
+
+--dry-run prints what purge-plaintext would delete and deletes nothing. It is accepted there and
+nowhere else: nothing else this script runs changes what the destination holds without being asked
+to by the schedule.
 
 BACKUP_REMOTE must name an rclone destination outside this host, for example
 s3:rma-prod-backups/postgres, sftp:backup.example.com:/srv/rma, or local:/mnt/offsite/rma.
@@ -327,6 +352,15 @@ case "$MODE" in
         plaintext_count=$(printf '%s\n' "$plaintext" | wc -l | tr -d ' ')
         say "backup: $plaintext_count unencrypted *.dump object(s) at $BACKUP_REMOTE:"
         printf '%s\n' "$plaintext" | sed 's/^/        /' >&2
+
+        if [ "$DRY_RUN" = yes ]; then
+            # The list above is the whole answer. Nothing below runs -- not the delete, and not the
+            # check that asks the destination whether the delete worked, which here would report a
+            # purge of objects that are all still there.
+            say "backup: dry run: nothing was deleted. $plaintext_count object(s) would go; run the"
+            say "        same command without --dry-run to remove them."
+            exit 0
+        fi
 
         rclone delete "$REMOTE" --include "*.dump"
 

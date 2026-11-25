@@ -291,6 +291,35 @@ public sealed class BackupDurabilityTests
         Assert.Contains("if [ \"$MODE\" != purge-plaintext ] && [ \"$MODE\" != list ]; then", script, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The purge is the one mode that destroys something at the destination, and the only way to find
+    /// out what it would take was to let it run: the list it prints was printed on the way to a
+    /// delete. A dry run prints the same list and stops, which is the difference between being able to
+    /// ask and having to trust.
+    /// </summary>
+    [Fact]
+    public void The_purge_can_be_read_before_it_deletes()
+    {
+        var script = Script().ReplaceLineEndings("\n");
+
+        // Parsed, and refused everywhere else: a flag quietly accepted for `backup` would let an
+        // operator believe a rehearsal had happened when the command ran exactly as usual.
+        Assert.Contains("if [ \"${2:-}\" = --dry-run ]; then", script, StringComparison.Ordinal);
+        Assert.Contains("--dry-run applies to purge-plaintext", script, StringComparison.Ordinal);
+        Assert.Contains("unknown argument", script, StringComparison.Ordinal);
+
+        // It says what it did not do, so a run of a script cannot mistake a rehearsal for a purge.
+        Assert.Contains("dry run: nothing was deleted.", script, StringComparison.Ordinal);
+
+        // And the delete is below the early exit: a dry run cannot reach it, and neither can the
+        // re-check that would otherwise report a purge of objects that are all still there.
+        var dryRun = script.IndexOf("if [ \"$DRY_RUN\" = yes ]; then", StringComparison.Ordinal);
+        var delete = script.IndexOf("rclone delete \"$REMOTE\" --include \"*.dump\"\n", StringComparison.Ordinal);
+
+        Assert.True(dryRun > 0, "the purge has no --dry-run branch");
+        Assert.True(delete > dryRun, "the purge deletes before it checks for --dry-run");
+    }
+
     [Fact]
     public void The_staging_copy_is_private_and_one_run_cannot_overwrite_another()
     {
