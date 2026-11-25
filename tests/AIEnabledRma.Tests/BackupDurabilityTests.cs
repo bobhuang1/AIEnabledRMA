@@ -392,9 +392,11 @@ public sealed class BackupDurabilityTests
         Assert.True(migrated.Success, "scripts/backup.sh no longer records the day the dump format moved to age");
         Assert.True(retires.Success, "scripts/backup.sh no longer records the day the old format leaves the window");
 
-        // The date is the migration plus the window, not a number somebody picked: an object written
-        // on the last night before the migration stays inside a BACKUP_KEEP_DAYS window for that long,
-        // and retiring a day early is a restore that cannot open the copy it needs.
+        // The date is the migration plus the window and one more day, not a number somebody picked:
+        // an object written on the last night before the migration stays inside a BACKUP_KEEP_DAYS
+        // window for that long, and the window runs from the hour it was written. At 23:00 of the
+        // fourteenth day that copy is still there, so retiring that morning is a restore that cannot
+        // open the copy it needs; the day after is the first day with nothing left to open.
         var window = Regex.Match(script, @"BACKUP_KEEP_DAYS=\$\{BACKUP_KEEP_DAYS:-(\d+)\}");
 
         Assert.True(window.Success, "scripts/backup.sh no longer defaults BACKUP_KEEP_DAYS");
@@ -402,7 +404,7 @@ public sealed class BackupDurabilityTests
         var migration = DateOnly.ParseExact(migrated.Groups[1].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture);
         var retirement = DateOnly.ParseExact(retires.Groups[1].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-        Assert.Equal(migration.AddDays(int.Parse(window.Groups[1].Value, CultureInfo.InvariantCulture)), retirement);
+        Assert.Equal(migration.AddDays(int.Parse(window.Groups[1].Value, CultureInfo.InvariantCulture) + 1), retirement);
 
         // The runbook's step is dated with that same day, names the file to delete and the code to
         // take out with it, and says why not sooner.
@@ -431,7 +433,9 @@ public sealed class BackupDurabilityTests
         // And it does something on both sides of the date: while the window is open the old-format
         // object is written and has to open, and from the day it closes the branch and the passphrase
         // are required gone instead.
-        var decision = drill.IndexOf("elif [ \"${TODAY//-/}\" -gt \"${LEGACY_RETIRES//-/}\" ]; then", StringComparison.Ordinal);
+        // On the recorded day itself, not the day after: the date is the first day with no copy left,
+        // so a strict comparison would keep the branch enforced a day past the day the runbook names.
+        var decision = drill.IndexOf("elif [ \"${TODAY//-/}\" -ge \"${LEGACY_RETIRES//-/}\" ]; then", StringComparison.Ordinal);
         var closed = drill.IndexOf("if grep -q 'openssl enc -d -aes-256-cbc'", StringComparison.Ordinal);
         var open = drill.IndexOf("elif [ \"$legacy_window\" = open ]; then", StringComparison.Ordinal);
         var planted = drill.IndexOf("LEGACY_ENC=rma-20991231T235959Z.dump.enc", StringComparison.Ordinal);

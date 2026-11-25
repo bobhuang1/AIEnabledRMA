@@ -53,7 +53,7 @@
 #                       $RCLONE_CONFIG_DIR/backup.passphrase. Read only when one of those is opened,
 #                       so the nightly unit does not depend on a file that is being retired. Retention
 #                       deletes the last of them on BACKUP_LEGACY_RETIRES, below; README dates the step
-#                       that removes this branch and the file once that day has passed.
+#                       that removes this branch and the file once that day has arrived.
 #   RCLONE_IMAGE        default the pinned rclone image below
 #
 # Requirements: docker, and `age` with `age-keygen` for the cipher (Debian and Ubuntu package them
@@ -122,6 +122,13 @@ BACKUP_KEY_FILE=${BACKUP_KEY_FILE:-$RCLONE_CONFIG_DIR/backup.passphrase}
 # in the old format -- written on or before LEGACY_MIGRATED -- goes after that many days, and from
 # BACKUP_LEGACY_RETIRES on there is nothing left at the destination that the legacy branch could open.
 #
+# That date is the migration plus the window plus one more day, because the window is counted from the
+# moment a copy was written rather than from midnight. The last object in the old format was written on
+# the night of the migration, and on the fourteenth day afterwards it is still inside the window until
+# that same hour -- 23:00, for a copy taken at 23:00. That fourteenth day is the last one on which a
+# restore can still need the branch, so retiring on it is a restore that fails for a copy the
+# destination still holds; the day after it is the first day with nothing left to open.
+#
 # Nothing below computes with the dates, and that is deliberate: which format an object is in comes
 # from its own header, so a copy fetched from an old backup host by hand still opens whatever the
 # calendar says. What the dates are for is the deletion. README's retirement step is dated with them
@@ -130,7 +137,7 @@ BACKUP_KEY_FILE=${BACKUP_KEY_FILE:-$RCLONE_CONFIG_DIR/backup.passphrase}
 # variable and the passphrase file are gone. A window with an end date is the difference between a
 # compatibility branch and a second cipher nobody dares delete.
 LEGACY_MIGRATED=2026-11-24
-BACKUP_LEGACY_RETIRES=2026-12-08
+BACKUP_LEGACY_RETIRES=2026-12-09
 
 usage() {
     cat >&2 <<'EOF'
@@ -155,8 +162,10 @@ uploaded: the destination holds ciphertext, and a dump with no key is a bucket o
 
 BACKUP_KEY_FILE names the passphrase of the objects written before the migration to age. It is only
 read when one of those is fetched, and retention deletes the last of them on BACKUP_LEGACY_RETIRES --
-the migration date plus BACKUP_KEEP_DAYS, recorded at the top of this script. Once that day has passed,
-delete this branch, BACKUP_KEY_FILE and the passphrase file; README has the dated step.
+the migration date plus BACKUP_KEEP_DAYS and a day, recorded at the top of this script. The extra day
+is the hour the last old object was written: at 23:00 of the fourteenth day it is still inside the
+window, and only the day after it is provably gone. Once that day has arrived, delete this branch,
+BACKUP_KEY_FILE and the passphrase file; README has the dated step.
 EOF
 }
 

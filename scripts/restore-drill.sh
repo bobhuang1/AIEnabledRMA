@@ -27,8 +27,8 @@
 #      identity that opens everything since, and requires it to open: the retention window contains a
 #      fortnight of copies in the old format, and a restore in that fortnight is the one that finds
 #      out whether the legacy branch still works. That window has an end, recorded in
-#      scripts/backup.sh as BACKUP_LEGACY_RETIRES; once the date has passed there is no such copy left
-#      to write, and this step requires the branch and the passphrase instead.
+#      scripts/backup.sh as BACKUP_LEGACY_RETIRES; from that day there is no such copy left to write,
+#      and this step requires the branch and the passphrase instead.
 #
 # Usage:
 #   scripts/restore-drill.sh
@@ -306,11 +306,17 @@ NO_KEY="$WORK/no-such-passphrase"
 LEGACY_RETIRES=$(sed -n 's/^BACKUP_LEGACY_RETIRES=//p' "$REPO_ROOT/scripts/backup.sh")
 TODAY=$(date -u +%Y-%m-%d)
 
+# The recorded date is the first day the destination cannot be holding a copy in the old format:
+# retention counts its window from the hour of writing, so the last such copy is still there on the
+# day before it. That makes the date itself the day the branch is required gone, and the comparison
+# `-ge` rather than `-gt`. A strict comparison would enforce the runbook a day after the runbook tells
+# an operator to delete, and the day between those two is a branch kept past its last object -- the
+# branch this whole step exists to take off the host.
 if [ -z "$LEGACY_RETIRES" ]; then
     fail "the date the old format's window closes is recorded" \
         "scripts/backup.sh does not carry BACKUP_LEGACY_RETIRES, so nothing says when the branch below is due to go"
     legacy_window=unknown
-elif [ "${TODAY//-/}" -gt "${LEGACY_RETIRES//-/}" ]; then
+elif [ "${TODAY//-/}" -ge "${LEGACY_RETIRES//-/}" ]; then
     legacy_window=closed
 else
     legacy_window=open

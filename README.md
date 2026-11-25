@@ -345,8 +345,9 @@ Copies written before the move to age are AES-256-CBC, and they stay restorable 
 deletes the last of them. The two formats are told apart by the object's first bytes rather than its
 name, so fetching a fortnight-old copy works without an operator having to know which one it is. That
 branch reads `BACKUP_KEY_FILE`, default `$RCLONE_CONFIG_DIR/backup.passphrase`, and nothing else
-does: it can go on `BACKUP_LEGACY_RETIRES`, the migration date plus `BACKUP_KEEP_DAYS`, and the dated
-step below says what to remove with it. A host that has already lost it can still write and fetch
+does: it can go on `BACKUP_LEGACY_RETIRES`, the migration date plus `BACKUP_KEEP_DAYS` and a day that
+covers the hour the last copy was written, and the dated step below says what to remove with it. A
+host that has already lost it can still write and fetch
 everything written since.
 
 Two checks run before the file leaves. It must be larger than a kilobyte (an empty dump uploads
@@ -390,15 +391,19 @@ A nightly run that cannot reach its destination exits non-zero, so systemd repor
 the morning it happens. That is deliberate: a schedule that answers 0 while uploading nothing is the
 failure this job exists to make impossible.
 
-### Retiring the objects written before the migration — 2026-12-08
+### Retiring the objects written before the migration — 2026-12-09
 
 The `openssl` branch in `decrypt()` and the passphrase it reads exist for one thing: the dumps
 written before the move to age. Retention deletes the last of those once it is `BACKUP_KEEP_DAYS`
-old, so the branch stops protecting anything on **2026-12-08** — the migration on 2026-11-24 plus the
-default fourteen days. `scripts/backup.sh` records both dates, `LEGACY_MIGRATED` and
-`BACKUP_LEGACY_RETIRES`, and the restore drill reads the second from there. What is left after that
-day is a cipher on a production host with no object to open, and a passphrase file that is a secret
-with no reader.
+old, so the branch stops protecting anything on **2026-12-09** — the migration on 2026-11-24 plus the
+default fourteen days, and one more day. The window is counted from the hour a copy was written, not
+from midnight: the last object in the old format was taken on the night of the migration, and on the
+fourteenth day after it that object is still inside the window until the same hour — 23:00, for a
+copy written at 23:00. So 2026-12-08 is the last day a restore can still need the branch, and
+2026-12-09 is the first day the destination provably holds nothing for it to open.
+`scripts/backup.sh` records both dates, `LEGACY_MIGRATED` and `BACKUP_LEGACY_RETIRES`, and the restore
+drill reads the second from there. What is left after that day is a cipher on a production host with
+no object to open, and a passphrase file that is a secret with no reader.
 
 On or after that date, on the host that holds `rclone.conf`:
 
@@ -426,17 +431,21 @@ then remove its reader, rather than leaving both:
 
 `scripts/verify-all.sh restore` is the gate on the date, and it is why the date lives in the script
 rather than in a note: while the window is open the drill opens a legacy object and requires it to
-match the dump it was written from, and from 2026-12-08 it fails until the branch and
-`BACKUP_KEY_FILE` are gone, naming this section. A drill that went on proving the branch after its
-copies could not exist is how a retired cipher and a passphrase outlive the data they were for.
+match the dump it was written from, and from 2026-12-09 it fails until the branch and
+`BACKUP_KEY_FILE` are gone, naming this section. On that day and not the day after it: the date
+recorded is the first day with nothing left that the branch could open, so a drill that waited one
+more day would enforce a step a day later than the step says, and the day in between is a branch
+kept past the last object it was for. A drill that went on proving the branch after its copies could
+not exist is how a retired cipher and a passphrase outlive the data they were for.
 `scripts/verify-all.sh suite` is the gate on this list: the same test reads the dates, this section
 and the drill together, so a removal done by halves fails there rather than going half-done. That
 is why the bullets above are one change and not a series of them.
 
 Do not do it early: an object written on the last night before the migration stays restorable for a
-full window afterwards, and the restore that lands the day before this date needs the branch. A
-deployment that adopted age later than 2026-11-24 moves both dates with it — its first age dump plus
-`BACKUP_KEEP_DAYS` — and changes them here and in `scripts/backup.sh` together.
+full window afterwards, and the restore that lands on 2026-12-08 needs the branch. A deployment that
+adopted age later than 2026-11-24 moves both dates with it — its first age dump plus
+`BACKUP_KEEP_DAYS`, plus the day that covers the hour it was written — and changes them here and in
+`scripts/backup.sh` together.
 
 ### Restore drill
 
