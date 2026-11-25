@@ -26,7 +26,9 @@
 #   9. writes an object in the format the script used before the migration to age, fetches it with the
 #      identity that opens everything since, and requires it to open: the retention window contains a
 #      fortnight of copies in the old format, and a restore in that fortnight is the one that finds
-#      out whether the legacy branch still works.
+#      out whether the legacy branch still works. That window has an end, recorded in
+#      scripts/backup.sh as BACKUP_LEGACY_RETIRES; once the date has passed there is no such copy left
+#      to write, and this step requires the branch and the passphrase instead.
 #
 # Usage:
 #   scripts/restore-drill.sh
@@ -297,6 +299,23 @@ WRONG_IDENTITY_FILE=$(winpath "$WORK/wrong.age.key")
 LEGACY_PASSPHRASE_FILE="$WORK/backup.passphrase"
 NO_KEY="$WORK/no-such-passphrase"
 
+# When the objects written before the migration leave the retention window. Read from the script that
+# holds the branch rather than repeated here: README dates its retirement step with the same value, and
+# a drill that kept its own copy of the date would either go on proving a branch whose copies cannot
+# exist any more, or start requiring a deletion that is not due yet.
+LEGACY_RETIRES=$(sed -n 's/^BACKUP_LEGACY_RETIRES=//p' "$REPO_ROOT/scripts/backup.sh")
+TODAY=$(date -u +%Y-%m-%d)
+
+if [ -z "$LEGACY_RETIRES" ]; then
+    fail "the date the old format's window closes is recorded" \
+        "scripts/backup.sh does not carry BACKUP_LEGACY_RETIRES, so nothing says when the branch below is due to go"
+    legacy_window=unknown
+elif [ "${TODAY//-/}" -gt "${LEGACY_RETIRES//-/}" ]; then
+    legacy_window=closed
+else
+    legacy_window=open
+fi
+
 mkdir -p "$OFFHOST"
 
 # The identity lives beside rclone.conf the way the deployment keeps it, and it is what the
@@ -310,8 +329,11 @@ if ! age-keygen -o "$IDENTITY_FILE" >/dev/null 2>&1 || ! age-keygen -o "$WRONG_I
 fi
 
 # Only the object written in the old format below needs it. The nightly unit does not: the last check
-# in this drill is that a backup still runs with the identity alone.
-printf '%s\n' 'restore-drill-passphrase-not-a-real-key' >"$LEGACY_PASSPHRASE_FILE"
+# in this drill is that a backup still runs with the identity alone. Once the window has closed there
+# is no such object, so the drill does not plant the file it would have needed.
+if [ "$legacy_window" = open ]; then
+    printf '%s\n' 'restore-drill-passphrase-not-a-real-key' >"$LEGACY_PASSPHRASE_FILE"
+fi
 
 run_backup() {
     local key_file=$1
@@ -578,44 +600,69 @@ fi
 # is the one that has to open one of them. So the drill writes an object in the old format, names it
 # so `fetch` chooses it, and compares what comes back with the dump it was encrypted from -- "it
 # returned something" is not the claim; "it returned that dump" is.
-LEGACY_ENC=rma-20991231T235959Z.dump.enc
-
-if ! openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
-    -pass file:"$(winpath "$LEGACY_PASSPHRASE_FILE")" <"$STAGING/$fetched" >"$OFFHOST/$LEGACY_ENC"; then
-    fail "an object in the old format can be written" "openssl would not write $LEGACY_ENC"
-else
-    if ! legacy_fetched=$(backup fetch 2>"$WORK/legacy-fetch.txt"); then
-        fail "fetch opens an object written before the migration" \
-            "scripts/backup.sh fetch failed on $LEGACY_ENC:"
-        tail -8 "$WORK/legacy-fetch.txt" | sed 's/^/          /'
-    elif [ "$legacy_fetched" = "${LEGACY_ENC%.enc}" ] && cmp -s "$STAGING/$legacy_fetched" "$STAGING/$fetched"; then
-        pass "the legacy branch opened $LEGACY_ENC, byte for byte the dump it was written from"
+#
+# Which of those two things to prove depends on the date computed with the other constants: while the
+# window is open there is a copy in the old format to open, and once it has closed there cannot be one.
+# From that day the honest check is the other way round -- the branch, the variable that names a
+# passphrase and the passphrase file are required gone -- because a drill that went on opening legacy
+# objects after the window closed would be the reason a second cipher and a secret it no longer needs
+# stayed on the host for ever.
+if [ "$legacy_window" = closed ]; then
+    if grep -q 'openssl enc -d -aes-256-cbc' "$REPO_ROOT/scripts/backup.sh"; then
+        fail "the pre-migration branch goes once its window has closed" \
+            "the window closed on $LEGACY_RETIRES and scripts/backup.sh still opens old objects with openssl; README's retirement step says what to delete"
     else
-        fail "the legacy branch opens the old format" \
-            "fetch returned '$legacy_fetched', and it does not match the dump it was made from"
+        pass "the window closed on $LEGACY_RETIRES: the pre-migration branch is gone"
     fi
 
-    # And without its passphrase it has to refuse, and say which file it needs. A branch that quietly
-    # returned nothing, or fell through to the identity, would leave an operator with a restore that
-    # is missing a file and a run that reported success.
-    if run_backup "$NO_KEY" fetch >"$WORK/legacy-nokey.txt" 2>&1; then
-        fail "the legacy branch needs its passphrase" \
-            "a fetch of $LEGACY_ENC succeeded with no passphrase file at $NO_KEY"
-    elif grep -q 'written before the migration to age' "$WORK/legacy-nokey.txt"; then
-        pass "without the passphrase the legacy branch refuses, and names the file it needs"
+    if [ -n "$(sed -n 's/^BACKUP_KEY_FILE=//p' "$REPO_ROOT/scripts/backup.sh")" ]; then
+        fail "nothing reads a passphrase once the window has closed" \
+            "the window closed on $LEGACY_RETIRES and scripts/backup.sh still defaults BACKUP_KEY_FILE"
     else
-        fail "the legacy branch says why it refused" "the refusal did not name the migration:"
-        tail -8 "$WORK/legacy-nokey.txt" | sed 's/^/          /'
+        pass "the window closed on $LEGACY_RETIRES: no passphrase is read any more"
     fi
+elif [ "$legacy_window" = open ]; then
+    printf 'note  the old format leaves the window on %s; from then this drill requires the branch gone\n' "$LEGACY_RETIRES"
 
-    # And the identity alone still publishes. Retiring the old passphrase must not stop the nightly
-    # unit: that is the difference between a key being retired and a key still required.
-    if run_backup "$NO_KEY" backup >"$WORK/no-passphrase-backup.txt" 2>&1; then
-        pass "a backup still runs with the identity alone, so the old passphrase can be retired"
+    LEGACY_ENC=rma-20991231T235959Z.dump.enc
+
+    if ! openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
+        -pass file:"$(winpath "$LEGACY_PASSPHRASE_FILE")" <"$STAGING/$fetched" >"$OFFHOST/$LEGACY_ENC"; then
+        fail "an object in the old format can be written" "openssl would not write $LEGACY_ENC"
     else
-        fail "the nightly run does not need the old passphrase" \
-            "scripts/backup.sh backup failed without a passphrase file:"
-        tail -8 "$WORK/no-passphrase-backup.txt" | sed 's/^/          /'
+        if ! legacy_fetched=$(backup fetch 2>"$WORK/legacy-fetch.txt"); then
+            fail "fetch opens an object written before the migration" \
+                "scripts/backup.sh fetch failed on $LEGACY_ENC:"
+            tail -8 "$WORK/legacy-fetch.txt" | sed 's/^/          /'
+        elif [ "$legacy_fetched" = "${LEGACY_ENC%.enc}" ] && cmp -s "$STAGING/$legacy_fetched" "$STAGING/$fetched"; then
+            pass "the legacy branch opened $LEGACY_ENC, byte for byte the dump it was written from"
+        else
+            fail "the legacy branch opens the old format" \
+                "fetch returned '$legacy_fetched', and it does not match the dump it was made from"
+        fi
+
+        # And without its passphrase it has to refuse, and say which file it needs. A branch that
+        # quietly returned nothing, or fell through to the identity, would leave an operator with a
+        # restore that is missing a file and a run that reported success.
+        if run_backup "$NO_KEY" fetch >"$WORK/legacy-nokey.txt" 2>&1; then
+            fail "the legacy branch needs its passphrase" \
+                "a fetch of $LEGACY_ENC succeeded with no passphrase file at $NO_KEY"
+        elif grep -q 'written before the migration to age' "$WORK/legacy-nokey.txt"; then
+            pass "without the passphrase the legacy branch refuses, and names the file it needs"
+        else
+            fail "the legacy branch says why it refused" "the refusal did not name the migration:"
+            tail -8 "$WORK/legacy-nokey.txt" | sed 's/^/          /'
+        fi
+
+        # And the identity alone still publishes. Retiring the old passphrase must not stop the nightly
+        # unit: that is the difference between a key being retired and a key still required.
+        if run_backup "$NO_KEY" backup >"$WORK/no-passphrase-backup.txt" 2>&1; then
+            pass "a backup still runs with the identity alone, so the old passphrase can be retired"
+        else
+            fail "the nightly run does not need the old passphrase" \
+                "scripts/backup.sh backup failed without a passphrase file:"
+            tail -8 "$WORK/no-passphrase-backup.txt" | sed 's/^/          /'
+        fi
     fi
 fi
 

@@ -51,8 +51,9 @@
 #                       are the credentials that open the destination and neither belongs in prod.env
 #   BACKUP_KEY_FILE     the passphrase of the objects written before the migration to age, default
 #                       $RCLONE_CONFIG_DIR/backup.passphrase. Read only when one of those is opened,
-#                       so the nightly unit does not depend on a file that is being retired; it can
-#                       go once retention has deleted the last object older than the window.
+#                       so the nightly unit does not depend on a file that is being retired. Retention
+#                       deletes the last of them on BACKUP_LEGACY_RETIRES, below; README dates the step
+#                       that removes this branch and the file once that day has passed.
 #   RCLONE_IMAGE        default the pinned rclone image below
 #
 # Requirements: docker, and `age` with `age-keygen` for the cipher (Debian and Ubuntu package them
@@ -116,6 +117,21 @@ BACKUP_AGE_IDENTITY=${BACKUP_AGE_IDENTITY:-$RCLONE_CONFIG_DIR/backup.age.key}
 # nightly run -- only the fetch of a copy older than the migration.
 BACKUP_KEY_FILE=${BACKUP_KEY_FILE:-$RCLONE_CONFIG_DIR/backup.passphrase}
 
+# The date the objects written before the migration leave the retention window, and the migration date
+# it is derived from. Retention deletes an object once it is BACKUP_KEEP_DAYS old, so the last object
+# in the old format -- written on or before LEGACY_MIGRATED -- goes after that many days, and from
+# BACKUP_LEGACY_RETIRES on there is nothing left at the destination that the legacy branch could open.
+#
+# Nothing below computes with the dates, and that is deliberate: which format an object is in comes
+# from its own header, so a copy fetched from an old backup host by hand still opens whatever the
+# calendar says. What the dates are for is the deletion. README's retirement step is dated with them
+# and says what to remove, and the restore drill reads BACKUP_LEGACY_RETIRES from here: before it the
+# drill proves the branch opens a legacy object, and from it the drill fails until the branch, this
+# variable and the passphrase file are gone. A window with an end date is the difference between a
+# compatibility branch and a second cipher nobody dares delete.
+LEGACY_MIGRATED=2026-11-24
+BACKUP_LEGACY_RETIRES=2026-12-08
+
 usage() {
     cat >&2 <<'EOF'
 usage: scripts/backup.sh [backup|fetch|list|purge-plaintext] [--dry-run]
@@ -138,7 +154,9 @@ BACKUP_AGE_IDENTITY must name the age identity, by default beside rclone.conf. W
 uploaded: the destination holds ciphertext, and a dump with no key is a bucket of noise.
 
 BACKUP_KEY_FILE names the passphrase of the objects written before the migration to age. It is only
-read when one of those is fetched, and it can be retired once retention has aged them out.
+read when one of those is fetched, and retention deletes the last of them on BACKUP_LEGACY_RETIRES --
+the migration date plus BACKUP_KEEP_DAYS, recorded at the top of this script. Once that day has passed,
+delete this branch, BACKUP_KEY_FILE and the passphrase file; README has the dated step.
 EOF
 }
 

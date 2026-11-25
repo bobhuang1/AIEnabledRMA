@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace AIEnabledRma.Tests;
@@ -368,6 +369,70 @@ public sealed class BackupDurabilityTests
 
         Assert.True(failure > done, "the purge reports failure from inside the settling loop");
         Assert.True(success > done, "the purge reports success from inside the settling loop");
+    }
+
+    /// <summary>
+    /// The legacy branch and the passphrase file are only needed while an object in the old format is
+    /// still inside the retention window, and nothing recorded when that stopped being true. A branch
+    /// with no last day is a second cipher on a production host for ever, and a passphrase that
+    /// outlives the last copy it opens. The date is written down once, beside the branch it retires;
+    /// the runbook's step is dated with it; and the drill reads it from there rather than keeping a
+    /// copy that would go on proving the branch after the step said to delete it.
+    /// </summary>
+    [Fact]
+    public void The_retirement_of_the_old_cipher_is_dated_and_the_drill_reads_that_date()
+    {
+        var script = Script().ReplaceLineEndings("\n");
+        var readme = RepositoryFile("README.md").ReplaceLineEndings("\n");
+        var drill = RepositoryFile("scripts/restore-drill.sh").ReplaceLineEndings("\n");
+
+        var migrated = Regex.Match(script, @"(?m)^LEGACY_MIGRATED=(\d{4}-\d{2}-\d{2})$");
+        var retires = Regex.Match(script, @"(?m)^BACKUP_LEGACY_RETIRES=(\d{4}-\d{2}-\d{2})$");
+
+        Assert.True(migrated.Success, "scripts/backup.sh no longer records the day the dump format moved to age");
+        Assert.True(retires.Success, "scripts/backup.sh no longer records the day the old format leaves the window");
+
+        // The date is the migration plus the window, not a number somebody picked: an object written
+        // on the last night before the migration stays inside a BACKUP_KEEP_DAYS window for that long,
+        // and retiring a day early is a restore that cannot open the copy it needs.
+        var window = Regex.Match(script, @"BACKUP_KEEP_DAYS=\$\{BACKUP_KEEP_DAYS:-(\d+)\}");
+
+        Assert.True(window.Success, "scripts/backup.sh no longer defaults BACKUP_KEEP_DAYS");
+
+        var migration = DateOnly.ParseExact(migrated.Groups[1].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var retirement = DateOnly.ParseExact(retires.Groups[1].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+        Assert.Equal(migration.AddDays(int.Parse(window.Groups[1].Value, CultureInfo.InvariantCulture)), retirement);
+
+        // The runbook's step is dated with that same day, names the file to delete and the code to
+        // take out with it, and says why not sooner.
+        Assert.Contains(
+            $"### Retiring the objects written before the migration \u2014 {retires.Groups[1].Value}",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(migrated.Groups[1].Value, readme, StringComparison.Ordinal);
+        Assert.Contains("/etc/aienabledrma/backup.passphrase", readme, StringComparison.Ordinal);
+        Assert.Contains("`openssl enc -d`", readme, StringComparison.Ordinal);
+        Assert.Contains("Do not do it early", readme, StringComparison.Ordinal);
+
+        // The drill takes the date from the script and does not spell it: a second copy is what would
+        // keep the branch in the gate after the runbook said to remove it.
+        Assert.Contains("sed -n 's/^BACKUP_LEGACY_RETIRES=//p' \"$REPO_ROOT/scripts/backup.sh\"", drill, StringComparison.Ordinal);
+        Assert.DoesNotContain(retires.Groups[1].Value, drill, StringComparison.Ordinal);
+
+        // And it does something on both sides of the date: while the window is open the old-format
+        // object is written and has to open, and from the day it closes the branch and the passphrase
+        // are required gone instead.
+        var decision = drill.IndexOf("elif [ \"${TODAY//-/}\" -gt \"${LEGACY_RETIRES//-/}\" ]; then", StringComparison.Ordinal);
+        var closed = drill.IndexOf("if grep -q 'openssl enc -d -aes-256-cbc'", StringComparison.Ordinal);
+        var open = drill.IndexOf("elif [ \"$legacy_window\" = open ]; then", StringComparison.Ordinal);
+        var planted = drill.IndexOf("LEGACY_ENC=rma-20991231T235959Z.dump.enc", StringComparison.Ordinal);
+
+        Assert.True(decision > 0, "the drill does not compare today with BACKUP_LEGACY_RETIRES");
+        Assert.True(closed > decision, "the drill does not require the branch gone once the window has closed");
+        Assert.True(open > closed, "the two sides of the date are not alternatives");
+        Assert.True(planted > open, "the drill writes an old-format object without asking whether one can still exist");
+        Assert.Contains("the window closed on $LEGACY_RETIRES", drill, StringComparison.Ordinal);
     }
 
     [Fact]
