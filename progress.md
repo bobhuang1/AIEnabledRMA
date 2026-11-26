@@ -915,3 +915,25 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   `OrderByDescending(row => row.Count)` to ascending fails
   `The_report_ranks_what_was_asked_most_and_counts_the_whole_window`. The other four facts pass under both, so it is
   the recording and the ranking being measured, not the tests' shape.
+
+## 2026-11-26 — The read-scope copy is refused where the host builds
+
+- **What was missing.** The equal-scope refusal was in `EnsureUsable` and pinned three ways at the options level, but
+  nothing proved the host asks for it: a check that is correct and called nowhere is the shape this one most often
+  takes wrong, and `McpHttpHost.Build` is the only caller a deployment has. `A_host_built_with_the_read_scope_as_the_
+  support_scope_refuses_to_start` now builds the real host — `--environment=Production`, an https issuer, an
+  allow-listed client, and both scopes set to `rma:read` — and asserts the startup throw naming both keys. It never
+  starts the host, because the throw happens before anything is bound.
+- **Why the configuration earns its own test rather than a review.** With equal values the host comes up, read tools
+  keep working, the audit row still records the caller and reason, and every caller who may read masked data may now
+  read one record unmasked: the grant D3 keeps separate, merged by a paste. Nothing in a response looks wrong. The
+  other refusals fail closed and cost a broken service; this one costs the intent, silently.
+- **The docs now say it where someone would look.** `docs/mcp.md`'s opening paragraph lists the read-scope copy beside
+  the missing issuer and allow-list, and its `500` row names it with the case-and-padding rule; the README's masking
+  paragraph says the transport refuses to start on an empty or equal support scope, and why each is a failure (one
+  makes the tool unreachable, the other makes every read caller an unmasker while still looking configured).
+- **Gate:** `suite` 674 passed, 0 skipped, 0 failed, all gates passed. Mutation, against the options and host-boot
+  facts: deleting the `string.Equals` block from `EnsureUsable` fails
+  `A_host_built_with_the_read_scope_as_the_support_scope_refuses_to_start` with "Assert.Throws() Failure: No exception
+  was thrown", alongside the two options-level refusal facts; the other seven options facts and the rest of the
+  transport suite pass, so the failure is the missing refusal rather than the new test's shape.

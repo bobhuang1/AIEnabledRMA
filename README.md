@@ -617,7 +617,9 @@ value `mcp_tool_calls` keeps as written, while every other argument stays a hash
 the grant is refused before the record is read, so a refusal is not an existence check. stdio has
 no token, so a local agent's only view of a customer is the masked one, and the committed realm
 lets `mcp-agent` request the scope without holding it by default — an everyday agent token cannot
-unmask by accident.
+unmask by accident. The HTTP transport refuses to start when that setting is empty or equal to
+`Mcp:Http:RequiredScope` (ignoring case and padding): the first would make the tool permanently
+unreachable, and the second would make every read caller an unmasker while still looking configured.
 
 Example agent question: *"AX2-0001-0005 is dead on arrival and out of warranty — what happens
 if the customer returns it, and how much would it cost?"* — `check_warranty_coverage` routes it to a

@@ -8,9 +8,11 @@
 | streamable HTTP | `Mcp:Transport=http` | anything that can reach the port | Keycloak-issued JWT (issuer, audience, scope), a client allow-list, an origin allow-list |
 
 The HTTP transport has no switch that turns authentication off, and it refuses to start without
-an issuer and a client allow-list. That is deliberate: the failure worth designing out is
-`Mcp:Transport=http` shipped without an identity provider, which would serve the customer and
-device tools to the network.
+an issuer and a client allow-list, or with its support scope set to the read scope. That is
+deliberate: the failure worth designing out is `Mcp:Transport=http` shipped without an identity
+provider, which would serve the customer and device tools to the network — and the quiet version of
+that mistake is a support scope pasted from the read scope, which starts cleanly and hands the
+unmasking grant to every caller.
 
 This runbook is the recipe that produced a `200` from the transport against a real Keycloak,
 not a signing key held by a test.
@@ -247,7 +249,7 @@ docker compose --profile mcp-http exec mcp-http \
 | `401` with `WWW-Authenticate: Bearer resource_metadata="…", scope="rma:read"` | no token, expired token, `iss` that is not `Mcp:Http:Issuer`, `aud` that is not `aienabledrma-mcp`, or a signature the realm's keys do not verify. The pointer names the RFC 9728 document below, so a client can find the realm instead of being configured with it |
 | `403` | a valid token without the `rma:read` scope, or from a `client_id`/`azp` not in `AllowedClientIds` |
 | `403` before any token is read | an `Origin` header that is not in `AllowedOrigins`. A server-side agent sends no `Origin` and is unaffected |
-| `500` at startup | `EnsureUsable` refused the configuration: an `http` issuer outside Development, an empty client allow-list, a wildcard or empty origin, an empty scope, a path that does not start with `/` |
+| `500` at startup | `EnsureUsable` refused the configuration: an `http` issuer outside Development, an empty client allow-list, a wildcard or empty origin, an empty scope, a support scope equal to `RequiredScope` (case and padding ignored), a path that does not start with `/` |
 | connection refused | the transport is not listening: check `Mcp:Transport` is `http`, not the default `stdio` |
 
 ### Every token is a 401 right after the realm was re-imported

@@ -742,6 +742,34 @@ public sealed class McpHttpTransportTests
     }
 
     /// <summary>
+    /// The precondition is only a refusal if the host asks for it. `EnsureUsable` can be correct and
+    /// still be called nowhere, which is the shape a check like this most often takes wrong; so this
+    /// builds the host a deployment builds, with both scopes set to `rma:read`, and expects the
+    /// startup throw rather than a host that comes up and serves.
+    /// </summary>
+    /// <remarks>
+    /// Production with an https issuer, so the refusal that fires is this one: every other
+    /// precondition is satisfied, and a development-shaped host would be a different test. The host
+    /// is never started, and the throw happens before anything is bound, so there is nothing to
+    /// dispose.
+    /// </remarks>
+    [Fact]
+    public void A_host_built_with_the_read_scope_as_the_support_scope_refuses_to_start()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => McpHttpHost.Build(
+        [
+            "--environment=Production",
+            $"--{McpHttpOptions.SectionName}:Issuer={Issuer}",
+            $"--{McpHttpOptions.SectionName}:RequiredScope={ReadScope}",
+            $"--{McpHttpOptions.SectionName}:SupportScope={ReadScope}",
+            $"--{McpHttpOptions.SectionName}:AllowedClientIds:0={ClientId}",
+        ]));
+
+        Assert.Contains("SupportScope", error.Message, StringComparison.Ordinal);
+        Assert.Contains("RequiredScope", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// An empty catalogue. The tool's miss path still returns a result, which is all the test needs:
     /// the row is written for the call, not for a hit.
     /// </summary>
