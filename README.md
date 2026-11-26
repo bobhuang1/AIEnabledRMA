@@ -682,7 +682,7 @@ RmaPolicy:
       ProductName: AX-200 Handheld Terminal
       RepairFee: 69.00
     ...
-  WarrantyTiers:             # coverage + turnaround; fees live in RepairPrices, not tiers
+  Tiers:                     # coverage + turnaround; fees live in RepairPrices, not tiers
     - Name: standard
       IsCovered: true
     - Name: no-service       # kept as the example of an uncovered tier → paid repair
@@ -691,7 +691,7 @@ RmaPolicy:
   FraudIndicatorSerialPrefixes:
   HumanReviewOnlyRegions:
   AiIsAdvisoryOnly: true     # when false, low AI confidence can relax only the fallback
-  HumanReviewConfidenceThreshold: 0.7
+  HumanReviewConfidenceThreshold: 0.45
   FallbackEligibility: RequiresHumanReview
 
 Ai:

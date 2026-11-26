@@ -803,3 +803,29 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   of the forms the tokeniser produces for them fails
   `Keyword_phrases_are_split_so_the_words_a_customer_types_are_what_match`, because `please` survives as
   `plea` in the vocabulary.
+- **The tool server's configuration had three more knobs that changed nothing.** After `McpSecurity` went, the
+  rest of the same file was audited the same way, and three settings turned out to be bound to members no line
+  reads: `RmaPolicy:FallbackReason` (the evaluator writes `LowConfidenceTriage` itself where it builds the
+  fail-closed decision), `RmaPolicy:MinimumAutoApproveConfidence` (the threshold that routes a request to a
+  person is `HumanReviewConfidenceThreshold`; this one was left from the design it replaced) and
+  `RmaPolicy:Tiers:*.CurrencyCode` (a quote's currency comes from the `RepairPrices` row that set the fee, so a
+  tier's own currency was never read). All three are gone from both shipped files, with the three members that
+  existed only to receive them. `README.md` described the tier list as `WarrantyTiers`, which is not a key
+  anything binds — the section is `RmaPolicy:Tiers` — and quoted `HumanReviewConfidenceThreshold: 0.7` against
+  a shipped 0.45; both corrected. `Mcp:Transport`, the seven `Mcp:Http` keys, `Mcp:Budget`, `DeviceLookup` and
+  `CustomerLookup` all bind to properties that are read, and `docs/mcp.md`'s table matches the code key for
+  key, so nothing else moved.
+- **A test asks that question now instead of the next reader.** `ConfigurationSurfaceTests` walks both
+  `appsettings.json` files against the option types they bind — a key with no property is named by its dotted
+  path — and scans `src` for each option member, so a property the binder fills and nothing reads fails too.
+  The first fact is the shape `McpSecurity` had (a block with no type behind it); the second is the shape these
+  three had (a type with no reader behind it). It cannot see a name another type also uses, which is how
+  `WarrantyTierPolicy.CurrencyCode` had to be found by hand, and its remarks say so.
+- **Gate:** `suite` 663 passed, 0 skipped, 0 failed, all gates passed; the EF model check is clean. Mutations,
+  each against `ConfigurationSurfaceTests` alone: restoring `"FallbackReason": "LowConfidenceTriage"` to the tool
+  server's file fails `Every_published_key_names_a_property_something_binds` naming
+  `RmaPolicy:FallbackReason (RmaPolicyOptions has no such setting)`; adding a `LookupsPerSession` member nothing
+  reads fails `Every_option_property_is_read_somewhere_outside_its_declaration` naming
+  `McpBudgetOptions.LookupsPerSession`. The first suite run overlapped two container builds of other trees and 72
+  tests lost the copied corpus from the test output — the gate is not safe to share a machine with other builds,
+  and re-run alone it is green as above.

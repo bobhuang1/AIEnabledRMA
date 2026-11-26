@@ -25,8 +25,6 @@ public sealed class RmaPolicyOptions
     /// </summary>
     public RmaEligibility FallbackEligibility { get; set; } = RmaEligibility.RequiresHumanReview;
 
-    public RmaDecisionReason FallbackReason { get; set; } = RmaDecisionReason.LowConfidenceTriage;
-
     /// <summary>Days after warranty end during which a return is still accepted.</summary>
     [Range(0, 3650)]
     public int GracePeriodDays { get; set; }
@@ -34,10 +32,6 @@ public sealed class RmaPolicyOptions
     /// <summary>Absolute return window from the device's ship date, independent of warranty.</summary>
     [Range(0, 3650)]
     public int ReturnWindowDays { get; set; } = 730;
-
-    /// <summary>Minimum AI triage confidence required before an RMA may be auto-approved.</summary>
-    [Range(0, 1)]
-    public double MinimumAutoApproveConfidence { get; set; } = 0.75;
 
     /// <summary>
     /// Below this confidence the flow is routed to a human even if the policy would allow it.
@@ -158,8 +152,6 @@ public sealed class WarrantyTierPolicy
     public string ReplacementTier { get; set; } = "standard";
 
     public bool IsCovered { get; set; } = true;
-
-    public string CurrencyCode { get; set; } = "USD";
 }
 
 /// <summary>
