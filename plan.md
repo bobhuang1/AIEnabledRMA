@@ -214,9 +214,17 @@ bullets stay as requirements.
   transport. These are in-process tests, not a networked deployment.
 - Both counters are keyed on `ICallerIdentity.Describe()`, so one caller cannot spend another's allowance.
   `Two_callers_spend_their_own_budgets_through_one_budget_object` pins that split for calls and for lookups.
-- **Outstanding:** `reveal_customer_contact`. D3's default was "masked by default, with an audited unmask
-  tool for an authenticated support role"; only the masked half exists, so no role can see a full contact
-  record. Nothing is exposed that should not be — the decision is simply not implemented.
+- **`reveal_customer_contact` is the audited exception, and it is implemented.** The tool returns the
+  name, email, phone and stored addresses unmasked, and only to a caller whose token carries the support
+  scope (`Mcp:Http:SupportScope`, `rma:support` by default) — a grant separate from the read scope,
+  because reading masked data and reading one record are different permissions. It requires a reason,
+  and the reason is the one argument value the audit row keeps as written while every other argument
+  stays a hash, so the trail answers why a record was unmasked and not only that it was. The identity's
+  grant and the row's caller are the same object, so they cannot name different callers; stdio has no
+  token, so nobody on stdio may unmask. The grant is checked before the lookup, so a caller without it
+  cannot use the refusal as an existence check. The committed realm defines `rma:support` and lets
+  `mcp-agent` request it without holding it by default.
+- **Outstanding:** none.
 
 ### P2. Remote MCP transport with OAuth (M) — D2
 

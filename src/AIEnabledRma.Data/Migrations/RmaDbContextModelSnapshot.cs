@@ -432,6 +432,11 @@ namespace AIEnabledRma.Data.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("latency_ms");
 
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("reason");
+
                     b.Property<bool>("Refused")
                         .HasColumnType("boolean")
                         .HasColumnName("refused");

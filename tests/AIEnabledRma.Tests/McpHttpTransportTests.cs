@@ -1,11 +1,13 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using AIEnabledRma.Data;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Catalog;
+using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Rules;
 using AIEnabledRma.Mcp;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -32,6 +34,7 @@ public sealed class McpHttpTransportTests
     private const string Issuer = "https://identity.test/realms/aienabledrma";
     private const string Audience = "aienabledrma-mcp";
     private const string ReadScope = "rma:read";
+    private const string SupportScope = "rma:support";
     private const string ClientId = "rma-agent";
     private const string AllowedOrigin = "http://localhost:5173";
 
@@ -483,6 +486,115 @@ public sealed class McpHttpTransportTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
+    /// <summary>
+    /// D3 on the wire: one tool, one customer, two tokens that differ only in the support scope.
+    /// </summary>
+    /// <remarks>
+    /// The grant is asserted through the real pipeline — routing, token validation, the guard, the
+    /// identity and the tool — because the identity, the scope claim and the tool's own check are
+    /// three places a correct-looking implementation can disagree. The sink is replaced so the test
+    /// needs no database; that swap is also what lets it read the audit row the guard wrote, which is
+    /// where the reason has to appear and the argument values must not.
+    /// </remarks>
+    [Fact]
+    public async Task The_unmask_is_refused_to_a_read_token_and_granted_to_a_support_token()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        const string Why = "customer called to correct the phone number on their return";
+
+        var customer = new Customer
+        {
+            Id = Guid.NewGuid(),
+            FirstName = "Josephine",
+            LastName = "Smith",
+            Email = "josephine.smith@example.com",
+            PhoneNumber = "+1 510 555 0199",
+            CreatedAtUtc = new DateTimeOffset(2026, 1, 5, 9, 0, 0, TimeSpan.Zero),
+        };
+
+        customer.Addresses.Add(new Address
+        {
+            Id = Guid.NewGuid(),
+            CustomerId = customer.Id,
+            Label = "Home",
+            Line1 = "2210 Harrison Street",
+            City = "Oakland",
+            PostalCode = "94612",
+            CountryCode = "US",
+            IsDefault = true,
+        });
+
+        var audit = new FakeToolAuditSink();
+
+        using var app = await BuildHostAsync(
+            services =>
+            {
+                services.AddSingleton<ICustomerRepository>(new FakeCustomerRepository { ById = customer });
+                services.AddSingleton<ICallMeter>(new InMemoryCallMeter());
+                services.AddScoped<IToolAuditSink>(_ => audit);
+            });
+
+        using var client = app.GetTestClient();
+
+        // Serialised rather than typed out: the body nests three levels of braces, and a literal that
+        // long is a place to mistype a quote rather than a test.
+        static HttpRequestMessage Reveal(string token, Guid customerId) => new(HttpMethod.Post, "/mcp")
+        {
+            Content = JsonContent.Create(new
+            {
+                jsonrpc = "2.0",
+                id = 11,
+                method = "tools/call",
+                @params = new
+                {
+                    name = "reveal_customer_contact",
+                    arguments = new { customerId, reason = Why },
+                },
+            }),
+            Headers =
+            {
+                Authorization = new AuthenticationHeaderValue("Bearer", token),
+            },
+        };
+
+        using var readOnlyRequest = Reveal(Token(scope: ReadScope), customer.Id);
+        readOnlyRequest.Headers.Accept.ParseAdd("application/json");
+        readOnlyRequest.Headers.Accept.ParseAdd("text/event-stream");
+
+        using var refused = await client.SendAsync(readOnlyRequest, cancellationToken);
+        var refusedBody = await refused.Content.ReadAsStringAsync(cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, refused.StatusCode);
+        Assert.Contains("support scope", refusedBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("josephine.smith@example.com", refusedBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Harrison", refusedBody, StringComparison.OrdinalIgnoreCase);
+
+        using var supportRequest = Reveal(Token(scope: $"{ReadScope} {SupportScope}"), customer.Id);
+        supportRequest.Headers.Accept.ParseAdd("application/json");
+        supportRequest.Headers.Accept.ParseAdd("text/event-stream");
+
+        using var granted = await client.SendAsync(supportRequest, cancellationToken);
+        var grantedBody = await granted.Content.ReadAsStringAsync(cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, granted.StatusCode);
+        Assert.Contains("josephine.smith@example.com", grantedBody, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("2210 Harrison Street", grantedBody, StringComparison.OrdinalIgnoreCase);
+
+        // The trail keeps the reason as written and hashes everything the call acted on: the row
+        // answers why the record was unmasked without becoming a copy of it. Both calls reached the
+        // tool, so both rows exist and both carry the reason — what differs is the answer, which is
+        // what the assertions above check.
+        var rows = audit.Records.Where(r => r.Tool == "reveal_customer_contact").ToList();
+        Assert.Equal(2, rows.Count);
+        Assert.All(rows, r => Assert.Equal(Why, r.Reason));
+        Assert.All(rows, r => Assert.Contains(
+            r.ArgumentHashes,
+            h => h.StartsWith("customerId:", StringComparison.Ordinal)));
+        Assert.All(rows, r => Assert.DoesNotContain(
+            r.ArgumentHashes,
+            h => h.Contains(Why, StringComparison.Ordinal)));
+    }
+
     [Fact]
     public async Task A_page_from_an_origin_that_is_not_allowed_is_forbidden()
     {
@@ -690,8 +802,17 @@ public sealed class CallerIdentityTests
             http.User = user;
         }
 
-        return new HttpContextCallerIdentity(new HttpContextAccessor { HttpContext = http });
+        return new HttpContextCallerIdentity(new HttpContextAccessor { HttpContext = http }, "rma:support");
     }
+
+    private static ClaimsPrincipal TokenWith(string scope) =>
+        new(new ClaimsIdentity(
+            [
+                new Claim("sub", "agent-1"),
+                new Claim("client_id", "rma-agent"),
+                new Claim("scope", scope),
+            ],
+            authenticationType: "Bearer"));
 
     [Fact]
     public void An_authenticated_token_is_recorded_by_client_and_subject()
@@ -710,6 +831,41 @@ public sealed class CallerIdentityTests
     public void A_stdio_session_is_recorded_as_the_local_caller()
     {
         Assert.Equal(ToolCallGuard.CallerName, IdentityFor(user: null).Describe());
+    }
+
+    /// <summary>
+    /// D3's grant is a scope, not a role name in a prose claim: the token either carries it or not,
+    /// and the comparison is exact so `rma:support-preview` cannot pass for `rma:support`.
+    /// </summary>
+    [Fact]
+    public void Only_a_token_that_carries_the_support_scope_may_unmask()
+    {
+        Assert.True(IdentityFor(TokenWith("rma:read rma:support")).IsSupportCaller);
+        Assert.False(IdentityFor(TokenWith("rma:read")).IsSupportCaller);
+        Assert.False(IdentityFor(TokenWith("rma:read rma:support-preview")).IsSupportCaller);
+    }
+
+    [Fact]
+    public void A_stdio_session_never_may_unmask()
+    {
+        Assert.False(IdentityFor(user: null).IsSupportCaller);
+    }
+
+    /// <summary>
+    /// A host built without a token source passes no scope, and then nobody is a support caller even
+    /// if a request somehow arrives with a user: the gate must not fall back to "any authenticated
+    /// caller" when the setting is missing.
+    /// </summary>
+    [Fact]
+    public void An_identity_with_no_configured_scope_never_may_unmask()
+    {
+        var http = new DefaultHttpContext { User = TokenWith("rma:read rma:support") };
+
+        var identity = new HttpContextCallerIdentity(
+            new HttpContextAccessor { HttpContext = http },
+            supportScope: null);
+
+        Assert.False(identity.IsSupportCaller);
     }
 }
 
@@ -762,6 +918,23 @@ public sealed class McpHttpOptionsTests
             () => options.EnsureUsable(isDevelopment: false));
 
         Assert.Contains("AllowedOrigins", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The unmask tool checks this scope, and a blank one can never appear in a token's scope claim:
+    /// the tool would be permanently refused while the deployment looked configured. A startup
+    /// failure is the louder half of the same mistake.
+    /// </summary>
+    [Fact]
+    public void An_empty_support_scope_is_refused()
+    {
+        var options = Usable();
+        options.SupportScope = " ";
+
+        var error = Assert.Throws<InvalidOperationException>(
+            () => options.EnsureUsable(isDevelopment: false));
+
+        Assert.Contains("SupportScope", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

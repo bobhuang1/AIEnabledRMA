@@ -136,6 +136,16 @@
           }
         }
       ]
+    },
+    {
+      "name": "rma:support",
+      "description": "Admits the unmask tool. A client holds it only when the token asks for it, so the grant is per token and per caller, and the reason written with the call is recorded in mcp_tool_calls.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": []
     }
   ],
   "roles": {
@@ -187,6 +197,9 @@
       "defaultClientScopes": [
         "rma:read",
         "basic"
+      ],
+      "optionalClientScopes": [
+        "rma:support"
       ]
     },
     {

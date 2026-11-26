@@ -46,16 +46,18 @@ public sealed class McpCustomerToolTests
     }
 
     private static (CustomerLookupTools Tools, FakeCustomerRepository Customers) Build(
-        int lookupsPerDay = 200)
+        int lookupsPerDay = 200,
+        ICallerIdentity? caller = null)
     {
         var customers = new FakeCustomerRepository();
+        var identity = caller ?? new StdioCallerIdentity();
         var budget = new CallBudget(
             new InMemoryCallMeter(),
             Options.Create(new McpBudgetOptions { CustomerLookupsPerDay = lookupsPerDay }),
             TimeProvider.System,
-            new StdioCallerIdentity());
+            identity);
 
-        return (new CustomerLookupTools(customers, new FakeRmaRepository(), budget), customers);
+        return (new CustomerLookupTools(customers, new FakeRmaRepository(), budget, identity), customers);
     }
 
     [Fact]
@@ -161,6 +163,85 @@ public sealed class McpCustomerToolTests
         Assert.Equal(0, second.MatchCount);
         Assert.Contains("limit", second.RefusalReason, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, customers.SearchCalls);
+    }
+
+    /// <summary>
+    /// D3's default half: a caller that was not granted the support scope cannot unmask, whatever it
+    /// puts in the reason, and the refusal happens before the record is read.
+    /// </summary>
+    [Fact]
+    public async Task A_caller_without_the_support_grant_is_refused_the_unmasked_record()
+    {
+        var (tools, customers) = Build();
+        customers.ById = Josephine();
+
+        var response = await tools.RevealCustomerContactAsync(
+            customers.ById.Id,
+            "customer called to correct their phone number",
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(response.RefusalReason);
+        Assert.Contains("support scope", response.RefusalReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(response.FullName);
+        Assert.Empty(response.Addresses);
+
+        // Refused before the lookup, so a refusal cannot be used to ask whether an id exists.
+        Assert.Equal(0, customers.GetByIdCalls);
+
+        var json = JsonSerializer.Serialize(response);
+        Assert.DoesNotContain("josephine.smith@example.com", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("510 555 0199", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Harrison", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_support_caller_with_a_reason_gets_the_contact_record_unmasked()
+    {
+        var (tools, customers) = Build(caller: new SupportCallerIdentity());
+        customers.ById = Josephine();
+
+        var response = await tools.RevealCustomerContactAsync(
+            customers.ById.Id,
+            "customer called to correct the phone number on their return",
+            TestContext.Current.CancellationToken);
+
+        Assert.Null(response.RefusalReason);
+        Assert.Equal("Josephine Smith", response.FullName);
+        Assert.Equal("josephine.smith@example.com", response.Email);
+        Assert.Equal("+1 510 555 0199", response.PhoneNumber);
+
+        var address = Assert.Single(response.Addresses);
+        Assert.Equal("2210 Harrison Street", address.Line1);
+        Assert.Equal("94612", address.PostalCode);
+        Assert.True(address.IsDefault);
+    }
+
+    /// <summary>
+    /// The reason is required by the tool and kept by the guard, so a call without one — or with a
+    /// keystroke — must be refused rather than audited as "unmasked, said 'x'".
+    /// </summary>
+    [Fact]
+    public async Task A_support_caller_without_a_usable_reason_is_refused()
+    {
+        var (tools, customers) = Build(caller: new SupportCallerIdentity());
+        customers.ById = Josephine();
+
+        var missing = await tools.RevealCustomerContactAsync(
+            customers.ById.Id,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var keystroke = await tools.RevealCustomerContactAsync(
+            customers.ById.Id,
+            "x",
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(missing.RefusalReason);
+        Assert.NotNull(keystroke.RefusalReason);
+        Assert.Contains("reason", missing.RefusalReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(missing.FullName);
+        Assert.Null(keystroke.FullName);
+
+        // Neither refusal read the record, so a support caller cannot use them as a lookup either.
+        Assert.Equal(0, customers.GetByIdCalls);
     }
 
     [Fact]

@@ -130,5 +130,8 @@ public sealed class McpSharedBudgetTests
     private sealed class FixedCaller(string name) : ICallerIdentity
     {
         public string Describe() => name;
+
+        // The budget is about calls, not grants: this caller reads masked data like any other.
+        public bool IsSupportCaller => false;
     }
 }

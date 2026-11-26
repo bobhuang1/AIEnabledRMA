@@ -258,6 +258,10 @@ public sealed class McpToolCallConfiguration : IEntityTypeConfiguration<McpToolC
         builder.Property(c => c.Caller).HasMaxLength(128).IsRequired();
         builder.Property(c => c.ArgumentHashes).HasMaxLength(1000).IsRequired();
 
+        // Optional, and wide enough for a sentence: only an unmasking call has one, and the guard
+        // truncates to this width rather than letting a caller outgrow the column.
+        builder.Property(c => c.Reason).HasMaxLength(500);
+
         // The audit trail is read by time and by tool, not by id: an operator asking "what did
         // agents look up yesterday" scans the newest rows first.
         builder.HasIndex(c => c.AtUtc).HasDatabaseName("ix_mcp_tool_calls_at");

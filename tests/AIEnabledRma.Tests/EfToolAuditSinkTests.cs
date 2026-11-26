@@ -37,6 +37,7 @@ public sealed class EfToolAuditSinkTests : IAsyncLifetime
             Tool = "find_device",
             Caller = ToolCallGuard.CallerName,
             ArgumentHashes = ["identifier:0123456789abcdef", "take:fedcba9876543210"],
+            Reason = "customer called to correct the phone number on their return",
             ResultCount = 3,
             LatencyMs = 42,
             Refused = false,
@@ -56,6 +57,10 @@ public sealed class EfToolAuditSinkTests : IAsyncLifetime
         Assert.Equal("find_device", row.Tool);
         Assert.Equal("stdio:local", row.Caller);
         Assert.Equal("identifier:0123456789abcdef,take:fedcba9876543210", row.ArgumentHashes);
+
+        // The reason is the one argument value the trail keeps, and it has to survive the column:
+        // an unmask recorded without it is a record of the act and not of its justification.
+        Assert.Equal("customer called to correct the phone number on their return", row.Reason);
         Assert.Equal(3, row.ResultCount);
         Assert.Equal(42, row.LatencyMs);
         Assert.False(row.Refused);
@@ -91,6 +96,7 @@ public sealed class EfToolAuditSinkTests : IAsyncLifetime
         // empty string rather than failing the call it was trying to record.
         Assert.True(row.Refused);
         Assert.Equal(string.Empty, row.ArgumentHashes);
+        Assert.Null(row.Reason);
         Assert.Equal(0, row.ResultCount);
     }
 

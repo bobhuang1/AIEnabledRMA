@@ -342,6 +342,22 @@ row(
     mapper("rma:read", "oidc-audience-mapper").get("config", {}).get("included.custom.audience", ""),
 )
 
+# The unmask tool's grant. It is a separate scope from the read one so that reading masked data
+# and reading one unmasked record are separate permissions, and the machine client may request it
+# without holding it by default.
+support_scope = scopes.get("rma:support", {})
+row("rma:support appears in the token scope", "true", support_scope.get("attributes", {}).get("include.in.token.scope", ""))
+row(
+    "mcp-agent may request rma:support",
+    "rma:support",
+    ", ".join(sorted(agent.get("optionalClientScopes", []))),
+)
+row(
+    "mcp-agent does not hold rma:support by default",
+    "basic, rma:read",
+    ", ".join(sorted(agent.get("defaultClientScopes", []))),
+)
+
 basic_scope = scopes.get("basic", {})
 row("basic adds the subject", "oidc-sub-mapper", mapper("basic", "oidc-sub-mapper").get("protocolMapper", ""))
 row("basic is not a token scope", "false", basic_scope.get("attributes", {}).get("include.in.token.scope", ""))
@@ -393,7 +409,7 @@ realm_shape > "$WORK/shape.tsv"
 # The row count is a check of its own. A python error writes nothing to the table, and a loop over an
 # empty table is a run with no failures — the gate would report success for having checked nothing.
 ROWS=$(wc -l < "$WORK/shape.tsv" | tr -d ' ')
-check "realm shape rows produced" 28 "$ROWS"
+check "realm shape rows produced" 31 "$ROWS"
 
 # The table is written by python, which on Windows ends its lines with CRLF; the escape is stripped
 # so a passing value does not compare unequal to itself.
@@ -426,6 +442,28 @@ else
     check_contains "scope carries rma:read" "rma:read" "$(claim "$TOKEN" scope)"
     check "azp is mcp-agent" "mcp-agent" "$(claim "$TOKEN" azp)"
     check_nonempty "sub names the service account" "$(claim "$TOKEN" sub)"
+fi
+
+# The unmask tool's grant is a scope the token has to ask for. A realm that does not define it
+# leaves the tool permanently refused, and that refusal is a sentence in a tool result rather than
+# a 403, so nothing else in this gate would notice. This mints the token the tool's check looks for
+# and asserts the scope arrived; whether the caller can then read a record is the suite's assertion.
+SUPPORT_RESPONSE=$(kc_token \
+    -d 'grant_type=client_credentials' \
+    -d 'client_id=mcp-agent' \
+    -d 'client_secret=mcp-agent-secret' \
+    -d 'scope=rma:read rma:support')
+
+check "support token endpoint answers" 200 "$(status_of "$SUPPORT_RESPONSE")"
+
+SUPPORT_TOKEN=$(body_of "$SUPPORT_RESPONSE" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("access_token",""))')
+
+if [ -z "$SUPPORT_TOKEN" ]; then
+    fail "support token present" "rma:support was requested and not granted: $(body_of "$SUPPORT_RESPONSE")"
+else
+    pass "support token present"
+    check_contains "support token carries rma:support" "rma:support" "$(claim "$SUPPORT_TOKEN" scope)"
+    check_contains "support token keeps the transport's audience" "aienabledrma-mcp" "$(claim "$SUPPORT_TOKEN" aud)"
 fi
 
 INITIALIZE='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"verify-auth","version":"1"}}}'

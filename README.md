@@ -566,6 +566,7 @@ Tools:
 | `get_customer_addresses` | A customer's saved addresses, each reduced to label, postcode prefix and country |
 | `get_customer_returns` | A customer's return history, so an agent sees existing requests before adding one |
 | `resolve_shipping_address` | Matches free text to a customer's stored addresses, never claiming a weak match is confident, and returns the match masked |
+| `reveal_customer_contact` | The same customer unmasked — name, email, phone and saved addresses — for a caller holding the support scope, with a recorded reason |
 
 Everything the agent sees about a person comes from `CustomerProjection`, the same masking the
 wizard uses: first name and surname initial, `j•••@e•••.com`, the last two phone digits, and an
@@ -585,8 +586,15 @@ per caller per day, because that cap is about what a call is for rather than how
 The counters live in PostgreSQL (`mcp_call_stamps`), not in the process, so the limit is the caller's
 limit and not each replica's: two replicas of the HTTP transport spend one allowance, and a refused
 call leaves no stamp behind.
-Exposing contact data to an authenticated support role still needs a role check; the identity
-provider the transport uses (P2) identifies a client, not a person.
+Every tool above masks except the last. `reveal_customer_contact` is D3's audited exception: the
+token has to carry the support scope (`Mcp:Http:SupportScope`, `rma:support` by default), which is
+a separate grant from the read scope because reading masked data and reading one unmasked record
+are different permissions; the call has to state a reason; and the reason is the one argument
+value `mcp_tool_calls` keeps as written, while every other argument stays a hash. A caller without
+the grant is refused before the record is read, so a refusal is not an existence check. stdio has
+no token, so a local agent's only view of a customer is the masked one, and the committed realm
+lets `mcp-agent` request the scope without holding it by default — an everyday agent token cannot
+unmask by accident.
 
 Example agent question: *"AX2-0001-0005 is dead on arrival and out of warranty — what happens
 if the customer returns it, and how much would it cost?"* — `check_coverage` routes it to a

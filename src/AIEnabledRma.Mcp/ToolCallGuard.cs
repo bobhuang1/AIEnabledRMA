@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AIEnabledRma.Domain.Abstractions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -48,6 +49,7 @@ public sealed class ToolCallGuard(
     {
         var tool = request.Params?.Name ?? "(unnamed)";
         var arguments = request.Params?.Arguments;
+        var reason = ReasonOf(arguments);
         var started = Stopwatch.GetTimestamp();
 
         var budgetDecision = await budget.TryConsumeCallAsync(cancellationToken);
@@ -56,7 +58,7 @@ public sealed class ToolCallGuard(
         {
             // Refused before the work: the tool is not invoked at all, so the row says the call
             // happened and did nothing.
-            await RecordAsync(tool, arguments, 0, started, wasRefused: true);
+            await RecordAsync(tool, arguments, reason, 0, started, wasRefused: true);
 
             return new CallToolResult
             {
@@ -74,11 +76,17 @@ public sealed class ToolCallGuard(
         {
             // A tool that threw is still a call that happened, and "it errored" is a fact the
             // audit trail should hold.
-            await RecordAsync(tool, arguments, 0, started, wasRefused: true);
+            await RecordAsync(tool, arguments, reason, 0, started, wasRefused: true);
             throw;
         }
 
-        await RecordAsync(tool, arguments, CountOf(result), started, wasRefused: result.IsError == true);
+        await RecordAsync(
+            tool,
+            arguments,
+            reason,
+            CountOf(result),
+            started,
+            wasRefused: result.IsError == true);
 
         return result;
     }
@@ -91,6 +99,7 @@ public sealed class ToolCallGuard(
     private async Task RecordAsync(
         string tool,
         IDictionary<string, JsonElement>? arguments,
+        string? reason,
         int resultCount,
         long startedTimestamp,
         bool wasRefused)
@@ -105,6 +114,7 @@ public sealed class ToolCallGuard(
                     .OrderBy(a => a.Key, StringComparer.Ordinal)
                     .Select(a => $"{a.Key}:{Hash(a.Value.GetRawText())}")
                     .ToList(),
+            Reason = reason,
             ResultCount = resultCount,
             LatencyMs = (long)Stopwatch.GetElapsedTime(startedTimestamp).TotalMilliseconds,
             Refused = wasRefused,
@@ -173,17 +183,58 @@ public sealed class ToolCallGuard(
     /// </summary>
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..16].ToLowerInvariant();
+
+    /// <summary>
+    /// The one argument value a row keeps as written, because it is the row's own subject: why a
+    /// caller unmasked a record.
+    /// </summary>
+    /// <remarks>
+    /// Every other argument is a search term or an id and is hashed. A reason is not data the call
+    /// acted on — it is the justification for the act, and a trail that answered "this caller read
+    /// one customer's contact details" without "because they said…" records that it happened and
+    /// not whether it should have. The value is trimmed and bounded rather than trusted to be short,
+    /// because the column has a length and the caller writes the text.
+    /// </remarks>
+    private static string? ReasonOf(IDictionary<string, JsonElement>? arguments)
+    {
+        if (arguments is null
+            || !arguments.TryGetValue("reason", out var value)
+            || value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var text = value.GetString()?.Trim();
+
+        if (string.IsNullOrEmpty(text))
+        {
+            return null;
+        }
+
+        return text.Length <= MaximumReasonLength ? text : text[..MaximumReasonLength];
+    }
+
+    /// <summary>Longest justification the audit row keeps; the column is one width for it.</summary>
+    internal const int MaximumReasonLength = 500;
 }
 
 /// <summary>Puts the guard on every tools/call request the server handles.</summary>
 public static class ToolCallGuardRegistration
 {
-    public static IServiceCollection AddToolCallGuard(this IServiceCollection services)
+    /// <param name="supportScope">
+    /// The scope that admits the unmask tool, as the HTTP host validated it. Null on stdio, where
+    /// there is no token to carry it and therefore no caller who may unmask.
+    /// </param>
+    public static IServiceCollection AddToolCallGuard(
+        this IServiceCollection services,
+        string? supportScope = null)
     {
         // The caller is asked for rather than assumed: on HTTP it is the validated token's client
         // and subject, and on stdio there is no HttpContext, so the same class answers for both.
         services.AddHttpContextAccessor();
-        services.AddSingleton<ICallerIdentity, HttpContextCallerIdentity>();
+        services.AddSingleton<ICallerIdentity>(sp => new HttpContextCallerIdentity(
+            sp.GetRequiredService<IHttpContextAccessor>(),
+            supportScope));
         services.AddSingleton<ToolCallGuard>();
 
         // Configured through the options pipeline rather than a filter instance, so the guard

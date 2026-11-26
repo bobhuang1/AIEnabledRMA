@@ -14,6 +14,12 @@ public sealed record ToolCallRecord
     /// <summary>Argument name and a truncated hash, one per supplied argument.</summary>
     public required IReadOnlyList<string> ArgumentHashes { get; init; }
 
+    /// <summary>
+    /// Why an unmasking call was made, as the caller wrote it. Null when the call supplied none,
+    /// which is every call that only read masked data.
+    /// </summary>
+    public string? Reason { get; init; }
+
     public int ResultCount { get; init; }
 
     public long LatencyMs { get; init; }

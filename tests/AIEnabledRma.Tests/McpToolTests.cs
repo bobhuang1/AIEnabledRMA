@@ -249,7 +249,7 @@ public sealed class McpAddressResolutionTests
             Microsoft.Extensions.Options.Options.Create(new McpBudgetOptions()),
             TimeProvider.System,
             new StdioCallerIdentity());
-        return (new CustomerLookupTools(customers, new FakeRmaRepository(), budget), customers);
+        return (new CustomerLookupTools(customers, new FakeRmaRepository(), budget, new StdioCallerIdentity()), customers);
     }
 
     private static AddressResolution Resolution(

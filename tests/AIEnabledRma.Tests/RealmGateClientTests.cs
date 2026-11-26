@@ -124,7 +124,7 @@ public sealed class RealmGateClientTests
     /// to the binary, so stopping at the first directory with a knowledge-base would find a build
     /// artifact instead of the checkout.
     /// </summary>
-    private static string RepositoryRoot()
+    internal static string RepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
 
@@ -139,4 +139,78 @@ public sealed class RealmGateClientTests
 
         return directory!.FullName;
     }
+}
+
+/// <summary>
+/// The unmask tool's grant is a realm object, and no change in the tool server can substitute for
+/// it: the tool asks whether the token carries the scope, so a realm that never grants it leaves the
+/// tool refused for every caller while every other check still passes.
+/// </summary>
+/// <remarks>
+/// The machine client may request the scope and does not hold it by default, which is the shape the
+/// grant has to have: the ordinary agent token still reads masked data, and unmasking is a grant
+/// somebody asked for. The gate mints that token, because the other evidence is a refusal that reads
+/// like a tool answer — a sentence the agent could mistake for the tool working.
+/// </remarks>
+public sealed class RealmSupportScopeTests
+{
+    private const string ScopeName = "rma:support";
+
+    private static JsonElement Realm(JsonDocument realm) => realm.RootElement;
+
+    [Fact]
+    public void The_realm_defines_the_support_scope_as_a_token_scope()
+    {
+        using var realm = JsonDocument.Parse(File.ReadAllText(RealmPath()));
+
+        var scope = Realm(realm).GetProperty("clientScopes")
+            .EnumerateArray()
+            .Single(s => s.GetProperty("name").GetString() == ScopeName);
+
+        // include.in.token.scope is what puts the name in the token's scope claim; without it the
+        // scope exists in the realm and no token ever shows it to the transport.
+        Assert.Equal("true", scope.GetProperty("attributes").GetProperty("include.in.token.scope").GetString());
+
+        // Keycloak stores a client scope description in VARCHAR(255) and refuses the whole import
+        // otherwise, which is a stack that will not start rather than a bad description.
+        Assert.True(
+            scope.GetProperty("description").GetString()!.Length <= 255,
+            "the description has to fit Keycloak's column, or the realm will not import");
+    }
+
+    [Fact]
+    public void The_agent_client_may_request_the_support_scope_but_does_not_hold_it_by_default()
+    {
+        using var realm = JsonDocument.Parse(File.ReadAllText(RealmPath()));
+
+        var agent = Realm(realm).GetProperty("clients")
+            .EnumerateArray()
+            .Single(c => c.GetProperty("clientId").GetString() == "mcp-agent");
+
+        var optional = agent.GetProperty("optionalClientScopes").EnumerateArray()
+            .Select(s => s.GetString())
+            .ToArray();
+        var defaults = agent.GetProperty("defaultClientScopes").EnumerateArray()
+            .Select(s => s.GetString())
+            .ToArray();
+
+        // Requestable, so the gate can mint a support token from the committed realm...
+        Assert.Contains(ScopeName, optional);
+
+        // ...and not a default, so the everyday machine token cannot unmask by accident.
+        Assert.DoesNotContain(ScopeName, defaults);
+    }
+
+    [Fact]
+    public void The_gate_mints_the_support_token_and_asserts_its_scope()
+    {
+        var script = File.ReadAllText(Path.Combine(RealmGateClientTests.RepositoryRoot(), "scripts", "verify-auth.sh"));
+
+        Assert.Contains("-d 'scope=rma:read rma:support'", script, StringComparison.Ordinal);
+        Assert.Contains("support token carries rma:support", script, StringComparison.Ordinal);
+        Assert.Contains("mcp-agent may request rma:support", script, StringComparison.Ordinal);
+    }
+
+    private static string RealmPath() =>
+        Path.Combine(RealmGateClientTests.RepositoryRoot(), "infra", "keycloak", "realm-aienabledrma.json");
 }

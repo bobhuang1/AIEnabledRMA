@@ -22,10 +22,15 @@ public static class McpServices
     /// not have. A host left on a development database password refuses to be constructed at all,
     /// rather than starting and failing at its first query.
     /// </remarks>
+    /// <param name="http">
+    /// The HTTP transport's options when there is one. Its support scope is the grant the unmask
+    /// tool checks; stdio passes nothing, and nobody on stdio may unmask.
+    /// </param>
     public static IServiceCollection AddRmaMcpServices(
         this IServiceCollection services,
         IConfiguration configuration,
-        IHostEnvironment environment)
+        IHostEnvironment environment,
+        McpHttpOptions? http = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -58,7 +63,7 @@ public static class McpServices
         services.AddSingleton<ICallMeter, PostgresCallMeter>();
         services.AddSingleton<CallBudget>();
         services.AddScoped<IToolAuditSink, EfToolAuditSink>();
-        services.AddToolCallGuard();
+        services.AddToolCallGuard(http?.SupportScope);
 
         // Registered explicitly as well as through WithToolsFromAssembly: these classes take scoped
         // dependencies (the DbContext through their repositories), so how the SDK activates them is

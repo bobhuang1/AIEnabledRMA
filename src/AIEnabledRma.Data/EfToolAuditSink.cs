@@ -22,6 +22,7 @@ public sealed class EfToolAuditSink(RmaDbContext db) : IToolAuditSink
             Tool = record.Tool,
             Caller = record.Caller,
             ArgumentHashes = string.Join(',', record.ArgumentHashes),
+            Reason = record.Reason,
             ResultCount = record.ResultCount,
             LatencyMs = record.LatencyMs,
             Refused = record.Refused,

@@ -707,3 +707,41 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
 - **Gate:** `suite` 637 passed, 0 skipped, 0 failed, all gates passed, with the sweep change below in the same tree; the 4 new report tests pass on their own. Mutations: reducing the reader's bound to `take` fails `A_queue_the_bound_cut_short_says_so_and_the_reader_looked_one_row_past_it`; replacing the `(no return)` label with a dash fails `The_queue_names_the_return_the_transaction_and_both_sums_of_each_open_item`.
 - **A timer that stopped no longer looks like a clean queue.** A clean review queue is what a healthy nightly sweep and a timer that stopped a week ago both leave behind, so nothing the operator could see distinguished "asked the provider and found agreement" from "nobody has asked since Tuesday". `reconcile-payments` now writes a `sweep_runs` row per run -- source, time, whether it completed, what it checked, filed and could not answer -- including a run that crashed, recorded before the process exits and then rethrown. `/health`'s gated details carry it as `reconciliation` (`outcome`, `lastRunAtUtc`, `ageHours`, `stale`, `needsAttention`, and the sentence in words), and the operator dashboard prints that sentence above the queue. `SweepStatus` is the only reader of the row, so the words an operator reads and the fields a monitor scrapes cannot disagree: no run at all is stale, a run the provider left half-answered is failed even when it is ten minutes old, and a run is late 26 hours after the last one, because the timer fires at 02:40 and a missed night is exactly what that silence means.
 - **Gate:** `suite` 637 passed, 0 skipped, 0 failed, all gates passed; the EF model check is clean, so `sweep_runs` matches the model. Mutations: dropping `LastRunFailed` from `NeedsAttention` fails `A_recent_run_that_could_not_ask_about_everything_is_flagged_as_failed`; treating only an old row as stale fails `A_sweep_that_never_ran_is_not_reported_as_a_clean_queue`.
+
+- **D3's unmask tool, as an audited exception rather than a wider read.** Plan P1's last outstanding item
+  was `reveal_customer_contact`, and the README said the same thing in one sentence: contact data for an
+  authenticated support role still needed a role check. The tool now exists, and what it does is the
+  interesting part. It is refused unless the token carries the support scope (`Mcp:Http:SupportScope`,
+  `rma:support` by default) — a scope of its own, not a widening of `rma:read`, because reading masked
+  data and reading one unmasked record are different grants, and a single scope would have made every
+  agent an unmasker the day it was added. It requires a reason of at least ten characters, and that
+  reason is the one argument value the audit row keeps as written: `ToolCallGuard` hashes the arguments
+  because they are the data being read, and a row saying "this caller read one customer's contact
+  details" without "because they said …" records the act and not whether it was justified. Everything
+  else the call touched stays a hash, so the row does not become a second copy of the record. The grant
+  is asked of `ICallerIdentity` — the same object whose `Describe()` names the row's caller — so the
+  decision and the record cannot be about different callers, and `IsSupportCaller` is false on stdio,
+  because stdio has no token and therefore nobody to grant. The check runs before the lookup and before
+  the budget, so a caller without the grant cannot use the refusal as an existence check and cannot spend
+  a support caller's allowance on being refused. The response is deliberately not the entity: name, email,
+  phone and stored addresses, while the tax id, the alternate email and the marketing opt-in stay out,
+  because "unmask the contact" should not quietly become "unmask the record". The committed realm now
+  defines `rma:support` and makes it an *optional* scope of `mcp-agent`, so the everyday machine token is
+  still masked and a token that wants to reveal has to ask; `verify-auth.sh` mints that token and asserts
+  the scope arrives, because the tool's refusal is a sentence in a result rather than a 403 and nothing
+  else in the gate would notice a realm that stopped granting it.
+- **Gate:** `suite` 656 passed, 0 skipped, 0 failed; the EF model check is clean, so the migration matches
+  the model. Tests: the tool's own three cases (refused without the grant and before the record is read,
+  the unmasked record for a support caller, refused without a usable reason), the HTTP pipeline against the
+  real transport with two tokens that differ only in the scope — including the audit rows it wrote through
+  the guard, where the reason is read and the values are not — the identity's scope matching
+  (`rma:support-preview` is not `rma:support`), the reason round-tripping through the real sink into
+  `mcp_tool_calls`, and the realm and gate shape. Mutations: the grant check made contradictory fails
+  `A_caller_without_the_support_grant_is_refused_the_unmasked_record` and the HTTP case; `IsSupportCaller`
+  returning true fails `Only_a_token_that_carries_the_support_scope_may_unmask`; `Reason = null` in the
+  guard fails the HTTP case on the reason assertion; a minimum reason length of 0 fails
+  `A_support_caller_without_a_usable_reason_is_refused`; the sink not mapping the reason fails
+  `A_recorded_call_reaches_the_migrated_table_and_reads_back_intact`; removing the scope from
+  `mcp-agent`'s optional scopes, or its `include.in.token.scope`, fails the realm facts. Live:
+  `verify-auth.sh` re-imported the realm on the running stack and passed 84 checks, including the 31-row
+  shape, the support token carrying `rma:support` with the transport's audience, and the browser flow.

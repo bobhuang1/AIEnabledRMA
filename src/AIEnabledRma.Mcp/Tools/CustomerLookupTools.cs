@@ -23,18 +23,31 @@ namespace AIEnabledRma.Mcp.Tools;
 /// Audit rows and the per-minute budget are not here: they belong to
 /// <see cref="ToolCallGuard"/>, which every tool passes through. What stays here is the cap on
 /// customer lookups per session, because that one is about what a call is for.
+///
+/// One tool breaks the masking, and only for a caller the identity provider says may: see
+/// <see cref="RevealCustomerContactAsync"/>. It is here rather than beside the others in a separate
+/// class because it is the same question — which customer is this — answered under a stricter grant,
+/// and a second class would be a second place for the masking rule to be forgotten.
 /// </remarks>
 [McpServerToolType]
 public sealed class CustomerLookupTools(
     ICustomerRepository customers,
     IRmaRepository rmas,
-    CallBudget budget)
+    CallBudget budget,
+    ICallerIdentity caller)
 {
     /// <summary>
     /// Shortest term these tools accept. Below this, a term is a prefix of many records, which is
     /// exactly the shape of a scan.
     /// </summary>
     private const int MinimumQueryLength = 3;
+
+    /// <summary>
+    /// Shortest justification a reveal is accepted with. A reason shorter than a sentence is a
+    /// keystroke, and the audit row would say "unmasked, said 'x'" — which is a record of the act
+    /// with none of its justification.
+    /// </summary>
+    private const int MinimumReasonLength = 10;
 
     [McpServerTool(
         Name = "find_customer",
@@ -102,6 +115,93 @@ public sealed class CustomerLookupTools(
             // disambiguate.
             RequiresConfirmation = matches.Count > 1,
             Customers = matches.Select(CustomerProjection.From).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// The one tool that returns unmasked contact data. D3: masked by default, a full record only
+    /// for an authenticated support role, audited.
+    /// </summary>
+    /// <remarks>
+    /// The grant is the token's support scope, checked through <see cref="ICallerIdentity"/> so the
+    /// decision and the audit row are about the same caller. The reason is required because the
+    /// row keeps it: the guard hashes arguments, and this is the one value it stores as written.
+    /// stdio has no token, so nobody on stdio can call this — the local agent's way to see a
+    /// customer is the masked tools, which is the same answer the wizard gives.
+    ///
+    /// Refused before the budget is spent and before the record is read, so a caller without the
+    /// grant cannot use the refusals to learn whether a customer id exists.
+    /// </remarks>
+    [McpServerTool(
+        Name = "reveal_customer_contact",
+        Title = "Reveal a customer's full contact record (authenticated support role only)")]
+    [Description(
+        "Return a customer's unmasked name, email address, phone number and saved addresses, so "
+        + "support can reach the customer. Refused unless the caller's token carries the support "
+        + "scope, and it requires a reason, which is recorded in the audit trail. Use it when the "
+        + "customer is on the line and the masked view is not enough; do not quote the result into "
+        + "a transcript that outlives the call.")]
+    public async Task<ContactRevealResponse> RevealCustomerContactAsync(
+        [Description("The customer id, as returned by find_customer.")]
+        Guid customerId,
+        [Description(
+            "Why this record is being unmasked, in a sentence, e.g. 'customer called to correct "
+            + "their phone number'. It is stored as written in mcp_tool_calls.")]
+        string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        // The grant first, before anything that would tell a caller something: a refusal here is
+        // the same shape whether or not the id exists.
+        if (!caller.IsSupportCaller)
+        {
+            return RefusedReveal(
+                customerId,
+                "Revealing a customer's contact details needs a token carrying the support scope. "
+                + "This caller has no such grant, so the masked tools are everything it may read.");
+        }
+
+        var justification = reason?.Trim();
+
+        if (justification is null || justification.Length < MinimumReasonLength)
+        {
+            return RefusedReveal(
+                customerId,
+                $"A reason of at least {MinimumReasonLength} characters is required to reveal a "
+                + "contact record, and it is recorded in the audit trail. Say what the customer "
+                + "asked for and why the masked view is not enough.");
+        }
+
+        var budgetDecision = await budget.TryConsumeCustomerLookupAsync(cancellationToken);
+
+        if (!budgetDecision.Allowed)
+        {
+            return RefusedReveal(customerId, budgetDecision.Refusal!);
+        }
+
+        var customer = await customers.GetByIdAsync(customerId, cancellationToken);
+
+        if (customer is null)
+        {
+            return new ContactRevealResponse
+            {
+                CustomerId = customerId,
+                NotFound = true,
+                Addresses = [],
+            };
+        }
+
+        return new ContactRevealResponse
+        {
+            CustomerId = customerId,
+            FullName = customer.FullName,
+            CompanyName = customer.CompanyName,
+            Email = customer.Email,
+            PhoneNumber = customer.PhoneNumber,
+            Addresses = customer.Addresses
+                .OrderByDescending(a => a.IsDefault)
+                .ThenBy(a => a.Label, StringComparer.OrdinalIgnoreCase)
+                .Select(ToRevealedAddress)
+                .ToList(),
         };
     }
 
@@ -257,6 +357,32 @@ public sealed class CustomerLookupTools(
         };
     }
 
+    /// <summary>
+    /// The address as it is stored, for a caller with the support grant. The masked projection above
+    /// stays the shape everything else sees.
+    /// </summary>
+    private static RevealedAddress ToRevealedAddress(Address address) => new()
+    {
+        Id = address.Id,
+        Label = address.Label,
+        Line1 = address.Line1,
+        Line2 = address.Line2,
+        Line3 = address.Line3,
+        City = address.City,
+        StateOrProvince = address.StateOrProvince,
+        PostalCode = address.PostalCode,
+        CountryCode = address.CountryCode,
+        IsDefault = address.IsDefault,
+    };
+
+    private static ContactRevealResponse RefusedReveal(Guid customerId, string reason) =>
+        new()
+        {
+            CustomerId = customerId,
+            RefusalReason = reason,
+            Addresses = [],
+        };
+
     private static MaskedAddressSummary ToMaskedAddress(Address address) => new()
     {
         Id = address.Id,
@@ -309,6 +435,58 @@ public sealed record CustomerSearchResponse
     public string? RefusalReason { get; init; }
 
     public required IReadOnlyList<CustomerProjection> Customers { get; init; }
+}
+
+/// <summary>
+/// A customer's contact record unmasked: the answer <c>reveal_customer_contact</c> gives a support
+/// caller. Deliberately not the entity and not a superset of the masked projection — the tax id,
+/// the alternate email and the marketing opt-in are not what a return needs, and "unmask the
+/// contact" should not quietly become "unmask the record".
+/// </summary>
+public sealed record ContactRevealResponse
+{
+    public required Guid CustomerId { get; init; }
+
+    /// <summary>True when no customer has that id. Still a refusal-free answer, because the
+    /// caller was allowed to ask.</summary>
+    public bool NotFound { get; init; }
+
+    public string? FullName { get; init; }
+
+    public string? CompanyName { get; init; }
+
+    public string? Email { get; init; }
+
+    public string? PhoneNumber { get; init; }
+
+    public required IReadOnlyList<RevealedAddress> Addresses { get; init; }
+
+    /// <summary>Set when the call was refused rather than answered.</summary>
+    public string? RefusalReason { get; init; }
+}
+
+/// <summary>One stored address, unreduced.</summary>
+public sealed record RevealedAddress
+{
+    public required Guid Id { get; init; }
+
+    public string? Label { get; init; }
+
+    public required string Line1 { get; init; }
+
+    public string? Line2 { get; init; }
+
+    public string? Line3 { get; init; }
+
+    public required string City { get; init; }
+
+    public string? StateOrProvince { get; init; }
+
+    public required string PostalCode { get; init; }
+
+    public required string CountryCode { get; init; }
+
+    public required bool IsDefault { get; init; }
 }
 
 public sealed record AddressListResponse

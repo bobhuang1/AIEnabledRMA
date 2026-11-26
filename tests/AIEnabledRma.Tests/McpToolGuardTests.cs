@@ -219,7 +219,8 @@ public sealed class McpToolGuardTests
             new InMemoryCallMeter(),
             Options.Create(new McpBudgetOptions { CallsPerMinute = 1, CustomerLookupsPerDay = 1 }),
             TimeProvider.System,
-            new HttpContextCallerIdentity(request));
+            // The transport passes the scope it validated; the budget test only needs the caller's name.
+            new HttpContextCallerIdentity(request, "rma:support"));
 
         request.SignIn("agent-a", "subject-a");
         Assert.True((await budget.TryConsumeCallAsync(TestContext.Current.CancellationToken)).Allowed);

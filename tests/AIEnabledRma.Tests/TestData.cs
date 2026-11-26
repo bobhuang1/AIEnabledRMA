@@ -210,8 +210,14 @@ internal sealed class FakeCustomerRepository : ICustomerRepository
 
     public int SearchCalls { get; private set; }
 
-    public Task<Customer?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-        Task.FromResult(ById);
+    /// <summary>How many times a tool asked for the record itself, whatever the answer was.</summary>
+    public int GetByIdCalls { get; private set; }
+
+    public Task<Customer?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        GetByIdCalls++;
+        return Task.FromResult(ById);
+    }
 
     public Task<CustomerName?> GetNameAsync(Guid id, CancellationToken cancellationToken = default) =>
         Task.FromResult(ById is null
@@ -350,6 +356,17 @@ internal sealed class FakeClock(DateTimeOffset now) : IClock
 internal sealed class StdioCallerIdentity : AIEnabledRma.Mcp.ICallerIdentity
 {
     public string Describe() => AIEnabledRma.Mcp.ToolCallGuard.CallerName;
+
+    // stdio has no token, so it has no grant to unmask.
+    public bool IsSupportCaller => false;
+}
+
+/// <summary>A caller holding the support grant, for the one tool that asks for it.</summary>
+internal sealed class SupportCallerIdentity : AIEnabledRma.Mcp.ICallerIdentity
+{
+    public string Describe() => "support-agent:support-1";
+
+    public bool IsSupportCaller => true;
 }
 
 internal sealed class FakePaymentGateway : IPaymentGateway

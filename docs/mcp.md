@@ -52,7 +52,7 @@ removes a volume.
 
 ## What the realm has to provide
 
-Five things, all committed in `infra/keycloak/realm-aienabledrma.json`:
+Six things, all committed in `infra/keycloak/realm-aienabledrma.json`:
 
 1. **Realm** `aienabledrma` — the issuer is `{keycloak}/realms/aienabledrma`.
 2. **Client scope** `rma:read` — grants the scope the tool server requires, and is a default
@@ -70,6 +70,11 @@ Five things, all committed in `infra/keycloak/realm-aienabledrma.json`:
    token carries no `sub` at all: the flow still succeeds, but every browser caller reaches the
    audit trail as `mcp-browser:unknown-subject`. It is not a token scope — `scope` stays
    `openid rma:read`.
+6. **Client scope** `rma:support` — the grant that admits `reveal_customer_contact`, the one tool
+   that returns a full contact record. It is separate from `rma:read` because reading masked data
+   and reading one unmasked record are different permissions, and it is an *optional* scope of
+   `mcp-agent`, so the everyday token does not carry it and a caller that wants it has to ask —
+   which is what makes the audit row name a deliberate act rather than an agent's habit.
 
 The realm also carries one machine client, `mcp-agent`, with `serviceAccountsEnabled: true` and
 the committed secret `mcp-agent-secret`, plus a development user `browser-demo` whose password is
@@ -382,6 +387,7 @@ Bound from `Mcp:Http`; environment variables use `__` as the separator.
 | `Mcp:Http:Issuer` | `http://localhost:8080/realms/aienabledrma` | OIDC issuer, and the required `iss` |
 | `Mcp:Http:Audience` | `aienabledrma-mcp` | required `aud` |
 | `Mcp:Http:RequiredScope` | `rma:read` | scope every caller must hold |
+| `Mcp:Http:SupportScope` | `rma:support` | scope that admits `reveal_customer_contact`; empty stops the host |
 | `Mcp:Http:AllowedClientIds` | empty | clients allowed to call; empty is a startup failure |
 | `Mcp:Http:AllowedOrigins` | empty | browser origins allowed, and the CORS policy; empty means no browser client |
 | `Mcp:Http:Path` | `/mcp` | endpoint path |
@@ -395,6 +401,10 @@ client, because issuers differ in which they mint.
   `Mcp:Http:Issuer` verbatim, so the compose setup advertises `http://keycloak:8080/...`: correct for a
   client inside that network, unreachable from a browser on the host. The same hostname rule as the
   token's `iss` applies, and a real deployment sets both to one public name.
+- **The example grants the unmask scope to a machine client.** `mcp-agent` may request
+  `rma:support`, which is what lets the gate mint one token that may reveal and one that may not.
+  A deployment should attach that scope to a support role held by a person; the tool checks the
+  scope, and the audit row names whichever caller the token represented.
 - **A browser client holds its token where page scripts can reach it.** The transport now admits
   allow-listed origins (see below), but a token in a browser is a token any script on that page can
   read; keep its lifetime short and list only origins you would trust with it.

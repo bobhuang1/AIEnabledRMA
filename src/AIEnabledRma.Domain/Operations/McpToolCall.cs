@@ -16,6 +16,17 @@ public sealed class McpToolCall
     /// <summary>Comma-separated <c>argument:hash</c> pairs, hashes truncated for readability.</summary>
     public required string ArgumentHashes { get; set; }
 
+    /// <summary>
+    /// The caller's stated reason for a call that unmasked something, as written. Null for every
+    /// other call.
+    /// </summary>
+    /// <remarks>
+    /// The one value the row keeps: the arguments are hashed because they are the data being read,
+    /// while a reason is the justification for reading it, and a support role that unmasked a
+    /// customer without leaving the reason behind has left nothing an audit can judge.
+    /// </remarks>
+    public string? Reason { get; set; }
+
     public int ResultCount { get; set; }
 
     public long LatencyMs { get; set; }

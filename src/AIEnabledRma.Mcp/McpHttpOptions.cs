@@ -31,6 +31,18 @@ public sealed class McpHttpOptions
     public string RequiredScope { get; set; } = "rma:read";
 
     /// <summary>
+    /// The scope that admits the one tool which does not mask, <c>reveal_customer_contact</c>.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not part of <see cref="RequiredScope"/>: every caller of these tools reads
+    /// masked data, and the ability to read one unmasked record is a support role rather than a
+    /// wider version of the same permission. A client can only hold it by being granted the scope,
+    /// and the token that carries it is what the audit row records, so the trail answers "which
+    /// grant unmasked this customer" rather than "some agent did".
+    /// </remarks>
+    public string SupportScope { get; set; } = "rma:support";
+
+    /// <summary>
     /// Origins allowed to call the transport from a browser. Empty means no browser client is
     /// accepted; a server-side agent sends no <c>Origin</c> header and is unaffected.
     /// </summary>
@@ -85,6 +97,16 @@ public sealed class McpHttpOptions
             throw new InvalidOperationException(
                 $"{SectionName}:RequiredScope is required. Without it any authenticated token, "
                 + "including one issued for an unrelated client, could call the tools.");
+        }
+
+        if (string.IsNullOrWhiteSpace(SupportScope))
+        {
+            // Fail closed loudly rather than quietly: a blank scope can never appear in a token,
+            // so the unmask tool would be permanently refused and the code would look present and
+            // working to everyone reading it.
+            throw new InvalidOperationException(
+                $"{SectionName}:SupportScope is required. It is the scope that admits "
+                + "reveal_customer_contact; with it empty, no token could ever be granted it.");
         }
 
         if (AllowedClientIds.Length == 0)
