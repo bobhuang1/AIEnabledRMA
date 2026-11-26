@@ -619,6 +619,17 @@ host) cannot be faked.
 end to end, including the paid-repair path that lands on the payment step and bills the
 per-product price.
 
+Two evaluations run as ordinary tests, because a number nobody re-measures is a claim about
+last month. `eval/retrieval-golden.json` holds forty questions with the articles that would
+answer them, and `RetrievalGoldenSetTests` scores whatever `IKnowledgeRetriever` the host
+registers against recorded recall@3, MRR and precision@3 floors. `eval/triage-golden.json`
+holds twenty-three fault statements with the class each request should end in, and
+`TriageGoldenSetTests` runs them through the registered pipeline — redaction, retrieval, the
+scope guard, the bundled model, citation verification and the fail-closed fallback —
+recording class agreement, recall@6, MRR, citation validity and precision, the human-review
+rate and the prompt-injection pass rate. Both files are append-only history: a run adds an
+entry rather than editing one, and every entry records the corpus hashes it was measured on.
+
 ## CI cost
 
 Hosted-runner minutes are billed per account, so the pipeline is deliberately narrow. These

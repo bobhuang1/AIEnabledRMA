@@ -123,7 +123,7 @@ public sealed partial class TriagePipeline(
         //    identifier it was never given has either guessed one or been fed it by something
         //    else, and neither is a reply worth showing: it is replaced, and the case goes to a
         //    human.
-        if (OutputLeaksAnIdentifier(request, verified.Verdict))
+        if (OutputLeaksAnIdentifier(request, verified))
         {
             logger.LogWarning(
                 "Triage output repeated a customer identifier; replaced with the fail-closed "
@@ -135,7 +135,7 @@ public sealed partial class TriagePipeline(
 
         return new TriageResult
         {
-            Verdict = verified.Verdict,
+            Verdict = verified,
             Sources = retrieval.Articles,
         };
     }
@@ -422,7 +422,7 @@ public sealed partial class TriagePipeline(
     /// attributed, and clamps confidence into range. Returns a downgraded verdict when
     /// nothing survives verification.
     /// </summary>
-    private (TriageVerdict Verdict, bool Downgraded) VerifyAndClamp(
+    private TriageVerdict VerifyAndClamp(
         TriageVerdict verdict,
         HashSet<string> allowedIds,
         string? correlationId)
@@ -467,7 +467,7 @@ public sealed partial class TriagePipeline(
                 + "Correlation {CorrelationId}.",
                 correlationId);
 
-            return (new TriageVerdict
+            return new TriageVerdict
             {
                 Resolved = false,
                 Confidence = Math.Min(confidence, _policy.HumanReviewConfidenceThreshold),
@@ -478,10 +478,10 @@ public sealed partial class TriagePipeline(
                 Steps = steps,
                 ArticleIds = verifiedIds,
                 OutOfScope = false,
-            }, true);
+            };
         }
 
-        return (new TriageVerdict
+        return new TriageVerdict
         {
             Resolved = verdict.Resolved,
             Confidence = confidence,
@@ -490,7 +490,7 @@ public sealed partial class TriagePipeline(
             Steps = steps,
             ArticleIds = verifiedIds,
             OutOfScope = false,
-        }, false);
+        };
     }
 
     /// <summary>

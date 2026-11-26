@@ -698,7 +698,7 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
 - **A delivered failed payment names the return it is about.** The webhook handler filed its review item with no `RmaRequestId` and no `CustomerId` â€” only the RMA number inside the explanation â€” so the same failure caught inline during authorisation opened from the dashboard while the delivered one could not be opened at all. The parsed number now travels with the effect (`WebhookEffect`), and `EfWebhookEventLedger` resolves it to the return inside the transaction that files the item, so the link and the row commit together or not at all. A number that matches nothing still files the item, unlinked: the payment failed whether or not the return exists, and withholding it to keep a foreign key tidy would lose the only trace of the money.
 - **Gate:** `suite` 611 passed, 0 skipped, 0 failed, all gates passed. Mutations: never resolving the named return in `EfWebhookEventLedger` fails `A_delivery_naming_a_return_links_the_item_to_it` with the other ten webhook tests still passing, including the one that pins an unknown number being filed anyway; dropping the number from the effect fails `A_delivery_passes_the_return_it_names_to_the_ledger`.
 - **The path the edge probes is answered again.** `deploy/Caddyfile` health-checks `health_uri /health/ready` and drops its only upstream when the answer is not a 200, and the README documents the same path; nothing in the web host mapped it, so Caddy held an empty pool and answered every request through the proxy with 503 "no upstreams available" while every container reported healthy. `/health/ready` now asks only what readiness means â€” can this host reach its database â€” and answers `{"status":"ready"}` or a 503 `{"status":"unavailable"}`; `/health` stays the container probe's liveness question, which is deliberately a different one.
-- **Gate:** `suite` 613 passed, 0 skipped, 0 failed, all gates passed. Mutations: answering readiness without asking the database fails `Readiness_answers_while_the_database_is_reachable_and_not_when_it_is_not` with "Expected: ServiceUnavailable / Actual: OK"; probing a path the host does not map fails `The_edge_probes_a_path_the_web_host_answers` with "Not found: MapGet(\"/health/readyz\"".
+- **Gate:** `suite` 613 passed, 0 skipped, 0 failed, all gates passed. Mutations: answering readiness without asking the database fails `Readiness_answers_while_the_database_is_reachable_and_not_when_it_is_not` with "Expected: ServiceUnavailable / Actual: OK"; probing a path the host does not map fails `The_edge_probes_a_path_the_web_host_answers` with "Not found: MapGet("/health/readyz"".
 - **The two sums are on the row an operator judges a mismatch from.** A capture of 69.00 against a return saying 70.00 is a disagreement both sides call "captured", and the queue row that reported it carried the return, the provider's state and the transaction â€” the money lived only inside the explanation sentence, which is the "read it out of prose" the state column was added to end. `ReviewItem` now stores the expected and the provider sum (amount plus currency: four nullable columns, added to `review_items` by a migration) and `PaymentReconciler` writes them when it files, so the dashboard prints `expected: 70.00 EUR Â· provider holds: 69.00 EUR` beside the state. An item that recorded no money â€” every item that is not a payment â€” prints no money line, and a row with an amount but no currency shows none rather than a bare number.
 - **Gate:** `suite` 616 passed, 0 skipped, 0 failed, all gates passed; the EF model check is clean, so the migration matches the model. Mutations: dropping the four assignments when the item is filed fails `A_capture_for_a_different_amount_is_a_disagreement_even_though_both_say_captured` with the other eight reconciler tests passing; removing the row's money line fails `A_mismatch_row_shows_the_two_sums_the_run_saw` while `A_mismatch_row_names_the_return_the_provider_state_and_the_transaction` still passes, so the new line is what that test pins.
 - **The backup leaves the host, and the drill restores that copy.** The drill seeded a database, dumped it and restored it moments later on the same machine, so a green night said the dump format works and nothing about whether a copy ever reached anywhere; and nothing in the pack produced a dump on a schedule at all, so the drill was the only dump that ever existed. `scripts/backup.sh` is now the command that takes one: it dumps through the pack's own PostgreSQL image, refuses a file under a kilobyte or one `pg_restore --list` cannot read, copies it to `BACKUP_REMOTE` (an rclone destination â€” S3, B2, SFTP, or a mounted disk through `local:`), and prunes the destination and the staging copy to `BACKUP_KEEP_DAYS` (default 14). `deploy/rma-backup.service` and `deploy/rma-backup.timer` run it nightly at 01:20 with `Persistent=true`, `deploy/prod.env.example` names the destination and the window, and the README says where the storage credentials live (rclone.conf, never prod.env) and how to install the units.
@@ -745,3 +745,37 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   `mcp-agent`'s optional scopes, or its `include.in.token.scope`, fails the realm facts. Live:
   `verify-auth.sh` re-imported the realm on the running stack and passed 84 checks, including the 31-row
   shape, the support token carrying `rma:support` with the transport's audience, and the browser flow.
+
+- **Two dead things went, and P7's eval arrived with a defect in its first run.** `src/AIEnabledRma.Mcp/appsettings.json`
+  carried a `McpSecurity` block — `LocalCallerName`, `CallsPerMinute`, `CustomerLookupsPerSession` and
+  `SupportRole` — that nothing bound. The limits were already `Mcp:Budget` (`CallsPerMinute`,
+  `CustomerLookupsPerDay` on `McpBudgetOptions`), and the grant that admits `reveal_customer_contact` is
+  `Mcp:Http:SupportScope`; a `SupportRole: rma:support` key sitting beside a live `Mcp:Http:SupportScope` reads
+  like a second working setting, and a deployment that edited it would have changed nothing. Deleting the block
+  leaves one name per setting. `TriagePipeline.VerifyAndClamp` also returned a `Downgraded` flag nobody read —
+  the caller wrote `verified.Verdict` and ignored the bool — so it returns the verdict alone now.
+- **P7's evaluation runs the pipeline, not a component beside it.** `eval/triage-golden.json` holds 23 fault
+  statements in a customer's wording, each with the class the request should end in and the articles a correct
+  answer may cite, plus two injected-article cases; `TriageGoldenSetTests` composes the host's own `AddRag` and
+  `AddAiProvider` and scores `TriagePipeline` over them. The class is not invented by the eval: `Classify` asks
+  the three questions `RmaWorkflow` asks after triage, so an expectation and an operator's queue cannot mean
+  different things. Measured on the shipped corpus with review on and the bundled model: **class agreement 1.000,
+  recall@6 1.000 (20/20), MRR 0.842, citation validity 1.000, citation precision 0.263, human-review rate 0.000
+  (0/23), injection pass rate 1.000**, with class agreement, citation validity and the injection pass rate as
+  floors and the rest recorded per run and compared per case against the latest entry, the same append-only shape
+  the retrieval eval uses. The corpus fingerprint and reviewed-corpus hash are the retrieval eval's pair, so a
+  number that moved with the articles is attributable to them.
+- **The eval found the guard's literal matching on its first run.** `tq-014` — "the unit reboots by itself every
+  few minutes", which is `kb-0014`'s own symptom — is refused as off-topic: `ScopeGuardVocabulary` compares
+  tokens as written, the article's keyword is `reboot`, and the customer wrote `reboots`. The case is recorded as
+  refused, the data's `knownGaps` says why, and `tq-023` covers the same article in a phrasing the guard accepts.
+  Stems are not a drive-by fix: the retrieval tokeniser stems and the guard does not, so the two paths disagree
+  about the same word, and that change belongs in its own commit with this expectation and a new measurement
+  moved with it.
+- **Gate:** `suite` 660 passed, 0 skipped, 0 failed, all gates passed; the EF model check is clean. Mutations, each
+  run against the new tests alone: a refused result falling through to the confidence rule fails
+  `Classify_names_the_class_the_workflow_would_act_on` and the acceptance test's class floor; leaked markers
+  never counted fails `A_leaked_instruction_fails_the_injection_case`; ranking every expected article by its
+  distance from the end fails both `An_answer_that_cites_the_wrong_article_is_a_miss_not_a_hit` and the recorded
+  ranks. The injection cases pass in the acceptance test with the marker check removed, which is why the seam test
+  exists — the bundled model does not repeat what the loader neutralised, so only a broken scorer shows there.

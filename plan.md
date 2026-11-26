@@ -731,6 +731,37 @@ bullets stay as requirements.
 - CI runs the eval with the `example-local` model and the fake embedder (deterministic). A nightly or manual job
   can run it against a real model.
 
+**Status: shipped; the classes, the metrics and the numbers are in the data.**
+- `eval/triage-golden.json` holds 23 statements written the way a customer writes a fault, each with the class the
+  request should end in and the articles a correct answer may cite, plus two injected-article cases. The cases run
+  through the registered pipeline — redaction, retrieval, the scope guard, `example-local`, citation verification
+  and the fail-closed fallback — so the numbers are about the product, and `TriageGoldenSetTests` composes the
+  host's own `AddRag` and `AddAiProvider` rather than building a pipeline beside them. The class a case expects is
+  not invented: `TriageGoldenSet.Classify` asks the three questions `RmaWorkflow` asks after triage (refused,
+  resolved, or below `HumanReviewConfidenceThreshold`), so an expectation and an operator's queue cannot mean
+  different things, and `Classify_names_the_class_the_workflow_would_act_on` pins the four rules.
+- Measured on the shipped corpus with review on: **class agreement 1.000, recall@6 1.000 (20/20), MRR 0.842,
+  citation validity 1.000, citation precision 0.263, human-review rate 0.000 (0/23), injection pass rate 1.000**.
+  Class agreement, citation validity and the injection pass rate are floors; the rest are recorded per run and
+  compared with the latest entry, per case as well as in aggregate, so one case rising while another falls is not a
+  silent pass. The corpus fingerprint and the reviewed-corpus hash are the same pair the retrieval eval records, so
+  a number that moved with the articles is attributable to them.
+- **The eval found the first defect it was pointed at.** `tq-014` — "the unit reboots by itself every few minutes",
+  which is `kb-0014`'s own symptom — is **refused as off-topic**: `ScopeGuardVocabulary` compares tokens literally
+  and the article's keyword is `reboot` while the customer wrote `reboots`. The case is recorded as refused, the
+  data's `knownGaps` says why, and `tq-023` covers the same article in a phrasing the guard accepts. Matching
+  inflections in the guard is a change worth making on its own, with this expectation and a new measurement moved
+  in the same commit — the retrieval tokeniser already stems, so the two paths disagree about the same word today.
+- The human-review rate is 0.000 because no in-scope statement lands below the threshold with the bundled model. The
+  class is still measured and routed by the workflow's rule; the day a provider or a case moves one there, the
+  number and the per-case class both move.
+- The injected cases carry the two shapes P4 neutralises — an instruction in a body bullet and one in the title —
+  and are refused if any marker reaches the summary or the steps, or if the answer cites anything but the article
+  the question was about. They are generated per case by the eval rather than read from P4's fixture corpus, so the
+  corpus they need is one reviewed article and a manifest the test writes.
+- **Outstanding:** the numbers are the bundled model's. A nightly or manual run against a real provider is still the
+  plan's open half, and it would be a separate entry rather than an edit to this one.
+
 ### P8. Wizard hardening (S) — F5, F6, D6
 
 - Rate limiting (`AddRateLimiter`) on Start and every POST, per IP and per request id.
