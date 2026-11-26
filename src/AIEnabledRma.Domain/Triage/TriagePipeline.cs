@@ -31,8 +31,15 @@ public sealed partial class TriagePipeline(
     IPiiRedactor redactor,
     IOptions<RmaPolicyOptions> policyOptions,
     IOptions<TriagePipelineOptions> pipelineOptions,
-    ILogger<TriagePipeline> logger) : ITriageService
+    ILogger<TriagePipeline> logger,
+    ITriageRefusalLog? refusalLog = null) : ITriageService
 {
+    /// <summary>
+    /// The width the refusal column keeps. Long enough for the sentence a customer wrote, bounded so
+    /// one paste cannot turn a row into a document.
+    /// </summary>
+    private const int MaxRefusalStatementLength = 1000;
+
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -71,6 +78,11 @@ public sealed partial class TriagePipeline(
                 "Triage refused by scope guard: {Reason} (correlation {CorrelationId})",
                 guard.Reason,
                 request.CorrelationId);
+
+            // The trace a refusal leaves. Written after redaction, so what an operator reads when
+            // deciding whether the corpus is missing an article is the same text the pipeline
+            // would have sent to the model, placeholders and all.
+            await RecordRefusalAsync(guard.Reason, request, cancellationToken);
 
             return new TriageResult
             {
@@ -138,6 +150,53 @@ public sealed partial class TriagePipeline(
             Verdict = verified,
             Sources = retrieval.Articles,
         };
+    }
+
+    /// <summary>
+    /// Records the refused question, and never fails the refusal because the record could not be
+    /// written: the customer's answer is already decided, and losing it would be worse than losing
+    /// the evidence.
+    /// </summary>
+    private async Task RecordRefusalAsync(
+        string reason,
+        TriageRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (refusalLog is null || string.IsNullOrWhiteSpace(request.CustomerStatement))
+        {
+            return;
+        }
+
+        var statement = request.CustomerStatement.Trim();
+        if (statement.Length > MaxRefusalStatementLength)
+        {
+            statement = string.Concat(statement.AsSpan(0, MaxRefusalStatementLength - 1), "…");
+        }
+
+        try
+        {
+            await refusalLog.RecordAsync(
+                new TriageRefusal
+                {
+                    Id = Guid.NewGuid(),
+                    AtUtc = DateTimeOffset.UtcNow,
+                    Reason = reason,
+                    Statement = statement,
+                },
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Could not record a refused question; the refusal itself is unaffected. "
+                + "Correlation {CorrelationId}.",
+                request.CorrelationId);
+        }
     }
 
     /// <summary>

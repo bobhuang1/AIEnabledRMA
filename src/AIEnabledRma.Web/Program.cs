@@ -31,6 +31,11 @@ builder.Services.AddAiProvider(builder.Configuration);
 builder.Services.AddScoped<IRmaWorkflow, RmaWorkflow>();
 builder.Services.AddScoped<ITriageService, TriagePipeline>();
 
+// Where a refused question goes. Scoped with the context it writes through; the pipeline treats a
+// failed write as a log line, because the refusal itself has already been decided and the
+// customer's answer does not depend on the record being written.
+builder.Services.AddScoped<ITriageRefusalLog, EfTriageRefusalLog>();
+
 // The redactor holds no state across requests: each triage call starts its own session, so the
 // placeholders it hands the model cannot link two conversations by number.
 builder.Services.AddSingleton<IPiiRedactor, PiiRedactor>();

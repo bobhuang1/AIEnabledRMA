@@ -11,7 +11,7 @@ public sealed record TableRowCount(string Table, int Rows);
 /// The body of `DbAdmin stats`, kept out of the top-level program so a test can pin what it prints.
 /// </summary>
 /// <remarks>
-/// The four audit tables are here because the question an operator asks of them is different from the
+/// The five audit tables are here because the question an operator asks of them is different from the
 /// one the business tables answer: the business counts describe the site, while these describe how
 /// much has accumulated since the last `prune`. A table missing from this list reads exactly like a
 /// table that never grows, which is why the list is pinned by a test rather than left to the command.
@@ -30,6 +30,7 @@ public static class StatsReport
         "operator_actions",
         "review_items",
         "webhook_events",
+        "triage_refusals",
     ];
 
     /// <summary>Every count `stats` reports, read through the application's own model.</summary>
@@ -48,6 +49,7 @@ public static class StatsReport
         new("operator_actions", await db.OperatorActions.CountAsync(cancellationToken)),
         new("review_items", await db.ReviewItems.CountAsync(cancellationToken)),
         new("webhook_events", await db.WebhookEvents.CountAsync(cancellationToken)),
+        new("triage_refusals", await db.TriageRefusals.CountAsync(cancellationToken)),
     ];
 
     /// <summary>
@@ -76,7 +78,7 @@ public static class StatsReport
     /// <remarks>
     /// The two groups stay apart here for the reason the blank line separates them in the text: the
     /// audit tables are the ones that grow between prune runs, and a flat map would make every scraper
-    /// carry the list of four names to find them. An empty group is still written as <c>{}</c>, so a
+    /// carry the list of five names to find them. An empty group is still written as <c>{}</c>, so a
     /// monitor's path to <c>audit.webhook_events</c> exists on a fresh database as well as a busy one.
     /// Compact and single-line on purpose: this is the form a line-based collector reads, and the text
     /// view above is the one meant for eyes.

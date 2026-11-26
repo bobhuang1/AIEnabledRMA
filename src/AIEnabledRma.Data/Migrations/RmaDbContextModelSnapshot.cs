@@ -909,6 +909,41 @@ namespace AIEnabledRma.Data.Migrations
                     b.ToTable("rma_requests", (string)null);
                 });
 
+            modelBuilder.Entity("AIEnabledRma.Domain.Triage.TriageRefusal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("AtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("at_utc");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("reason");
+
+                    b.Property<string>("Statement")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("statement");
+
+                    b.HasKey("Id")
+                        .HasName("pk_triage_refusals");
+
+                    b.HasIndex("AtUtc")
+                        .HasDatabaseName("ix_triage_refusals_at");
+
+                    b.HasIndex("Reason", "AtUtc")
+                        .HasDatabaseName("ix_triage_refusals_reason_at");
+
+                    b.ToTable("triage_refusals", (string)null);
+                });
+
             modelBuilder.Entity("AIEnabledRma.Domain.Catalog.Device", b =>
                 {
                     b.HasOne("AIEnabledRma.Domain.Catalog.Product", "Product")

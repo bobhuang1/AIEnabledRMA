@@ -44,7 +44,7 @@ public static class RetentionPruner
             throw new ArgumentException("Name at least one table to prune.", nameof(targets));
         }
 
-        var tables = new List<PrunedTable>(4);
+        var tables = new List<PrunedTable>(5);
 
         if (targets.HasFlag(RetentionTargets.McpToolCalls))
         {
@@ -92,6 +92,17 @@ public static class RetentionPruner
             tables.Add(new PrunedTable(
                 RetentionTargets.WebhookEvents,
                 "webhook_events",
+                cutoff,
+                await CountOrDeleteAsync(old, apply, cancellationToken)));
+        }
+
+        if (targets.HasFlag(RetentionTargets.TriageRefusals))
+        {
+            var cutoff = policy.TriageRefusalsBefore(now);
+            var old = db.TriageRefusals.Where(refusal => refusal.AtUtc < cutoff);
+            tables.Add(new PrunedTable(
+                RetentionTargets.TriageRefusals,
+                "triage_refusals",
                 cutoff,
                 await CountOrDeleteAsync(old, apply, cancellationToken)));
         }

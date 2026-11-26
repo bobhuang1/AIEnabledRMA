@@ -884,3 +884,34 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   alone: removing the comparison from `EnsureUsable` leaves the two refusal facts failing with
   "Assert.Throws() Failure: No exception was thrown" while `Distinct_scopes_start_outside_development` and the other
   seven options facts still pass — the check is what the tests detect, not the shape of the tests.
+
+## 2026-11-26 — A refused question is evidence now
+
+- **The trace a refusal never left.** A question the scope guard turns away used to end at a log line and a canned
+  sentence: the customer was turned away and the question — the one signal that the corpus has a hole — was
+  discarded at the moment it was produced. `TriagePipeline` now records it through `ITriageRefusalLog` after step 0's
+  redaction, so the row holds the statement the pipeline would have sent to the model, `[EMAIL_1]` and all, and never
+  the identifier it was typed with. The row is truncated to the column's 1000 characters.
+- **The record is evidence, not a dependency.** The write is caught and logged; the refusal has already been decided
+  when the sink is called, and a database that cannot be reached must not turn a canned refusal into an error page.
+  A fact proves it with a sink that throws.
+- **`DbAdmin refusals` is the report the rows exist for.** It groups by the guard's reason and the redacted
+  statement, counts each, orders most asked first, takes one row more than the bound so it can say the list was cut,
+  and counts the whole window separately — so "3 refusal(s), showing 1" cannot be read as a corpus that only
+  produced one gap. The statement is cut to 90 characters in the line, with an ellipsis, so a long paste cannot wrap
+  a report. It exits 0 whatever it prints, because a refused question is a gap to review, not a fault.
+- **The table has a window like the other audit tables.** Five now, not four: `triage_refusals` is pruned at 365 days
+  (`prune --triage-refusals`), because a redacted sentence nobody acted on is still someone's sentence. `stats`
+  counts it with the others, since the question before a prune is how much the audit tables have accumulated.
+- **`AddTriageRefusals`** creates the table with the two indexes the report and the prune both read
+  (`at_utc`; `reason, at_utc`), through the model check in the gate rather than a hand-written migration.
+- **Five facts in `TriageRefusalTests`**, against the real sink and a migrated PostgreSQL: the stored statement is the
+  redacted one, an answered question writes no row, a refusal survives a log that throws, the report ranks and counts
+  and reports its own truncation, and an empty window says so instead of printing a bare header. The stats and
+  retention tests follow the fifth table rather than being left describing four.
+- **Gate:** `suite` 673 passed, 0 skipped, 0 failed, all gates passed. Two mutations, each against
+  `TriageRefusalTests` alone: deleting the `RecordRefusalAsync` call from the guard's refusal branch fails
+  `A_refused_question_is_stored_with_the_statement_the_pipeline_redacted` (no row to read); reversing the report's
+  `OrderByDescending(row => row.Count)` to ascending fails
+  `The_report_ranks_what_was_asked_most_and_counts_the_whole_window`. The other four facts pass under both, so it is
+  the recording and the ranking being measured, not the tests' shape.

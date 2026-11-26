@@ -28,6 +28,11 @@ public sealed record RetentionPolicy
     public required TimeSpan WebhookEvents { get; init; }
 
     /// <summary>
+    /// How long a refused question in <c>triage_refusals</c> is kept after it was asked.
+    /// </summary>
+    public required TimeSpan TriageRefusals { get; init; }
+
+    /// <summary>
     /// The policy this repository ships. Each window has its own reason:
     /// <list type="bullet">
     /// <item><description>
@@ -52,6 +57,12 @@ public sealed record RetentionPolicy
     /// whole point of the row is to recognise that retry, so the window is far longer than the
     /// retry behaviour it guards. Ninety days also outlives any plausible replay of an old event.
     /// </description></item>
+    /// <item><description>
+    /// <b>Refused questions, 365 days.</b> These rows exist to show a corpus gap rather than to
+    /// investigate a person: the statement is already redacted, and the question being answered is
+    /// "what do customers ask that no article covers". A year covers a seasonal fault cycle and
+    /// the corpus reviews of two quarters, and then stops paying for a sentence nobody acted on.
+    /// </description></item>
     /// </list>
     /// </summary>
     public static RetentionPolicy Default { get; } = new()
@@ -60,6 +71,7 @@ public sealed record RetentionPolicy
         OperatorActions = TimeSpan.FromDays(730),
         ResolvedReviewItems = TimeSpan.FromDays(90),
         WebhookEvents = TimeSpan.FromDays(90),
+        TriageRefusals = TimeSpan.FromDays(365),
     };
 
     /// <summary>
@@ -72,7 +84,8 @@ public sealed record RetentionPolicy
         if (McpToolCalls <= TimeSpan.Zero
             || OperatorActions <= TimeSpan.Zero
             || ResolvedReviewItems <= TimeSpan.Zero
-            || WebhookEvents <= TimeSpan.Zero)
+            || WebhookEvents <= TimeSpan.Zero
+            || TriageRefusals <= TimeSpan.Zero)
         {
             throw new InvalidOperationException(
                 "Every retention window must be positive: a zero or negative window prunes the row that was just written.");
@@ -86,6 +99,8 @@ public sealed record RetentionPolicy
     public DateTimeOffset ResolvedReviewItemsBefore(DateTimeOffset now) => now - ResolvedReviewItems;
 
     public DateTimeOffset WebhookEventsBefore(DateTimeOffset now) => now - WebhookEvents;
+
+    public DateTimeOffset TriageRefusalsBefore(DateTimeOffset now) => now - TriageRefusals;
 }
 
 /// <summary>Which audit tables a prune run touches. None named means all of them.</summary>
@@ -102,7 +117,9 @@ public enum RetentionTargets
 
     WebhookEvents = 1 << 3,
 
-    All = McpToolCalls | OperatorActions | ReviewItems | WebhookEvents,
+    TriageRefusals = 1 << 4,
+
+    All = McpToolCalls | OperatorActions | ReviewItems | WebhookEvents | TriageRefusals,
 }
 
 /// <summary>

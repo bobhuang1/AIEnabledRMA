@@ -119,11 +119,12 @@ dotnet run --project tools/DbAdmin -- seed
 
 `DbAdmin` commands: `migrate`, `migrations`, `seed` (only when the catalog is empty),
 `reset --force` (drop schema, migrate, seed, realign the RMA number sequence), `stats`,
-`prune` (delete audit rows past their retention window — see below).
+`refusals` (what the scope guard turned away, ranked — see below), `prune` (delete audit rows past
+their retention window — see below).
 
 ### Retention
 
-Four tables are audit trails rather than business records, so each has a window after which its rows
+Five tables are audit trails rather than business records, so each has a window after which its rows
 are deleted. `prune` is an operator-run command: it is not a background job in a host and not an HTTP
 endpoint, for the same reason `migrate` and `seed` are not — a running site should never be a way to
 delete production data.
@@ -134,8 +135,9 @@ delete production data.
 | `operator_actions` | 730 days — the default return window | the action (`at_utc`) |
 | `review_items` | 90 days **after resolution** | `resolved_at_utc`; an open item is never pruned |
 | `webhook_events` | 90 days | the delivery (`received_at_utc`) |
+| `triage_refusals` | 365 days | the refusal (`at_utc`) |
 
-`DbAdmin stats` prints these four tables after the business ones, because the number an operator wants
+`DbAdmin stats` prints these five tables after the business ones, because the number an operator wants
 before a prune run is how much has accumulated, not only how many returns exist. `--json` writes the
 same counts as one object, in the same two groups (`{"business":{…},"audit":{…}}`, one line), so a
 monitor can scrape how fast the audit tables fill between prune runs instead of parsing the padding;
@@ -286,6 +288,25 @@ sums are there because the reason code cannot carry them: two equal states holdi
 amounts is money that moved unrecorded, and a queue that printed only the states would call it a
 match. It reads and never resolves; the dashboard is still the only place that closes an item,
 and it exits 0 whatever the queue holds, because items waiting is not a failure of the listing.
+
+### Refused questions
+
+A question the scope guard turns away never reaches the model, and until the pipeline started
+recording it nothing said what had been asked: the customer saw a canned sentence and the question
+was gone. `refusals` prints what was refused, grouped by the guard's reason and the redacted
+statement, most asked first — the cheapest evidence of what the corpus cannot answer, and the input
+to the next corpus review.
+
+```bash
+dotnet run --project tools/DbAdmin -- refusals                             # last 30 days, 20 most asked
+dotnet run --project tools/DbAdmin -- refusals --days 90 --take 50         # a wider window, a longer list
+```
+
+The statement is stored after the pipeline's redaction pass, so it carries `[EMAIL_1]` and friends
+where identifiers were typed rather than the identifiers themselves; it is truncated to a sentence,
+and `prune --triage-refusals` applies the 365-day window above. A refusal is a corpus gap rather than
+a fault, so the command exits 0 whatever it finds, and a window with nothing in it says so instead of
+printing a bare header.
 
 ### Database backups
 

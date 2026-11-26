@@ -48,12 +48,14 @@ public sealed class RetentionPolicyTests
             OperatorActions = TimeSpan.FromDays(20),
             ResolvedReviewItems = TimeSpan.FromDays(30),
             WebhookEvents = TimeSpan.FromDays(40),
+            TriageRefusals = TimeSpan.FromDays(50),
         };
 
         Assert.Equal(now.AddDays(-10), policy.McpToolCallsBefore(now));
         Assert.Equal(now.AddDays(-20), policy.OperatorActionsBefore(now));
         Assert.Equal(now.AddDays(-30), policy.ResolvedReviewItemsBefore(now));
         Assert.Equal(now.AddDays(-40), policy.WebhookEventsBefore(now));
+        Assert.Equal(now.AddDays(-50), policy.TriageRefusalsBefore(now));
     }
 
     [Theory]
@@ -67,6 +69,7 @@ public sealed class RetentionPolicyTests
             OperatorActions = TimeSpan.FromDays(days),
             ResolvedReviewItems = TimeSpan.FromDays(90),
             WebhookEvents = TimeSpan.FromDays(90),
+            TriageRefusals = TimeSpan.FromDays(365),
         };
 
         var refused = Assert.Throws<InvalidOperationException>(policy.EnsureUsable);
@@ -82,11 +85,12 @@ public sealed class RetentionPolicyTests
         var everyTable = RetentionTargets.McpToolCalls
             | RetentionTargets.OperatorActions
             | RetentionTargets.ReviewItems
-            | RetentionTargets.WebhookEvents;
+            | RetentionTargets.WebhookEvents
+            | RetentionTargets.TriageRefusals;
 
         Assert.Equal(RetentionTargets.All, everyTable);
         Assert.Equal(
-            4,
+            5,
             Enum.GetValues<RetentionTargets>()
                 .Count(target => target is not RetentionTargets.None and not RetentionTargets.All));
     }

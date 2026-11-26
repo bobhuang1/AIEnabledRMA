@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 namespace AIEnabledRma.Tests;
 
 /// <summary>
-/// `DbAdmin stats` is the only view an operator has of how fast the four audit tables fill between
+/// `DbAdmin stats` is the only view an operator has of how fast the five audit tables fill between
 /// prune runs, so its output is pinned here rather than left to whatever the command happens to
 /// print: a table that drops out of the list reads exactly like a table that never grows.
 /// </summary>
@@ -42,6 +42,7 @@ public sealed class DbAdminStatsTests : IAsyncLifetime
             new TableRowCount("operator_actions", 12),
             new TableRowCount("review_items", 3),
             new TableRowCount("webhook_events", 900),
+            new TableRowCount("triage_refusals", 7),
         ]);
 
         Assert.Equal(
@@ -58,6 +59,7 @@ public sealed class DbAdminStatsTests : IAsyncLifetime
             "  operator_actions: 12",
             "  review_items:     3",
             "  webhook_events:   900",
+            "  triage_refusals:  7",
         ],
             lines);
     }
@@ -69,8 +71,8 @@ public sealed class DbAdminStatsTests : IAsyncLifetime
 
         await using (var seed = _database.CreateContext())
         {
-            // Two of the four are left empty on purpose: a report that printed a constant, or that
-            // answered from the wrong table, would still say something for each of them.
+            // Three of the five are left empty on purpose: a report that printed a constant, or
+            // that answered from the wrong table, would still say something for each of them.
             seed.WebhookEvents.AddRange(
                 new ProcessedWebhookEvent
                 {
@@ -101,11 +103,12 @@ public sealed class DbAdminStatsTests : IAsyncLifetime
         var counts = (await StatsReport.ReadAsync(db, cancellationToken))
             .ToDictionary(count => count.Table, count => count.Rows);
 
-        Assert.Equal(11, counts.Count);
+        Assert.Equal(12, counts.Count);
         Assert.Equal(2, counts["webhook_events"]);
         Assert.Equal(1, counts["review_items"]);
         Assert.Equal(0, counts["mcp_tool_calls"]);
         Assert.Equal(0, counts["operator_actions"]);
+        Assert.Equal(0, counts["triage_refusals"]);
     }
 
     /// <summary>
@@ -129,6 +132,7 @@ public sealed class DbAdminStatsTests : IAsyncLifetime
             new("operator_actions", 12),
             new("review_items", 3),
             new("webhook_events", 900),
+            new("triage_refusals", 7),
         };
 
         var json = StatsReport.ToJson(counts);
@@ -137,7 +141,7 @@ public sealed class DbAdminStatsTests : IAsyncLifetime
             "{\"business\":{\"products\":5,\"devices\":14,\"warranties\":16,\"customers\":8,"
             + "\"addresses\":10,\"rma_requests\":1,\"rma_lines\":1},"
             + "\"audit\":{\"mcp_tool_calls\":240,\"operator_actions\":12,\"review_items\":3,"
-            + "\"webhook_events\":900}}",
+            + "\"webhook_events\":900,\"triage_refusals\":7}}",
             json);
 
         // One record per run, so a line-based collector does not have to reassemble the document.

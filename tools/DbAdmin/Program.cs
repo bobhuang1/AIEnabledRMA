@@ -208,6 +208,7 @@ switch (command)
             ["--operator-actions"] = RetentionTargets.OperatorActions,
             ["--review-items"] = RetentionTargets.ReviewItems,
             ["--webhook-events"] = RetentionTargets.WebhookEvents,
+            ["--triage-refusals"] = RetentionTargets.TriageRefusals,
         };
 
         var apply = args.Contains("--apply", StringComparer.OrdinalIgnoreCase);
@@ -229,7 +230,7 @@ switch (command)
             // --apply that turns one table into the whole audit trail. Refuse it instead.
             Console.Error.WriteLine(
                 $"prune does not understand '{arg}'. Use --apply and, optionally, "
-                + $"{string.Join(", ", tables.Keys)}; naming none prunes all four.");
+                + $"{string.Join(", ", tables.Keys)}; naming none prunes all five.");
             return 1;
         }
 
@@ -451,6 +452,62 @@ switch (command)
         return AuditPaymentsReport.ExitCode(audit);
     }
 
+    case "refusals":
+    {
+        var days = TriageRefusalReport.DefaultDays;
+        var take = TriageRefusalReport.DefaultTake;
+
+        for (var i = 1; i < args.Length; i++)
+        {
+            var flag = args[i].ToLowerInvariant();
+            var value = i + 1 < args.Length ? args[i + 1] : null;
+
+            if (flag is "--days" or "--take" && value is not null
+                && int.TryParse(
+                    value,
+                    System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var parsed)
+                && parsed > 0)
+            {
+                if (flag == "--days")
+                {
+                    days = parsed;
+                }
+                else
+                {
+                    take = parsed;
+                }
+
+                i++;
+                continue;
+            }
+
+            // A mistyped flag must not silently fall back to the default window: a report over thirty
+            // days looks exactly like a corpus that stopped producing gaps.
+            Console.Error.WriteLine(
+                $"refusals does not understand '{args[i]}'. Use --days <count> and --take <count>.");
+            return 1;
+        }
+
+        var digest = await TriageRefusalReport.ReadAsync(
+            db,
+            DateTimeOffset.UtcNow.AddDays(-days),
+            take,
+            CancellationToken.None);
+
+        foreach (var line in TriageRefusalReport.Format(digest))
+        {
+            Console.WriteLine(line);
+        }
+
+        Console.WriteLine(TriageRefusalReport.Summary(digest));
+
+        // 0 even when questions were refused: this is a listing, and a refusal is a corpus gap to
+        // review, not a failure of the command that printed it.
+        return 0;
+    }
+
     case "review-queue":
     {
         var take = ReviewQueueReport.DefaultTake;
@@ -498,7 +555,7 @@ switch (command)
     }
 
     default:
-        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats [--json]|reconcile-payments [--older-than <hours>] [--take <n>]|audit-payments [--take <n>]|review-queue [--take <n>]|prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events]|kb-ingest [--rebuild] [--path <dir>]|kb-cases --file <json> [--report <path>] [--publish --reviewed-by <name>]>");
+        Console.WriteLine("Usage: DbAdmin <migrate|migrations|seed|reset --force|stats [--json]|reconcile-payments [--older-than <hours>] [--take <n>]|audit-payments [--take <n>]|review-queue [--take <n>]|refusals [--days <n>] [--take <n>]|prune [--apply] [--mcp-calls] [--operator-actions] [--review-items] [--webhook-events] [--triage-refusals]|kb-ingest [--rebuild] [--path <dir>]|kb-cases --file <json> [--report <path>] [--publish --reviewed-by <name>]>");
         return 1;
 }
 

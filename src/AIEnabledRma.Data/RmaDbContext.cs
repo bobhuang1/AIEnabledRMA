@@ -3,6 +3,7 @@ using AIEnabledRma.Domain.Catalog;
 using AIEnabledRma.Domain.Customers;
 using AIEnabledRma.Domain.Operations;
 using AIEnabledRma.Domain.Rma;
+using AIEnabledRma.Domain.Triage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -39,6 +40,8 @@ public sealed class RmaDbContext(DbContextOptions<RmaDbContext> options) : DbCon
     public DbSet<ProcessedWebhookEvent> WebhookEvents => Set<ProcessedWebhookEvent>();
 
     public DbSet<SweepRun> SweepRuns => Set<SweepRun>();
+
+    public DbSet<TriageRefusal> TriageRefusals => Set<TriageRefusal>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -282,6 +285,28 @@ public sealed class McpCallStampConfiguration : IEntityTypeConfiguration<McpCall
         // the same predicate with an older cutoff. One index answers both.
         builder.HasIndex(s => new { s.Caller, s.Kind, s.AtUtc })
             .HasDatabaseName("ix_mcp_call_stamps_caller_kind_at");
+    }
+}
+
+public sealed class TriageRefusalConfiguration : IEntityTypeConfiguration<TriageRefusal>
+{
+    public void Configure(EntityTypeBuilder<TriageRefusal> builder)
+    {
+        builder.ToTable("triage_refusals");
+        builder.HasKey(r => r.Id);
+
+        // The guard's own wording, not a copy of its vocabulary: wide enough for today's longest
+        // reason and for the next one without a migration.
+        builder.Property(r => r.Reason).HasMaxLength(64).IsRequired();
+
+        // Redacted, and bounded to a sentence: this is a report of what was asked, not a copy of
+        // the customer's conversation.
+        builder.Property(r => r.Statement).HasMaxLength(1000).IsRequired();
+
+        // The report reads a window and ranks inside it, and retention deletes by the same column,
+        // so time leads the index and the reason is the second key the ranking groups on.
+        builder.HasIndex(r => r.AtUtc).HasDatabaseName("ix_triage_refusals_at");
+        builder.HasIndex(r => new { r.Reason, r.AtUtc }).HasDatabaseName("ix_triage_refusals_reason_at");
     }
 }
 

@@ -1,5 +1,6 @@
 using AIEnabledRma.Data;
 using AIEnabledRma.Domain.Operations;
+using AIEnabledRma.Domain.Triage;
 using Microsoft.EntityFrameworkCore;
 
 namespace AIEnabledRma.Tests;
@@ -41,7 +42,7 @@ public sealed class RetentionPruneTests : IAsyncLifetime
 
             // One old row per table; the review queue's other two items are not eligible.
             Assert.All(report.Tables, table => Assert.Equal(1, table.Rows));
-            Assert.Equal(4, report.TotalRows);
+            Assert.Equal(5, report.TotalRows);
         }
 
         // The point of the default: the report is a proposal, and nothing it counted is gone.
@@ -50,6 +51,7 @@ public sealed class RetentionPruneTests : IAsyncLifetime
         Assert.Equal(2, await check.OperatorActions.CountAsync(cancellationToken));
         Assert.Equal(2, await check.WebhookEvents.CountAsync(cancellationToken));
         Assert.Equal(3, await check.ReviewItems.CountAsync(cancellationToken));
+        Assert.Equal(2, await check.TriageRefusals.CountAsync(cancellationToken));
     }
 
     [Fact]
@@ -64,7 +66,7 @@ public sealed class RetentionPruneTests : IAsyncLifetime
                 db, RetentionPolicy.Default, Now, apply: true, cancellationToken: cancellationToken);
 
             Assert.True(report.Applied);
-            Assert.Equal(4, report.TotalRows);
+            Assert.Equal(5, report.TotalRows);
         }
 
         await using (var check = _database.CreateContext())
@@ -80,6 +82,12 @@ public sealed class RetentionPruneTests : IAsyncLifetime
             Assert.Equal(
                 new[] { "evt_fresh" },
                 await check.WebhookEvents.AsNoTracking().Select(delivery => delivery.EventId).ToListAsync(cancellationToken));
+
+            // The old refusal is a year past and the fresh one a year inside: the longer window is
+            // what keeps a season of demand evidence, and those rows are still someone's sentence.
+            Assert.Equal(
+                new[] { "fresh_refusal" },
+                await check.TriageRefusals.AsNoTracking().Select(refusal => refusal.Reason).ToListAsync(cancellationToken));
 
             // "resolved-fresh" was created 400 days ago and resolved 89 days ago: it survives, which
             // is what ageing the queue by resolution rather than by creation buys. "open-old" is
@@ -207,6 +215,12 @@ public sealed class RetentionPruneTests : IAsyncLifetime
             new ProcessedWebhookEvent { EventId = "evt_old", Type = "payment_intent.succeeded", ReceivedAtUtc = Now.AddDays(-91) },
             new ProcessedWebhookEvent { EventId = "evt_fresh", Type = "payment_intent.succeeded", ReceivedAtUtc = Now.AddDays(-89) });
 
+        // The refusal window is a year, so the old row has to be older than that: a table pruned on
+        // the 90 days the other audit tables use would delete a year of demand evidence.
+        db.TriageRefusals.AddRange(
+            Refusal("old_refusal", Now.AddDays(-366)),
+            Refusal("fresh_refusal", Now.AddDays(-364)));
+
         db.ReviewItems.AddRange(
             Review("resolved-old", createdDaysAgo: 200, resolvedDaysAgo: 91),
             // Created long before the window, resolved inside it: age is measured from resolution.
@@ -233,6 +247,14 @@ public sealed class RetentionPruneTests : IAsyncLifetime
         Action = action,
         Target = "RMA-2026-00001",
         Succeeded = true,
+    };
+
+    private static TriageRefusal Refusal(string reason, DateTimeOffset atUtc) => new()
+    {
+        Id = Guid.NewGuid(),
+        AtUtc = atUtc,
+        Reason = reason,
+        Statement = "a question the corpus could not answer",
     };
 
     private static ReviewItem Review(string reason, int createdDaysAgo, int? resolvedDaysAgo) => new()
