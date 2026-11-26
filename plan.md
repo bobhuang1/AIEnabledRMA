@@ -58,25 +58,28 @@ decisions (D1–D6) are in section 4; this table covers the engineering choices 
   - Two providers ship: an OpenAI-compatible client and an offline `example-local` model.
 - **Knowledge base:** 19 markdown articles under `knowledge-base/`, loaded into an in-memory BM25-style index
   (`AIEnabledRma.Rag`), plus a small RAG host with `/diagnostics`, `/retrieve` and `/rag/reload`.
-- **MCP server** (`src/AIEnabledRma.Mcp`): a stdio server with 9 read-only tools: `find_customer`,
-  `get_customer_addresses`, `get_customer_returns`, `resolve_shipping_address`, `find_device`, `search_devices`,
-  `get_open_returns_for_device`, `check_warranty_coverage` and `get_fee_quote`. Every customer tool returns a
-  masked projection, every call writes an audit row and spends a budget, and with `Mcp:Transport=http` the same
-  tools are served over streamable HTTP behind Keycloak-issued tokens.
-- **Payments:** only `FakePaymentGateway` exists (accept-all, in memory).
+- **MCP server** (`src/AIEnabledRma.Mcp`): a stdio server with 10 read-only tools: `find_customer`,
+  `get_customer_addresses`, `get_customer_returns`, `resolve_shipping_address`, `reveal_customer_contact`,
+  `find_device`, `search_devices`, `get_open_returns_for_device`, `check_warranty_coverage` and `get_fee_quote`.
+  Every customer tool masks except `reveal_customer_contact`, which needs the support scope and a recorded reason;
+  every call writes an audit row and spends a budget, and with `Mcp:Transport=http` the same tools are served over
+  streamable HTTP behind Keycloak-issued tokens.
+- **Payments:** `FakePaymentGateway` (accept-all, in memory) for development and tests, and
+  `StripePaymentGateway` behind `Payments:Provider=stripe` — manual capture, idempotency keys and a signed
+  webhook; the account, keys and card form wait on D5.
 - **Ops:** Dockerfiles for Web and MCP (non-root) and `tools/DbAdmin`.
 - **CI** (`.github/workflows/ci.yml`): pull requests and manual runs only — restore in `--locked-mode`, build
   with `-warnaserror`, the EF model-and-migration comparison, the suite against a `postgres:16` service, a
   refusal when any test was skipped, and a vulnerability audit; actions pinned by commit, `contents: read`.
 
 **Missing:**
-- An authenticated *user* anywhere: the wizard is anonymous by design, the RAG admin endpoints take a shared key
-  or loopback, and only the MCP HTTP transport validates a token.
-- An operator or back-office view.
-- Any CRM or support-case data.
-- Vector search or chunking: articles are indexed whole.
-- A real payment provider.
-- A production configuration.
+- An authenticated *customer*: D6 keeps the wizard anonymous, so the operator area (P10) is the first place a
+  person signs in; the RAG admin endpoints take a shared key.
+- A real CRM import: P6's Dataverse source runs against a fake API until the owner's tenant (D1) is configured.
+- A real payment: the Stripe client is in the tree, but the account, keys and card form are D5's.
+- A name pass in the redactor: it recognises the customer names the caller hands it, and no local NER model is
+  configured (P3's outstanding half).
+- A measured run against a real model provider, and a human re-review of the corpus (P7 and P4).
 
 ## 2. Review findings
 
@@ -182,7 +185,7 @@ bullets stay as requirements.
   - an audit row written per call;
   - a budget refusal.
 
-**Status: shipped, except the unmask tool.** Commits `aa6531c`, `f308981`, `25ca72a`, `cb62e82`.
+**Status: shipped, the unmask tool included.** Commits `aa6531c`, `f308981`, `25ca72a`, `cb62e82`.
 - **The budget is in PostgreSQL, because a process is the thing a deployment duplicates.** The first version
   counted in a singleton dictionary. That is right on stdio, where one agent launches one process, and wrong on
   the HTTP transport: two replicas each hand out the full allowance, so the configured limit multiplies by the
@@ -289,7 +292,7 @@ bullets stay as requirements.
 - Verified against that realm rather than against a test-held key: the imported client's token carries
   `iss=http://localhost:8080/realms/aienabledrma`, `aud=aienabledrma-mcp`, `scope=rma:read` and `azp=mcp-agent`;
   `POST /mcp` with it answers `200` with the `initialize` result as one server-sent event, `tools/list` answers
-  `200` twice with the nine tools, and the same request without a token answers `401`. A token minted through
+  `200` twice with the ten tools, and the same request without a token answers `401`. A token minted through
   `localhost` presented to a server validating the compose service name answers `401` naming the issuer, which
   is the runbook's "both sides use the same hostname" rule observed rather than assumed.
 - `docs/mcp.md` is the runbook: what the realm must provide, start-up, the token request, both ways to run the

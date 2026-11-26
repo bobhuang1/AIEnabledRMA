@@ -70,8 +70,8 @@ Intake also counts only returns that have actually committed the unit — `Await
 through `Repaired`. A return someone is still filling in used to count, which meant anyone who
 knew a serial could hold a unit by starting a return and walking away; the owner was then turned
 away as a duplicate. Confirmation re-checks the unit with its own id excluded, so two returns for
-one unit cannot both reach `AwaitingShipment`. Agent paths (`lookup_device`,
-`check_coverage`, `get_fee_quote`) keep fuzzy resolution, because that caller is supposed to
+one unit cannot both reach `AwaitingShipment`. Agent paths (`find_device`,
+`check_warranty_coverage`, `get_fee_quote`) keep fuzzy resolution, because that caller is supposed to
 already hold partial information.
 
 ## Setup
@@ -559,9 +559,11 @@ Tools:
 
 | Tool | What it does |
 | --- | --- |
-| `check_coverage` | Policy verdict for a serial on a given date (`Eligible`, `EligibleForPaidRepair`, `RequiresHumanReview`, `NotEligible`) + explanation + rule trace |
+| `check_warranty_coverage` | Policy verdict for a serial on a given date (`Eligible`, `EligibleForPaidRepair`, `RequiresHumanReview`, `NotEligible`) + explanation + rule trace |
 | `get_fee_quote` | Repair price for a device from the same per-product price table the wizard bills from |
-| `lookup_device` | Fuzzy catalog lookup by serial or alternate identifier |
+| `find_device` | Catalog lookup by serial, MAC, IMEI or asset tag, fuzzy enough for a mistyped serial, with the warranty that governs the unit today |
+| `search_devices` | Product-first search — name, model or SKU — for when the caller has no identifier to hand |
+| `get_open_returns_for_device` | The in-progress returns for a unit, so an agent does not open a second one |
 | `find_customer` | Customer lookup by partial name, or confirmation by complete email or phone. Every field is masked |
 | `get_customer_addresses` | A customer's saved addresses, each reduced to label, postcode prefix and country |
 | `get_customer_returns` | A customer's return history, so an agent sees existing requests before adding one |
@@ -575,7 +577,7 @@ Name searches stay fuzzy — a name is not an identifier — but email and phone
 match exactly, because a partial contact search is an enumeration oracle however well the answer
 is masked; terms shorter than three characters are refused outright.
 
-Every call of every MCP tool — these four, the device lookups, and the policy tools — writes a row
+Every call of every MCP tool — these five, the device lookups, and the policy tools — writes a row
 to `mcp_tool_calls` (tool, caller, argument hashes rather than values, result count, latency) and
 counts against a per-caller limit of 60 calls a minute, configurable under `Mcp:Budget` — one
 caller is the process on stdio and the token's client and subject on the HTTP transport. Both happen
@@ -597,7 +599,7 @@ lets `mcp-agent` request the scope without holding it by default — an everyday
 unmask by accident.
 
 Example agent question: *"AX2-0001-0005 is dead on arrival and out of warranty — what happens
-if the customer returns it, and how much would it cost?"* — `check_coverage` routes it to a
+if the customer returns it, and how much would it cost?"* — `check_warranty_coverage` routes it to a
 paid repair and `get_fee_quote` answers `$69.00` for the `AX-200-HS`.
 
 ## Tests

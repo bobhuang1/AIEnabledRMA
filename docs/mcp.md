@@ -227,7 +227,7 @@ The body arrives as one server-sent event (`event: message` followed by a `data:
 carrying the JSON-RPC result), which is why the `Accept` header names both types; a request
 without it is refused by the SDK rather than by any check here. The transport is stateless, so no
 session id is issued and each request stands alone — `tools/list` can be sent the same way without
-an `initialize` first, and answers with the nine tools.
+an `initialize` first, and answers with the ten tools.
 
 From inside the compose network, ask the same question by service name:
 

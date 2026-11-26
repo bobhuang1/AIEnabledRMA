@@ -829,3 +829,33 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   `McpBudgetOptions.LookupsPerSession`. The first suite run overlapped two container builds of other trees and 72
   tests lost the copied corpus from the test output — the gate is not safe to share a machine with other builds,
   and re-run alone it is green as above.
+
+## 2026-11-26 — The plan and the runbook describe the tools that exist
+
+- **The README's tool table named two tools the server does not publish and omitted two it does.** `check_coverage`
+  and `lookup_device` are what the tools were called before they were named `check_warranty_coverage` and
+  `find_device`; `search_devices` and `get_open_returns_for_device` were never in the table at all. A reader
+  following it called names the server answers `method not found` to, and never learned about two tools. The table
+  now lists the ten names the attributes carry, in the order an agent meets them, and the two prose mentions of
+  `check_coverage` (`Agent paths ...` and the worked example) follow.
+- **The prose counts had drifted from the tools as well.** Section 1 of plan.md said 9 read-only tools while P2's
+  status said the same server answered `tools/list` with nine, `reveal_customer_contact` having shipped after both
+  lines were written; `docs/mcp.md` repeated the nine. All three say ten now, and section 1 names the unmask tool
+  and its two conditions rather than leaving it to be discovered.
+- **Section 1's "Missing" list was the 2026-11-14 review's, not the tree's.** It still said there was no operator
+  view, no vector search or chunking, no real payment provider and no production configuration — four things
+  section 5 records as merged on 2026-11-20. The list now names what is actually missing and who each waits on:
+  an authenticated customer (D6 keeps the wizard anonymous), the Dataverse tenant (D1), the Stripe account (D5),
+  the redactor's name pass (no local NER model is configured), a measured run against a real provider and a human
+  re-review of the corpus (P7, P4).
+- **`ToolDocumentationTests` is what makes the table stay true.** The first fact reads the `McpServerTool`
+  attributes out of the assembly the server publishes and compares them with the README section between `Tools:`
+  and the next heading, naming both directions when they differ, so a tool added without a row fails as well as a
+  row whose tool is gone (the README had both). The second fact pins the two prose counts — plan.md's
+  `N read-only tools` and docs/mcp.md's `the <word> tools` — against the number of attributes. Neither can be
+  satisfied by editing the test's expectations, because the attributes are the server.
+- **Gate:** `suite` 665 passed, 0 skipped, 0 failed, all gates passed. Two mutations, each against
+  `ToolDocumentationTests` alone: putting the README row back to `check_coverage` fails the table fact with
+  "the README tool table and the server disagree … |undocumented: check_warranty_coverage|not a tool:
+  check_coverage"; putting plan.md back to `9 read-only tools` fails the count fact with "plan.md does not say
+  the server has 10 read-only tools".
