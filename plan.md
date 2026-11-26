@@ -77,8 +77,9 @@ decisions (D1–D6) are in section 4; this table covers the engineering choices 
   person signs in; the RAG admin endpoints take a shared key.
 - A real CRM import: P6's Dataverse source runs against a fake API until the owner's tenant (D1) is configured.
 - A real payment: the Stripe client is in the tree, but the account, keys and card form are D5's.
-- A name pass in the redactor: it recognises the customer names the caller hands it, and no local NER model is
-  configured (P3's outstanding half).
+- A model-backed name pass in the redactor: a titled name and a self-introduction are found deterministically now,
+  but a name with no cue in front of it, one written in another script, or one spelled like a product the deny-list
+  does not know still needs a local NER model, and none is configured (P3's remaining half).
 - A measured run against a real model provider, and a human re-review of the corpus (P7 and P4).
 
 ## 2. Review findings
@@ -417,7 +418,8 @@ bullets stay as requirements.
 ### P3. Redact before every model call (M) — F3
 
 - New `AIEnabledRma.Privacy` library: a `PiiRedactor` with pattern recognisers for email, phone, card (Luhn),
-  postal address, serial-like and order numbers, and names of the matched customer (known from context), plus a
+  postal address, serial-like and order numbers, names of the matched customer (known from context), and — without a
+  model — names a title (`Mr`, `Dr`, `Prof`, …) or a self-introduction (`my name is`, `I'm`) marks as a person, plus a
   name/NER pass when a local model is configured.
 - `TriagePipeline` sends redacted text only. Placeholders are stable within a conversation (`[EMAIL_1]`).
   Device serial and product stay, because policy needs them.
@@ -440,8 +442,21 @@ bullets stay as requirements.
 - Evidence is at the pipeline seam: `PiiRedactorTests` for the recognisers and the planted corpus,
   `TriagePipelineTests` with a fake `IChatModel` that records what it received. **No test runs a real model
   or provider**, so "zero planted values reached the model" is proven against the fake only.
-- **Outstanding:** the name/NER pass. No local model is configured, so the redactor knows no names except
-  those the caller hands it; a third party's name typed into a fault description is not recognised.
+- **The deterministic half of the name pass shipped** (`RedactNamePass`): `TitledName` takes the word, or up to three
+  words, after an honourific — `Mr`, `Mrs`, `Ms`, `Mx`, `Miss`, `Dr`, `Prof`, `Sir`, `Dame`, `Rev`, with or without
+  the full stop — and `IntroducedName` takes the name after `my name is`, `my name's`, `I'm`, `I am`, `this is` or
+  `call me`. The cue is matched without regard to case because people type `i'm`; the name stays case-sensitive, so
+  "I'm still waiting" continues a sentence rather than naming someone. A candidate whose first word is in
+  `NotAName` — sentence continuations, weekdays, months, platforms, and fault nouns such as `Fault`, `Serial`,
+  `Model` — is left alone, and so is a protected value, so "This is Windows 11" and "the Vertex Widget X1" survive.
+  The placeholder is keyed by the name, so a person keeps one index whether they arrive through a title, an
+  introduction, or the caller's customer record.
+- **What a model would still add, and does not have one:** a name with no cue in front of it ("fitted by Harrison
+  on Tuesday"), a name in a script this pattern does not cover, a name that shares its spelling with a deny-listed
+  word or a real product, and recall on names a list of honourifics does not include. Each of those is a false
+  negative in the redactor, which is the direction the policy cares about; none is a false positive the deny-list
+  creates. No local NER model is configured, so the pass stays deterministic and its recall is exactly the cues
+  above.
 
 ### P4. Secure knowledge-base ingestion (M) — F2, F4
 

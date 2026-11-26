@@ -937,3 +937,31 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   `A_host_built_with_the_read_scope_as_the_support_scope_refuses_to_start` with "Assert.Throws() Failure: No exception
   was thrown", alongside the two options-level refusal facts; the other seven options facts and the rest of the
   transport suite pass, so the failure is the missing refusal rather than the new test's shape.
+
+## 2026-11-26 — A title or an introduction names a person without a model
+
+- **P3's outstanding half was a name the redactor could not see.** It knew the customer names the caller handed it,
+  and no local NER model is configured, so a third party's name typed into a fault description — "Mr Harrison fitted
+  the replacement", "my name is Marcus Webb" — reached the model as written. The deterministic half of that job is
+  now shipped: `TitledName` and `IntroducedName` in `PiiRedactor`, both gated on a cue so that capital letters
+  elsewhere in a sentence are not evidence of a person.
+- **The cues.** `Mr`, `Mrs`, `Ms`, `Mx`, `Miss`, `Dr`, `Prof`, `Sir`, `Dame`, `Rev`, with or without the full stop,
+  take up to three capitalised words (`Dr Ada Lovelace`, `Mrs Van Der Berg`); `my name is`, `my name's`, `I'm`,
+  `I am`, `this is` and `call me` do the same. The cue is matched case-insensitively because people type `i'm`; the
+  candidate stays case-sensitive, which is what keeps "I'm still waiting" and "this is urgent" out.
+- **The false-positive side is a deny-list, and it is the interesting part.** A cue cannot distinguish "This is
+  Windows 11" from "This is Marcus Webb", so a candidate whose first word is an ordinary continuation, a weekday, a
+  month, a platform or a fault noun (`Fault`, `Serial`, `Model`, `Order`, `Unit`, …) is left exactly as written. A
+  protected value is refused as well, so "the Vertex Widget X1" survives even behind a cue. That is the direction the
+  policy wants — a missed name is the failure, a kept product name is the point of the fault.
+- **Stability.** The placeholder is keyed by the name itself, so `Mr Harrison`, `I'm Harrison` and a supplied
+  customer record all land on the same `[NAME_n]`; the model can still say "the person above".
+- **What still needs a model is written down, not assumed.** Plan §1 and P3 now say exactly what the deterministic
+  pass does not cover: a name with no cue in front of it ("fitted by Harrison on Tuesday"), a name in another
+  script, a name spelled like an unlisted product, and recall beyond the honourifics listed. Each is a false
+  negative, and none of them is something the deny-list makes worse.
+- **Gate:** `suite` 682 passed, 0 skipped, 0 failed, all gates passed. Two mutations against `PiiRedactorTests`:
+  deleting both `RedactNamePass` calls fails five facts (title, introduction, stability, serial-in-introduction,
+  detection) with the placeholder assertions, while the product, capitalised-word and ordinary-word facts keep
+  passing — they assert an absence the mutation cannot create; replacing `return !NotAName.Contains(first);` with
+  `return true;` fails `A_product_name_is_not_a_person_even_after_a_cue` and the detection fact, and nothing else.

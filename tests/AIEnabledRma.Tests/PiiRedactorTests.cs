@@ -140,4 +140,133 @@ public sealed class PiiRedactorTests
         Assert.False(session.ContainsIdentifiers("the indicator light stays dark"));
         Assert.False(session.ContainsIdentifiers("serial AX2-0001-0005 is affected"));
     }
+
+    // ---------- the deterministic name pass: a title or an introduction ----------
+
+    /// <summary>
+    /// A third party's name reaches a fault description with no customer record beside it, so the
+    /// supplied-name pass cannot see it. A title is the one thing that makes the words after it a
+    /// person by construction, and finding it needs no model.
+    /// </summary>
+    [Fact]
+    public void A_title_makes_the_words_after_it_a_person()
+    {
+        var session = Session();
+
+        var fitted = session.Redact("Mr Harrison fitted the replacement and it still will not power on.").Text;
+        var confirmed = session.Redact("Dr. Ada Lovelace confirmed the indicator stays dark.").Text;
+
+        Assert.Contains("[NAME_1]", fitted, StringComparison.Ordinal);
+        Assert.DoesNotContain("Harrison", fitted, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("Ada", confirmed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Lovelace", confirmed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_self_introduction_names_a_person_with_no_customer_record()
+    {
+        var session = Session();
+
+        var named = session.Redact("Hi, my name is Marcus Webb and the fan never spins.").Text;
+        var contracted = session.Redact("I'm Priya Raman. The unit is dead.").Text;
+
+        Assert.Contains("[NAME_1]", named, StringComparison.Ordinal);
+        Assert.DoesNotContain("Marcus", named, StringComparison.Ordinal);
+        Assert.DoesNotContain("Webb", named, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("Priya", contracted, StringComparison.Ordinal);
+        Assert.DoesNotContain("Raman", contracted, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Stability is what lets the model say "the person above": the same name has to keep one
+    /// placeholder however the customer arrives at it, and whether or not the caller also supplied it.
+    /// </summary>
+    [Fact]
+    public void One_person_keeps_one_placeholder_across_a_title_and_an_introduction()
+    {
+        var session = Session();
+
+        var titled = session.Redact("Mr Harrison called about the serial.").Text;
+        var introduced = session.Redact("I'm Harrison again, same fault.").Text;
+        var supplied = session.Redact("Josephine Smith asked for an update.").Text;
+
+        Assert.Contains("[NAME_1]", titled, StringComparison.Ordinal);
+        Assert.Contains("[NAME_1]", introduced, StringComparison.Ordinal);
+        Assert.DoesNotContain("[NAME_2]", introduced, StringComparison.Ordinal);
+        Assert.Contains("[NAME_2]", supplied, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The cost of the pass is measured here: a capitalised product, platform or day after a cue is
+    /// not a person, and redacting it would take the fault's own subject away from the model.
+    /// </summary>
+    [Fact]
+    public void A_product_name_is_not_a_person_even_after_a_cue()
+    {
+        var session = Session();
+        const string Platform = "This is Windows 11 and the fan stops after a minute.";
+        const string Product = "The Vertex Widget X1 is dead, and the VW-100 mount will not fit.";
+
+        var platform = session.Redact(Platform);
+        var product = session.Redact(Product);
+
+        Assert.Equal(Platform, platform.Text);
+        Assert.Empty(platform.Counts);
+
+        Assert.Contains("Vertex Widget X1", product.Text, StringComparison.Ordinal);
+        Assert.Contains("VW-100", product.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("[NAME_", product.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_serial_stated_in_an_introduction_is_still_kept()
+    {
+        var redacted = Session()
+            .Redact("I'm Priya Raman, serial AX2-0001-0005, and it will not power on.").Text;
+
+        Assert.Contains("AX2-0001-0005", redacted, StringComparison.Ordinal);
+        Assert.DoesNotContain("Priya", redacted, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Sentence-initial capitals are everywhere in a fault description, and most of them name a part
+    /// rather than a person. Without a cue in front of it, a capital is not a name.
+    /// </summary>
+    [Fact]
+    public void A_capitalised_word_that_names_nobody_is_left_alone()
+    {
+        const string Statement = "The Indicator stays dark. Call Support. Fan Does not spin.";
+
+        var result = Session().Redact(Statement);
+
+        Assert.Equal(Statement, result.Text);
+        Assert.Empty(result.Counts);
+    }
+
+    /// <summary>
+    /// The cue is matched without regard to case and the name after it is not: "I'm still waiting" is
+    /// a sentence continuing, and only a capitalised word can be the person who is writing.
+    /// </summary>
+    [Fact]
+    public void An_introduction_cue_in_front_of_an_ordinary_word_names_nobody()
+    {
+        const string Statement = "This is urgent, and I'm still waiting for a reply.";
+
+        var result = Session().Redact(Statement);
+
+        Assert.Equal(Statement, result.Text);
+        Assert.Empty(result.Counts);
+    }
+
+    [Fact]
+    public void Detection_sees_a_name_that_a_title_or_an_introduction_makes_explicit()
+    {
+        var session = Session();
+
+        Assert.True(session.ContainsIdentifiers("Dr Ada Lovelace confirmed it"));
+        Assert.True(session.ContainsIdentifiers("my name is Marcus Webb"));
+        Assert.False(session.ContainsIdentifiers("This is Windows 11 and it fails"));
+    }
 }
