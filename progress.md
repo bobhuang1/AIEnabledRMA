@@ -965,3 +965,30 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   detection) with the placeholder assertions, while the product, capitalised-word and ordinary-word facts keep
   passing — they assert an absence the mutation cannot create; replacing `return !NotAName.Contains(first);` with
   `return true;` fails `A_product_name_is_not_a_person_even_after_a_cue` and the detection fact, and nothing else.
+
+## 2026-11-26 — The docs' numbers, checked against the code
+
+- **Two counts had drifted, both by one commit's worth of added rows and tools.** README said a bare `prune` names
+  "all four" audit tables; there are five since `triage_refusals` joined them, and `DbAdmin prune` has five flags.
+  plan.md's P1 status said budgets sit "inside each of the four tools"; the server publishes ten. Both now say the
+  number the code has.
+- **What else was measured rather than assumed.** Tools: the ten `McpServerTool` names in
+  `src/AIEnabledRma.Mcp/Tools` match README's table, plan §1's list and docs/mcp.md's "ten tools" name for name.
+  Articles: nineteen under `knowledge-base/` plus its README, which is what plan §1 says. Tables: the retention
+  table's five names (`mcp_tool_calls`, `operator_actions`, `review_items`, `webhook_events`, `triage_refusals`) are
+  the five the pruner and `stats` know, and the windows (90/730/90/90/365 days) match `RetentionPolicy.Default`.
+  Budgets: 60 calls a minute and 200 customer lookups a day match `McpBudgetOptions`. Ports: 5432, 5080, 8080, 11434
+  and 5173 all match compose, the Dockerfiles and the realm. Evaluation sets: 23 triage cases and 48 retrieval cases
+  (forty answerable, which is what README's "forty questions with the articles that would answer them" counts), and
+  the three floors 0.9/0.8/0.32 match the file. Timers (01:20, 02:40, 03:17), backup retention (14 days), the
+  six-hour reconcile window and the 26-hour sweep staleness all match their scripts and options.
+- **Left as history on purpose.** plan.md's header records "190 passed and 9 skipped" and "Updated 2026-11-15 …
+  335 passed" as dated snapshots, and each workstream's "Suite: N passed" is the count on the day that item shipped;
+  rewriting them to today's 682 would attach the current number to a date it was not measured on.
+- **One inconsistency not fixed, because neither side is a measurement I can trust.** README's mutation sample says
+  `survivors: 102 (budget 102)` while `mutation/baseline.json` carries 9999, and the PiiRedactor change added mutants
+  after whatever run produced 168/102, so neither number can be restated without a fresh `scripts/mutation.sh` run.
+- **Gate:** docs only, so the doc-reading tests rather than the whole suite: `ToolDocumentationTests`,
+  `ProductionPackReadinessTests`, `GateScriptTests`, `MutationGateTests`, `DevelopmentComposeTests` — 46 passed,
+  0 skipped, 0 failed. No test pins the two corrected numbers; they are prose, and a guard for them would have to
+  agree with the docs' word for each count rather than only with the code's.

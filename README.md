@@ -153,7 +153,7 @@ dotnet run --project tools/DbAdmin -- prune --webhook-events --apply     # one t
 
 The dry run is the default and prints the cutoff it would use and the rows it would lose per table, so
 `--apply` is a decision about a number somebody has seen rather than a guess. Naming no table prunes
-all four; naming one limits the run; an unrecognised flag is refused rather than treated as "no table
+all five; naming one limits the run; an unrecognised flag is refused rather than treated as "no table
 named", because with `--apply` that would quietly turn one table into the whole trail. Each delete is a
 range scan on the column the table already indexes for time, and the count and the delete are built
 from one query, so the report cannot promise a number the next command does not remove.

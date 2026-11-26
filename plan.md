@@ -213,7 +213,7 @@ bullets stay as requirements.
   including the enumeration case (a partial email returns nothing).
 - The audit sink and its `mcp_tool_calls` migration, with `EfToolAuditSinkTests` running both against a real
   PostgreSQL — the live level, not a stub.
-- Budgets enforced in `ToolCallGuard` at the MCP `tools/call` filter rather than inside each of the four
+- Budgets enforced in `ToolCallGuard` at the MCP `tools/call` filter rather than inside each of the ten
   tools, so a tool added later cannot skip them. `McpToolGuardTests` drives the real server over the loopback
   transport. These are in-process tests, not a networked deployment.
 - Both counters are keyed on `ICallerIdentity.Describe()`, so one caller cannot spend another's allowance.
