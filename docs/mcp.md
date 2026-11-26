@@ -387,7 +387,7 @@ Bound from `Mcp:Http`; environment variables use `__` as the separator.
 | `Mcp:Http:Issuer` | `http://localhost:8080/realms/aienabledrma` | OIDC issuer, and the required `iss` |
 | `Mcp:Http:Audience` | `aienabledrma-mcp` | required `aud` |
 | `Mcp:Http:RequiredScope` | `rma:read` | scope every caller must hold |
-| `Mcp:Http:SupportScope` | `rma:support` | scope that admits `reveal_customer_contact`; empty stops the host |
+| `Mcp:Http:SupportScope` | `rma:support` | scope that admits `reveal_customer_contact`; empty, or equal to `RequiredScope`, stops the host |
 | `Mcp:Http:AllowedClientIds` | empty | clients allowed to call; empty is a startup failure |
 | `Mcp:Http:AllowedOrigins` | empty | browser origins allowed, and the CORS policy; empty means no browser client |
 | `Mcp:Http:Path` | `/mcp` | endpoint path |

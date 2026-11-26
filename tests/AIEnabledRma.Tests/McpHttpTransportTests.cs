@@ -937,6 +937,52 @@ public sealed class McpHttpOptionsTests
         Assert.Contains("SupportScope", error.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>A paste carries padding and its own capitalisation, and neither keeps the grants apart.</summary>
+    [Fact]
+    public void A_support_scope_equal_apart_from_case_and_padding_is_refused()
+    {
+        var options = Usable();
+        options.SupportScope = " RMA:Read ";
+
+        var error = Assert.Throws<InvalidOperationException>(
+            () => options.EnsureUsable(isDevelopment: false));
+
+        Assert.Contains("SupportScope", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The failure this check exists for is a copy-paste, and it is the only precondition here that
+    /// widens access rather than breaking the host: the deployment starts, the read tools work, and
+    /// the grant that admits the one unmasking tool is the grant every caller already holds.
+    /// </summary>
+    [Fact]
+    public void A_support_scope_equal_to_the_read_scope_is_refused()
+    {
+        var options = Usable();
+        options.RequiredScope = "rma:read";
+        options.SupportScope = "rma:read";
+
+        var error = Assert.Throws<InvalidOperationException>(
+            () => options.EnsureUsable(isDevelopment: false));
+
+        Assert.Contains("SupportScope", error.Message, StringComparison.Ordinal);
+        Assert.Contains("RequiredScope", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The refusal must not catch the shape the committed realm ships: two different scopes are what
+    /// every other test in this file builds on, so a check that refused them would fail there first.
+    /// </summary>
+    [Fact]
+    public void Distinct_scopes_start_outside_development()
+    {
+        var options = Usable();
+        Assert.Equal("rma:read", options.RequiredScope, StringComparer.Ordinal);
+        Assert.Equal("rma:support", options.SupportScope, StringComparer.Ordinal);
+
+        options.EnsureUsable(isDevelopment: false);
+    }
+
     [Fact]
     public void A_missing_scope_is_refused()
     {

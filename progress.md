@@ -859,3 +859,28 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   "the README tool table and the server disagree … |undocumented: check_warranty_coverage|not a tool:
   check_coverage"; putting plan.md back to `9 read-only tools` fails the count fact with "plan.md does not say
   the server has 10 read-only tools".
+
+## 2026-11-26 — A support scope copied from the read scope stops the host
+
+- **The refusal.** `McpHttpOptions.EnsureUsable` already stopped the transport on every shape that would serve
+  more callers than the operator intended — an http issuer outside Development, an empty client allow-list, a
+  wildcard origin, a blank scope — but not the one that widens access without breaking anything: `SupportScope`
+  set to `RequiredScope`. It now refuses that beside the blank-scope check, comparing the trimmed values with
+  `OrdinalIgnoreCase` and naming both keys in the message, because a copy carries padding and its own
+  capitalisation.
+- **Why it is the dangerous one.** With equal values the host starts, the read tools keep working, and the audit
+  row still records the caller and the reason — but the grant that admits the one unmasking tool is the grant every
+  caller already holds. Nothing in a response looks wrong; only the separation D3 asks for is gone. The other
+  refusals all fail closed, so they cost a broken service where this one costs the intent, silently.
+- **Case and padding are refused too**, even though the identity compares scope strings with
+  `StringComparer.Ordinal`: a case-different copy would instead leave `reveal_customer_contact` unreachable — the
+  same paste failing the other way — and two grants a deployment means to keep apart should not be spelled as one.
+- **Three facts in `McpHttpOptionsTests`.** Equal values are refused with both key names in the message; a copy
+  with padding and capitalisation is refused; and the committed shape, `rma:read` beside `rma:support`, still
+  starts outside Development, so the check cannot be satisfied by refusing more than it should.
+- **The plan and the runbook say so**: P2's `EnsureUsable` sentence lists the new refusal and `docs/mcp.md`'s key
+  table says the host stops on an empty support scope *or* one equal to `RequiredScope`.
+- **Gate:** `suite` 668 passed, 0 skipped, 0 failed, all gates passed. Mutation, against `McpHttpOptionsTests`
+  alone: removing the comparison from `EnsureUsable` leaves the two refusal facts failing with
+  "Assert.Throws() Failure: No exception was thrown" while `Distinct_scopes_start_outside_development` and the other
+  seven options facts still pass — the check is what the tests detect, not the shape of the tests.

@@ -38,7 +38,9 @@ public sealed class McpHttpOptions
     /// masked data, and the ability to read one unmasked record is a support role rather than a
     /// wider version of the same permission. A client can only hold it by being granted the scope,
     /// and the token that carries it is what the audit row records, so the trail answers "which
-    /// grant unmasked this customer" rather than "some agent did".
+    /// grant unmasked this customer" rather than "some agent did". Equal to
+    /// <see cref="RequiredScope"/> — ignoring case and padding, which is how a paste goes wrong — is
+    /// refused at startup, because that value would make the separation above a comment.
     /// </remarks>
     public string SupportScope { get; set; } = "rma:support";
 
@@ -107,6 +109,25 @@ public sealed class McpHttpOptions
             throw new InvalidOperationException(
                 $"{SectionName}:SupportScope is required. It is the scope that admits "
                 + "reveal_customer_contact; with it empty, no token could ever be granted it.");
+        }
+
+        if (string.Equals(
+                SupportScope.Trim(),
+                RequiredScope.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            // The one configuration here that widens access rather than breaking it. A deployment
+            // that copies the read scope into the support scope starts cleanly, the read tools keep
+            // working, and every caller who may read masked data may now also read one record
+            // unmasked — the grant D3 keeps separate, quietly merged by a paste. Case and padding
+            // are ignored because they are how a copy goes wrong, not a way to keep the grants
+            // apart: the identity compares scope strings as written, so a differently-cased copy
+            // would instead leave the unmask tool unreachable, which is the same mistake failing
+            // the other way.
+            throw new InvalidOperationException(
+                $"{SectionName}:SupportScope is '{SupportScope}', which is RequiredScope. The "
+                + "unmask tool is admitted by the support scope alone, so equal values make every "
+                + "caller holding the read scope an unmasker. Give the support role its own scope.");
         }
 
         if (AllowedClientIds.Length == 0)

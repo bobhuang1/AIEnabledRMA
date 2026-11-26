@@ -251,7 +251,9 @@ bullets stay as requirements.
   authentication, so a page from an origin nobody allowed is refused without its token being processed; a
   request with no `Origin` header (a server-side agent) is unaffected.
 - `McpHttpOptions.EnsureUsable` stops the host on the configurations that would serve the tools wider than
-  intended: an http issuer outside Development, an empty client allow-list, a wildcard origin, an empty scope.
+  intended: an http issuer outside Development, an empty client allow-list, a wildcard origin, an empty scope, and a
+  support scope equal to the read scope (ignoring case and padding) — the last one because that copy-paste
+  starts cleanly and turns every read caller into an unmasker.
   There is no switch that disables authentication, so `Mcp:Transport=http` without an identity provider cannot
   ship.
 - The caller recorded in P1's audit is now asked for rather than assumed: the validated token's
