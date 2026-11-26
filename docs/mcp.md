@@ -249,7 +249,8 @@ docker compose --profile mcp-http exec mcp-http \
 | `401` with `WWW-Authenticate: Bearer resource_metadata="…", scope="rma:read"` | no token, expired token, `iss` that is not `Mcp:Http:Issuer`, `aud` that is not `aienabledrma-mcp`, or a signature the realm's keys do not verify. The pointer names the RFC 9728 document below, so a client can find the realm instead of being configured with it |
 | `403` | a valid token without the `rma:read` scope, or from a `client_id`/`azp` not in `AllowedClientIds` |
 | `403` before any token is read | an `Origin` header that is not in `AllowedOrigins`. A server-side agent sends no `Origin` and is unaffected |
-| `500` at startup | `EnsureUsable` refused the configuration: an `http` issuer outside Development, an empty client allow-list, a wildcard or empty origin, an empty scope, a support scope equal to `RequiredScope` (case and padding ignored), a path that does not start with `/` |
+| `500` at startup | `EnsureUsable` refused the configuration: an `http` issuer outside Development, an empty client allow-list, a wildcard or empty origin, an empty scope, a path that does not start with `/` |
+| `InvalidOperationException` at startup, before it listens — exit non-zero | `Mcp:Http:SupportScope is 'rma:read', which is RequiredScope. The unmask tool is admitted by the support scope alone, so equal values make every caller holding the read scope an unmasker. Give the support role its own scope.` The support scope was copied from the read scope; case and padding are ignored, so ` RMA:Read ` is the same mistake. Set `Mcp:Http:SupportScope` (`Mcp__Http__SupportScope` in compose) to a grant no read caller holds — `rma:support` in the committed realm — and restart the host |
 | connection refused | the transport is not listening: check `Mcp:Transport` is `http`, not the default `stdio` |
 
 ### Every token is a 401 right after the realm was re-imported

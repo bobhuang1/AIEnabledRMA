@@ -113,6 +113,38 @@ public sealed class ToolDocumentationTests
     }
 
     /// <summary>
+    /// The refusal an operator is most likely to hit is the one caused by copy-pasting the read
+    /// scope into the support scope, and it arrives as a bare <c>InvalidOperationException</c> at
+    /// startup with no HTTP status attached. The runbook quotes the message verbatim so searching for
+    /// the line they saw finds the cause and the fix; this keeps the quote the message the guard
+    /// throws rather than one it threw once.
+    /// </summary>
+    [Fact]
+    public void The_runbook_quotes_the_support_scope_refusal_an_operator_would_see()
+    {
+        var options = new AIEnabledRma.Mcp.McpHttpOptions
+        {
+            Issuer = "https://identity.test/realms/aienabledrma",
+            RequiredScope = "rma:read",
+            SupportScope = "rma:read",
+            AllowedClientIds = ["rma-agent"],
+        };
+
+        var thrown = Assert.Throws<InvalidOperationException>(
+            () => options.EnsureUsable(isDevelopment: false));
+
+        var runbook = File.ReadAllText(Path.Combine(RepositoryRoot(), "docs", "mcp.md"));
+
+        // Whole-string containment: the operator has the exact line in their log, so the runbook has
+        // to carry the same one. Matching on "SupportScope" alone would pass while the sentence an
+        // operator searches for is nowhere in the file.
+        Assert.True(
+            runbook.Contains(thrown.Message, StringComparison.Ordinal),
+            "docs/mcp.md does not quote the support-scope startup refusal verbatim, so an operator "
+            + $"searching for the line they got finds nothing. The guard says: {thrown.Message}");
+    }
+
+    /// <summary>
     /// Walks up from the test binary to the directory that holds the solution, because the suite can
     /// be started from a shell, an IDE or CI and none of those share a working directory.
     /// </summary>

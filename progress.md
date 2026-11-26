@@ -992,3 +992,26 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   `ProductionPackReadinessTests`, `GateScriptTests`, `MutationGateTests`, `DevelopmentComposeTests` — 46 passed,
   0 skipped, 0 failed. No test pins the two corrected numbers; they are prose, and a guard for them would have to
   agree with the docs' word for each count rather than only with the code's.
+
+## 2026-11-26 — The support-scope refusal is in the failure table with its own words
+
+- **The table said the cause but not the message.** `docs/mcp.md`'s "When it says no" row listed "a support scope
+  equal to `RequiredScope`" among the things `EnsureUsable` refuses, which is true and useless to an operator who
+  has a stack trace: the host dies before it listens, so there is no status code to match on and the only clue is
+  the exception text. The new row is the one that text belongs to — `InvalidOperationException` at startup, exit
+  non-zero — and it quotes the guard's sentence verbatim, then the fix.
+- **The fix is written as the thing to change, not as the rule to remember.** Set `Mcp:Http:SupportScope`
+  (`Mcp__Http__SupportScope` in compose) to a grant no read caller holds — `rma:support` in the committed realm —
+  and restart. The row also says that case and padding do not make the two values different, because the copy that
+  causes this usually carries both.
+- **The generic `500` row no longer claims this one.** It keeps the refresh of the other preconditions; the
+  equal-scope refusal moved to the row that can name its exception, so a reader is not told to look for a 500 that
+  never happens.
+- **A fact holds the quote to the guard.** `The_runbook_quotes_the_support_scope_refusal_an_operator_would_see`
+  builds the options that trip the check, throws, and requires `docs/mcp.md` to contain the message as a whole
+  string. Substring-matching on `SupportScope` would pass while the sentence an operator searches for is absent, so
+  this compares the message itself — which means editing the guard's wording fails the test until the runbook moves
+  with it.
+- **Gate:** `suite` 683 passed, 0 skipped, 0 failed, all gates passed. Mutation: changing the quoted sentence in the
+  runbook from "its own scope" to "a scope" fails the new fact alone with the message in its failure output, while
+  the rest of `ToolDocumentationTests` passes.
