@@ -1,4 +1,5 @@
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Knowledge;
 using AIEnabledRma.Rag.Knowledge;
 
 namespace AIEnabledRma.Rag;

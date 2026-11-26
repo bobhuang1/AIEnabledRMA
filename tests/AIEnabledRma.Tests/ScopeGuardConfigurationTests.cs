@@ -35,6 +35,11 @@ public sealed class ScopeGuardConfigurationTests
             "It wont turn on at all, the indicator is dead.",
             "The unit is not charging on the cradle.",
             "It keeps rebooting after the firmware update.",
+
+            // The eval's tq-014, and the reason the guard matches stems: kb-0014's keyword is
+            // "reboot", the customer wrote "reboots", and this sentence used to be refused as
+            // off-topic from the article that answers it.
+            "The unit reboots by itself every few minutes.",
             "The trigger does not fire when I scan a barcode.",
             "It was dropped and the screen is cracked.",
             "Battery drains in an hour and the light blinks.",

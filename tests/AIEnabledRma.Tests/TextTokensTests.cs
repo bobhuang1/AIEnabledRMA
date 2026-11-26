@@ -1,4 +1,4 @@
-using AIEnabledRma.Rag.Knowledge;
+using AIEnabledRma.Domain.Knowledge;
 
 namespace AIEnabledRma.Tests;
 

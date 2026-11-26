@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Triage;
 
@@ -31,10 +30,25 @@ public sealed record ScopeGuardResult
 /// a topic check (does the text relate to hardware, the catalog, or the RMA process) and a
 /// scope-token check (does it mention something the session's devices actually cover).
 /// </summary>
-public sealed partial class ScopeGuard : IScopeGuard
+/// <remarks>
+/// Words are compared by their stems, the reduction <c>TextTokens</c> already applies to the
+/// corpus and to the question. Comparing them as written is what refused "the unit reboots by itself
+/// every few minutes" — <c>kb-0014</c>'s own symptom — while the article's keyword is "reboot", so the
+/// guard now asks whether the word belongs to the domain rather than which spelling of it was typed.
+/// The ratio is taken over the question's topic words only: function words are dropped from both sides
+/// rather than counted as evidence for or against the question being in scope.
+/// </remarks>
+public sealed class ScopeGuard : IScopeGuard
 {
     private readonly ScopeGuardOptions _options;
-    private readonly IReadOnlyList<IReadOnlyList<string>> _topicVocabulary;
+
+    /// <summary>
+    /// Every word the corpus declared, reduced to a stem, because a word is matched by what it means
+    /// and not by how it was inflected at either end. The vocabularies stay separate on the way in —
+    /// one per category — but a question may mix a display fault with a warranty question, so which
+    /// category contributed a word does not change the answer.
+    /// </summary>
+    private readonly HashSet<string> _topicStems;
 
     /// <summary>
     /// The topic vocabulary is a construction argument rather than an option, so the words the
@@ -51,9 +65,18 @@ public sealed partial class ScopeGuard : IScopeGuard
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(topicVocabulary);
 
+        // Every entry goes through the same reduction the question will: a caller that hands over a
+        // phrase, a plural or a word list written in another inflection gets the same answer as one
+        // that copy-pasted the corpus's keyword.
+        _topicStems = topicVocabulary
+            .SelectMany(vocabulary => vocabulary)
+            .SelectMany(ScopeGuardVocabulary.Tokens)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         // This used to be an option that could be empty, and the symptom was indistinguishable
-        // from a broken assistant: every question refused, nothing in the log to explain it.
-        if (!topicVocabulary.Any(vocabulary => vocabulary.Count > 0))
+        // from a broken assistant: every question refused, nothing in the log to explain it. A
+        // vocabulary of nothing but function words has the same symptom, so it is the same refusal.
+        if (_topicStems.Count == 0)
         {
             throw new ArgumentException(
                 "The scope guard needs at least one topic word; with an empty vocabulary it "
@@ -62,11 +85,7 @@ public sealed partial class ScopeGuard : IScopeGuard
         }
 
         _options = options;
-        _topicVocabulary = topicVocabulary;
     }
-
-    [GeneratedRegex(@"[a-z0-9]+", RegexOptions.IgnoreCase)]
-    private static partial Regex TokenRegex();
 
     public ScopeGuardResult Evaluate(
         TriageRequest request,
@@ -100,23 +119,20 @@ public sealed partial class ScopeGuard : IScopeGuard
             return OutOfScope("out-of-domain-phrase");
         }
 
-        // Check 3: topic relevance. A minimum share of the question's tokens must land in
-        // the allowed topic vocabulary, which keeps the guard from becoming a keyword
-        // allowlist that a determined user could learn.
-        var tokens = TokenRegex().Matches(text.ToLowerInvariant())
-            .Select(m => m.Value)
-            .Where(t => t.Length > 2)
-            .ToArray();
+        // Check 3: topic relevance. A minimum share of the question's topic words must land in
+        // the allowed vocabulary, which keeps the guard from becoming a keyword allowlist that a
+        // determined user could learn. The question is reduced exactly as the vocabulary was, so
+        // "it reboots" reaches an article whose keyword is "reboot" and "rebooting" reaches both.
+        var tokens = ScopeGuardVocabulary.Tokens(text);
 
-        if (tokens.Length == 0)
+        if (tokens.Count == 0)
         {
             return OutOfScope("no-meaningful-tokens");
         }
 
-        var topicHits = tokens.Count(t =>
-            _topicVocabulary.Any(v => v.Contains(t, StringComparer.OrdinalIgnoreCase)));
+        var topicHits = tokens.Count(_topicStems.Contains);
 
-        var topicRatio = (double)topicHits / tokens.Length;
+        var topicRatio = (double)topicHits / tokens.Count;
         if (topicRatio < _options.MinimumTopicTokenRatio)
         {
             return OutOfScope("off-topic");

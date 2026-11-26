@@ -2,6 +2,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
+using AIEnabledRma.Domain.Knowledge;
+
 namespace AIEnabledRma.Rag.Knowledge;
 
 /// <summary>

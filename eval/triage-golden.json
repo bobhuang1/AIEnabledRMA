@@ -94,8 +94,8 @@
     {
       "id": "tq-014",
       "statement": "the unit reboots by itself every few minutes",
-      "expectedClass": "refused",
-      "expectedArticles": []
+      "expectedClass": "guided",
+      "expectedArticles": ["kb-0014"]
     },
     {
       "id": "tq-015",
@@ -154,9 +154,7 @@
       "expectedArticles": ["kb-0014"]
     }
   ],
-  "knownGaps": [
-    "tq-014 is the one case that is refused when it should be answered: 'it reboots by itself every few minutes' is kb-0014's own symptom, but the scope guard compares tokens literally and the article's keyword is 'reboot' while the customer wrote 'reboots'. The case is recorded as refused so the run is honest about today's behaviour, and tq-023 covers the same article in a phrasing the guard accepts. Fixing the guard (matching inflections, as the retrieval tokeniser already does) is a change to make on its own, with this expectation and a new measurement moved in the same commit."
-  ],
+  "knownGaps": [],
   "injectionCases": [
     {
       "id": "inj-001",
@@ -238,6 +236,70 @@
         "tq-023": 1
       },
       "notes": "The first run, over the shipped corpus with review on and the bundled example-local model. Recall@6 is 1.000 (20/20) and MRR 0.842: three answerable cases sit below rank 1 (tq-002 cradle, tq-009 decode, tq-018 the resolved cradle case) and one at rank 3 (tq-003), all inside the depth the pipeline retrieves, which is why recall is perfect and MRR is the number that notices. Citation precision is 0.263 because the bundled model cites up to four articles per answer and one of them is usually the expected one; it is recorded, not floored, because a provider that cites less would move it without being worse. Human-review rate is 0.000 (0/23) because no in-scope question lands below the 0.45 threshold with this model; the class is still routed by the workflow's own rule and pinned by the classifier test, so the day a case does move to review it appears here. The corpus hashes are the same ones eval/retrieval-golden.json records, so a number that moved with the articles can be attributed."
+    },
+    {
+      "measuredOn": "2026-11-26",
+      "cases": 23,
+      "answerable": 21,
+      "injectionCases": 2,
+      "classAgreement": 1,
+      "recallAtK": 1,
+      "mrr": 0.8492063492063492,
+      "citationValidity": 1,
+      "citationPrecision": 0.2619047619047619,
+      "humanReviewRate": 0,
+      "injectionPassRate": 1,
+      "corpusFingerprint": "sha256:e7d527b50de35e15da92d73a514228abb664ab86f85755b9e5ee5b26fda164c4",
+      "reviewedCorpusHash": "sha256:847edb5931e72d41908073cfccdc103b7b267339aaf80fc05956e3b28e3532c4",
+      "classes": {
+        "tq-001": "guided",
+        "tq-002": "guided",
+        "tq-003": "guided",
+        "tq-004": "guided",
+        "tq-005": "guided",
+        "tq-006": "guided",
+        "tq-007": "guided",
+        "tq-008": "guided",
+        "tq-009": "guided",
+        "tq-010": "guided",
+        "tq-011": "guided",
+        "tq-012": "guided",
+        "tq-013": "guided",
+        "tq-014": "guided",
+        "tq-015": "guided",
+        "tq-016": "guided",
+        "tq-017": "guided",
+        "tq-018": "resolved",
+        "tq-019": "refused",
+        "tq-020": "refused",
+        "tq-021": "guided",
+        "tq-022": "guided",
+        "tq-023": "guided"
+      },
+      "ranks": {
+        "tq-001": 1,
+        "tq-002": 2,
+        "tq-003": 3,
+        "tq-004": 1,
+        "tq-005": 2,
+        "tq-006": 1,
+        "tq-007": 1,
+        "tq-008": 1,
+        "tq-009": 2,
+        "tq-010": 1,
+        "tq-011": 1,
+        "tq-012": 1,
+        "tq-013": 1,
+        "tq-014": 1,
+        "tq-015": 1,
+        "tq-016": 1,
+        "tq-017": 1,
+        "tq-018": 2,
+        "tq-021": 2,
+        "tq-022": 1,
+        "tq-023": 1
+      },
+      "notes": "The second run, made the day the guard started matching inflections rather than spellings. tq-014 moved from refused to guided and is answerable for the first time, at rank 1, so class agreement is 1.000 against an expectation that finally describes the corpus instead of the guard's defect. Answerable rose from 20 to 21, which is the whole of the movement in MRR (0.842 -> 0.849): a rank-1 case joined the average and no earlier case changed rank. Citation precision moves from 0.263 to 0.262 for the extra answer's four citations. Recall@6 is still 1.000 (21/21), the human-review rate is still 0.000, and the corpus fingerprint and reviewed-corpus hash are unchanged, so the difference is the guard alone."
     }
   ]
 }

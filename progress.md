@@ -747,13 +747,13 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   shape, the support token carrying `rma:support` with the transport's audience, and the browser flow.
 
 - **Two dead things went, and P7's eval arrived with a defect in its first run.** `src/AIEnabledRma.Mcp/appsettings.json`
-  carried a `McpSecurity` block � `LocalCallerName`, `CallsPerMinute`, `CustomerLookupsPerSession` and
-  `SupportRole` � that nothing bound. The limits were already `Mcp:Budget` (`CallsPerMinute`,
+  carried a `McpSecurity` block — `LocalCallerName`, `CallsPerMinute`, `CustomerLookupsPerSession` and
+  `SupportRole` — that nothing bound. The limits were already `Mcp:Budget` (`CallsPerMinute`,
   `CustomerLookupsPerDay` on `McpBudgetOptions`), and the grant that admits `reveal_customer_contact` is
   `Mcp:Http:SupportScope`; a `SupportRole: rma:support` key sitting beside a live `Mcp:Http:SupportScope` reads
   like a second working setting, and a deployment that edited it would have changed nothing. Deleting the block
-  leaves one name per setting. `TriagePipeline.VerifyAndClamp` also returned a `Downgraded` flag nobody read �
-  the caller wrote `verified.Verdict` and ignored the bool � so it returns the verdict alone now.
+  leaves one name per setting. `TriagePipeline.VerifyAndClamp` also returned a `Downgraded` flag nobody read —
+  the caller wrote `verified.Verdict` and ignored the bool — so it returns the verdict alone now.
 - **P7's evaluation runs the pipeline, not a component beside it.** `eval/triage-golden.json` holds 23 fault
   statements in a customer's wording, each with the class the request should end in and the articles a correct
   answer may cite, plus two injected-article cases; `TriageGoldenSetTests` composes the host's own `AddRag` and
@@ -765,8 +765,8 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   floors and the rest recorded per run and compared per case against the latest entry, the same append-only shape
   the retrieval eval uses. The corpus fingerprint and reviewed-corpus hash are the retrieval eval's pair, so a
   number that moved with the articles is attributable to them.
-- **The eval found the guard's literal matching on its first run.** `tq-014` � "the unit reboots by itself every
-  few minutes", which is `kb-0014`'s own symptom � is refused as off-topic: `ScopeGuardVocabulary` compares
+- **The eval found the guard's literal matching on its first run.** `tq-014` — "the unit reboots by itself every
+  few minutes", which is `kb-0014`'s own symptom — is refused as off-topic: `ScopeGuardVocabulary` compares
   tokens as written, the article's keyword is `reboot`, and the customer wrote `reboots`. The case is recorded as
   refused, the data's `knownGaps` says why, and `tq-023` covers the same article in a phrasing the guard accepts.
   Stems are not a drive-by fix: the retrieval tokeniser stems and the guard does not, so the two paths disagree
@@ -778,4 +778,28 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   never counted fails `A_leaked_instruction_fails_the_injection_case`; ranking every expected article by its
   distance from the end fails both `An_answer_that_cites_the_wrong_article_is_a_miss_not_a_hit` and the recorded
   ranks. The injection cases pass in the acceptance test with the marker check removed, which is why the seam test
-  exists � the bundled model does not repeat what the loader neutralised, so only a broken scorer shows there.
+  exists — the bundled model does not repeat what the loader neutralised, so only a broken scorer shows there.
+- **The guard matches inflections, so the article a customer is describing is no longer off-topic.** `tq-014` — a
+  unit that "reboots by itself every few minutes", which is `kb-0014`'s own symptom — was refused as off-topic on
+  the eval's first run: the guard compared words as written, the article's keyword is `reboot`, and the customer
+  wrote `reboots`, so a request naming the exact fault the corpus documents never reached the model. `ScopeGuard`
+  now reduces the corpus's vocabulary and the question with `TextTokens` — the rule retrieval already indexes with:
+  lower case, split, stopwords dropped, every word beside its stem — and matches by stem, so `reboot`, `reboots`
+  and `rebooting` are one topic word and `it will not` is not evidence either way. `TextTokens` moved from
+  `Rag.Knowledge` to `Domain.Knowledge` for that: a guard in Domain cannot call into Rag, and a second stemmer
+  beside the first would be the second description of the domain this vocabulary exists to stop keeping. A
+  keyword handed over already inflected (`restarts`) meets a customer's `restarted` for the same reason, which is
+  what the new test pins in both directions while a sentence that shares none of the vocabulary is still refused.
+  `tq-014` expects `guided` and `kb-0014`, `knownGaps` is empty, and the second measurement records the run: class
+  agreement 1.000, recall@6 1.000 (21/21), MRR 0.849, citation validity 1.000, citation precision 0.262,
+  human-review rate 0.000 (0/23), injection pass rate 1.000. Only the guard moved — every earlier case holds the
+  class and the rank it recorded, the one new answer is tq-014 at rank 1, and the corpus fingerprint and the
+  reviewed-corpus hash are unchanged, so the difference is attributable to the guard rather than to the articles.
+- **Gate:** `suite` 661 passed, 0 skipped, 0 failed, all gates passed; the EF model check is clean.
+  Mutations, each run against the guard's own tests: reading the words as written instead of through the
+  tokeniser — the old guard — fails `A_keyword_is_matched_in_its_inflections` with "the guard refused an
+  inflection of its own keyword (off-topic)", the shipped-corpus configuration test on the tq-014 sentence,
+  and the acceptance test's class floor; filtering function words by the one spelling the list holds instead
+  of the forms the tokeniser produces for them fails
+  `Keyword_phrases_are_split_so_the_words_a_customer_types_are_what_match`, because `please` survives as
+  `plea` in the vocabulary.

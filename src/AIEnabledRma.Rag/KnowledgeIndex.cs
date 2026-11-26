@@ -1,4 +1,5 @@
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Knowledge;
 using AIEnabledRma.Domain.Triage;
 using AIEnabledRma.Rag.Knowledge;
 using Microsoft.Extensions.Options;

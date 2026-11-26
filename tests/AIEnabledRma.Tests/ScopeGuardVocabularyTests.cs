@@ -1,3 +1,4 @@
+using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Triage;
 
 namespace AIEnabledRma.Tests;
@@ -50,6 +51,43 @@ public sealed class ScopeGuardVocabularyTests
         // happens to contain "will" or "not" as partly on-topic.
         Assert.DoesNotContain("will", vocabularies[0]);
         Assert.DoesNotContain("not", vocabularies[0]);
+
+        // The filter covers every form the tokeniser produces for a filtered word, not the one spelling
+        // the list holds: "please" reaches the guard as "please" and "pleas", and reducing those leaves
+        // "plea" — a form a filter that knew the word only as written would keep as a topic term.
+        Assert.Equal(["power"], ScopeGuardVocabulary.Derive([Article("power", "please")]).Single());
+    }
+
+    /// <summary>
+    /// The guard's side of the same rule: a word belongs to the domain however it is inflected. This
+    /// is the eval's <c>tq-014</c> in miniature — kb-0014 declares <c>reboot</c>, the customer writes
+    /// <c>reboots</c> — and the reason the guard and the retriever share one tokeniser.
+    /// </summary>
+    [Fact]
+    public void A_keyword_is_matched_in_its_inflections()
+    {
+        var guard = new ScopeGuard(
+            new ScopeGuardOptions(),
+            ScopeGuardVocabulary.Derive([Article("power", "reboot", "unit")]));
+
+        var result = guard.Evaluate(Request("the unit reboots by itself every few minutes"), [Article()]);
+
+        Assert.True(result.InScope, $"the guard refused an inflection of its own keyword ({result.Reason})");
+
+        // The other direction: the keyword is inflected and the customer's word is not. A guard that
+        // only stripped suffixes would pass the first assertion and fail this one.
+        var other = new ScopeGuard(
+            new ScopeGuardOptions(),
+            ScopeGuardVocabulary.Derive([Article("power", "restarts")]));
+
+        Assert.True(other.Evaluate(Request("the unit restarted on its own"), [Article()]).InScope);
+
+        // A stem is shared by a word's inflections, not by topics: a sentence that shares none of the
+        // vocabulary's is still refused, so the fix cannot pass by accepting everything.
+        var offTopic = guard.Evaluate(Request("please write me a poem about the ocean"), [Article()]);
+
+        Assert.False(offTopic.InScope);
+        Assert.Equal("off-topic", offTopic.Reason);
     }
 
     [Fact]
@@ -65,5 +103,37 @@ public sealed class ScopeGuardVocabularyTests
             () => new ScopeGuard(new ScopeGuardOptions(), vocabulary));
 
         Assert.Contains("topic word", thrown.Message, StringComparison.OrdinalIgnoreCase);
+
+        // Words that carry no topic signal are the same guard, however many of them there are.
+        Assert.Throws<ArgumentException>(
+            () => new ScopeGuard(new ScopeGuardOptions(), [["will", "not", "these"]]));
     }
+
+    private static TriageRequest Request(string statement) => new()
+    {
+        Devices =
+        [
+            new TriageDeviceContext
+            {
+                SerialNumber = "SG-0001",
+                ProductName = "Vertex Widget",
+                Model = "SG",
+                Sku = "SG-0001",
+                IsInWarranty = true,
+                ScopeTokens = new HashSet<string>(["Vertex Widget"], StringComparer.OrdinalIgnoreCase),
+            },
+        ],
+        Conversation = [],
+        CustomerStatement = statement,
+        CorrelationId = "scope-guard-inflection",
+    };
+
+    private static RetrievedArticle Article() => new()
+    {
+        Id = "kb-0014",
+        Title = "Unit reboots by itself",
+        Category = "power",
+        Score = 0.9,
+        Snippet = "Check the firmware before the supply.",
+    };
 }

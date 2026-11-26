@@ -1,10 +1,11 @@
 using System.Text.RegularExpressions;
 
-namespace AIEnabledRma.Rag.Knowledge;
+namespace AIEnabledRma.Domain.Knowledge;
 
 /// <summary>
-/// The one tokenisation rule, used for article text and for the question, because a retriever that
-/// reduces one side differently is measuring its own inconsistency.
+/// The one tokenisation rule, used for article text, for the question and for the scope guard's topic
+/// vocabulary, because anything that reduces one side of a comparison differently is measuring its own
+/// inconsistency.
 /// </summary>
 /// <remarks>
 /// Three deliberate reductions, each of which the golden set showed was needed:
@@ -22,6 +23,12 @@ namespace AIEnabledRma.Rag.Knowledge;
 /// dictionary, no attempt at linguistics. Every rule is pinned by <c>TextTokensTests</c>, because a
 /// stemmer that quietly over-reaches is a retrieval regression that looks like an improvement until
 /// the golden set is run.
+///
+/// It lives in Domain rather than beside the retriever because the scope guard needs the same rule.
+/// The guard used to compare words as written, which refused "the unit reboots by itself every few
+/// minutes" — <c>kb-0014</c>'s own symptom — against an article whose keyword is "reboot": the eval's
+/// <c>tq-014</c>. The corpus, the question and the guard's vocabulary are three sides of one comparison,
+/// so they are reduced by one function.
 /// </remarks>
 public static partial class TextTokens
 {

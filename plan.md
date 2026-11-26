@@ -740,18 +740,21 @@ bullets stay as requirements.
   not invented: `TriageGoldenSet.Classify` asks the three questions `RmaWorkflow` asks after triage (refused,
   resolved, or below `HumanReviewConfidenceThreshold`), so an expectation and an operator's queue cannot mean
   different things, and `Classify_names_the_class_the_workflow_would_act_on` pins the four rules.
-- Measured on the shipped corpus with review on: **class agreement 1.000, recall@6 1.000 (20/20), MRR 0.842,
-  citation validity 1.000, citation precision 0.263, human-review rate 0.000 (0/23), injection pass rate 1.000**.
+- Measured on the shipped corpus with review on: **class agreement 1.000, recall@6 1.000 (21/21), MRR 0.849,
+  citation validity 1.000, citation precision 0.262, human-review rate 0.000 (0/23), injection pass rate 1.000**.
   Class agreement, citation validity and the injection pass rate are floors; the rest are recorded per run and
   compared with the latest entry, per case as well as in aggregate, so one case rising while another falls is not a
   silent pass. The corpus fingerprint and the reviewed-corpus hash are the same pair the retrieval eval records, so
   a number that moved with the articles is attributable to them.
-- **The eval found the first defect it was pointed at.** `tq-014` — "the unit reboots by itself every few minutes",
-  which is `kb-0014`'s own symptom — is **refused as off-topic**: `ScopeGuardVocabulary` compares tokens literally
-  and the article's keyword is `reboot` while the customer wrote `reboots`. The case is recorded as refused, the
-  data's `knownGaps` says why, and `tq-023` covers the same article in a phrasing the guard accepts. Matching
-  inflections in the guard is a change worth making on its own, with this expectation and a new measurement moved
-  in the same commit — the retrieval tokeniser already stems, so the two paths disagree about the same word today.
+- **The first defect the eval found is fixed in the run that records it.** `tq-014` — "the unit reboots by itself
+  every few minutes", which is `kb-0014`'s own symptom — used to be **refused as off-topic**, because the guard
+  compared words as written while the article's keyword is `reboot`. `ScopeGuard` now reduces the corpus's
+  vocabulary and the customer's question with `TextTokens` — the tokeniser retrieval already indexes with, stopwords
+  dropped and every word beside its stem — and matches by stem, so a word belongs to the domain however it is
+  inflected and a function word is not evidence either way. `TextTokens` moved from `Rag.Knowledge` to
+  `Domain.Knowledge` for that reason: the corpus, the question and the guard's vocabulary are three sides of one
+  comparison, so one function reduces all three. `tq-014` now expects `guided` and cites `kb-0014` at rank 1, the
+  data has no `knownGaps` left, and the numbers above are this run's rather than the defect's.
 - The human-review rate is 0.000 because no in-scope statement lands below the threshold with the bundled model. The
   class is still measured and routed by the workflow's rule; the day a provider or a case moves one there, the
   number and the per-case class both move.
