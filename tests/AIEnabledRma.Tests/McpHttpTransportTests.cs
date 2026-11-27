@@ -770,6 +770,87 @@ public sealed class McpHttpTransportTests
     }
 
     /// <summary>
+    /// The other startup preconditions, refused by the host a deployment builds rather than by
+    /// calling <see cref="McpHttpOptions.EnsureUsable"/> directly.
+    /// </summary>
+    /// <remarks>
+    /// The equal-scope case above is the precondition that widens access; these are the ones that
+    /// break the host instead — an empty client allow-list, a wildcard origin, an http issuer
+    /// outside Development, a path without its leading slash. Pinned only at the options level they
+    /// proved the check and not the wiring, which is the wrong half: `EnsureUsable` is one call in a
+    /// method nothing else invokes, and a precondition that is correct and unwired serves the tools
+    /// to whatever can reach the port. Each row supplies a Production host with everything else
+    /// valid, so the message asserted is the one an operator deploying that shape would see under a
+    /// bare `InvalidOperationException`; the host is never started, because the throw happens while
+    /// it is being built and before anything is bound.
+    /// </remarks>
+    public static TheoryData<string, string[], string> UnusableHttpSections => new()
+    {
+        // No AllowedClientIds at all: the empty list is the default, which is the state of a
+        // deployment that copied the section and never filled it in.
+        {
+            "an empty client allow-list",
+            Production(),
+            "AllowedClientIds is empty"
+        },
+        {
+            "a wildcard origin",
+            Production(
+                McpSetting("AllowedClientIds:0", ClientId),
+                McpSetting("AllowedOrigins:0", "*")),
+            "AllowedOrigins cannot contain"
+        },
+        {
+            "an http issuer outside Development",
+            Production(
+                McpSetting("Issuer", "http://localhost:8080/realms/aienabledrma"),
+                McpSetting("AllowedClientIds:0", ClientId)),
+            "must be https"
+        },
+        {
+            "a path without a leading slash",
+            Production(
+                McpSetting("AllowedClientIds:0", ClientId),
+                McpSetting("Path", "mcp")),
+            "Path must start with '/'"
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(UnusableHttpSections))]
+    public void A_host_with_an_unusable_http_section_refuses_to_start(
+        string shape,
+        string[] overrides,
+        string expected)
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => McpHttpHost.Build(overrides));
+
+        Assert.Contains(McpHttpOptions.SectionName, error.Message, StringComparison.Ordinal);
+        Assert.True(
+            error.Message.Contains(expected, StringComparison.Ordinal),
+            $"a host with {shape} threw a different refusal: {error.Message}");
+    }
+
+    /// <summary>
+    /// The settings a host that is otherwise correct is built from, plus the one shape a row is
+    /// about. Production with an https issuer, so the precondition under test is the first one that
+    /// fails rather than an earlier one: a later override of the same key wins, which is how a row
+    /// replaces the issuer.
+    /// </summary>
+    private static string[] Production(params string[] overrides) =>
+    [
+        "--environment=Production",
+        McpSetting("Issuer", Issuer),
+        McpSetting("Audience", Audience),
+        McpSetting("RequiredScope", ReadScope),
+        McpSetting("SupportScope", SupportScope),
+        .. overrides,
+    ];
+
+    private static string McpSetting(string key, string value) =>
+        $"--{McpHttpOptions.SectionName}:{key}={value}";
+
+    /// <summary>
     /// An empty catalogue. The tool's miss path still returns a result, which is all the test needs:
     /// the row is written for the call, not for a hit.
     /// </summary>

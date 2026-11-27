@@ -1084,3 +1084,26 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   unused seam cannot land at all — and the compiling mutant `clock.UtcNow.AddMinutes(1)` fails
   `A_refusal_is_stamped_by_the_clock_the_flow_reads` on the exact instant while the other six facts in
   `TriageRefusalTests` pass, including the five-minute freshness assertion that a one-minute drift stays inside.
+
+## 2026-11-27 — The startup preconditions are proven where a deployment hits them
+
+- **Four refusals had only an options-level fact.** `EnsureUsable` refuses an empty client allow-list, a wildcard
+  origin, an http issuer outside Development and a path without its leading slash, and each was pinned by calling it
+  directly. That proves the check and not the wiring: `McpHttpHost.Build` is the only caller a deployment has, and
+  `A_host_with_an_unusable_http_section_refuses_to_start` now builds the real host for each of the four in
+  Production with everything else valid, so the throw is the one under test and the message is the one an operator
+  would see under a bare `InvalidOperationException`.
+- **Each row is the shape a deployment actually writes.** The empty allow-list row sets no `AllowedClientIds` at
+  all, which is the default a copied section carries; the wildcard row lists `*` beside a real client; the http
+  issuer row replaces the https issuer; the bad path row drops the slash from `mcp`. Each assertion names the
+  setting and the message, and `Mcp:Http` with them, so a refusal for a different reason cannot pass as this one.
+- **Why a theory rather than four facts.** The four differ only in overrides and expected fragment, and the base set
+  they build from is written once in `Production(...)`; a copy per fact would be four chances for the "everything
+  else valid" half to drift, which is the half that makes the message the one under test. The host is never started,
+  because the throw happens while it is being built and before anything is bound.
+- **Gate:** `suite` 689 passed, 0 skipped, 0 failed, all gates passed. Mutations, both against
+  `McpHttpTransportTests`: deleting `http.EnsureUsable(...)` from `McpHttpHost.Build` fails the four new rows and
+  `A_host_built_with_the_read_scope_as_the_support_scope_refuses_to_start` with "Assert.Throws() Failure: No
+  exception was thrown", while the other eighteen facts in the class pass; deleting only the `AllowedClientIds`
+  block from `EnsureUsable` fails the empty-allow-list row alone, so each row measures its own precondition rather
+  than a shared earlier failure.
