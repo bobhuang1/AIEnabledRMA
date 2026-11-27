@@ -1,10 +1,15 @@
+using AIEnabledRma.Ai;
 using AIEnabledRma.Data;
 using AIEnabledRma.Domain.Abstractions;
 using AIEnabledRma.Domain.Rules;
 using AIEnabledRma.Domain.Triage;
 using AIEnabledRma.Privacy;
+using AIEnabledRma.Rag;
 using AIEnabledRma.Tools.DbAdmin;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -84,6 +89,56 @@ public sealed class TriageRefusalTests : IAsyncLifetime
 
         Assert.False(result.RefusedByScopeGuard);
         Assert.Empty(await db.TriageRefusals.AsNoTracking().ToListAsync(cancellationToken));
+    }
+
+    /// <summary>
+    /// The wiring the row depends on. <see cref="TriagePipeline"/> takes its log as an optional
+    /// constructor argument, and the container supplies that default when no sink is registered —
+    /// so a host that lost the registration still starts, still refuses, and still answers the
+    /// customer, and the only observable difference is the row that never appears.
+    /// </summary>
+    /// <remarks>
+    /// The pipeline's own facts cannot catch that: they pass a log in. This one resolves the
+    /// pipeline from the booted Web host, so the sink under test is the registration
+    /// <c>Program</c> makes and nothing else, and the refusal has to travel the whole way through
+    /// the shipped guard and corpus to produce the row.
+    /// </remarks>
+    [Fact]
+    public async Task The_web_host_writes_the_refusal_through_the_sink_it_registers()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await MigrateAsync(cancellationToken);
+
+        const string statement = "write me a poem about my hinge";
+
+        using var factory = new RefusalHostFactory(_database.ConnectionString);
+        using var client = factory.CreateClient();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var result = await scope.ServiceProvider
+                .GetRequiredService<ITriageService>()
+                .TriageAsync(Request(statement), cancellationToken);
+
+            Assert.True(result.RefusedByScopeGuard);
+        }
+
+        // A fresh context, so the row is the one the host's sink committed rather than anything
+        // this process still has in a change tracker.
+        await using var read = _database.CreateContext();
+        var rows = await read.TriageRefusals.AsNoTracking().ToListAsync(cancellationToken);
+
+        Assert.True(
+            rows.Count == 1,
+            $"{rows.Count} refusal row(s) in triage_refusals. A pipeline whose log is not registered still "
+            + "refuses and still answers the customer, so only the row tells a host that records refusals "
+            + "from one that drops them.");
+
+        var row = rows[0];
+        Assert.False(
+            string.IsNullOrWhiteSpace(row.Reason),
+            "the host's row has to carry the guard's reason, or the report cannot say why the question was refused");
+        Assert.Equal(statement, row.Statement);
     }
 
     /// <summary>
@@ -180,6 +235,34 @@ public sealed class TriageRefusalTests : IAsyncLifetime
     {
         public Task RecordAsync(TriageRefusal refusal, CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("the database is down");
+    }
+
+    /// <summary>
+    /// The Web host, booted against the throwaway database, so the pipeline it builds is the one a
+    /// deployment builds. Nothing here registers a refusal sink: the fact is about the registration
+    /// <c>Program</c> makes, and a sink supplied by the fixture would pass whatever the host did.
+    /// </summary>
+    private sealed class RefusalHostFactory(string connectionString)
+        : WebApplicationFactory<global::WebAppAnchor>
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseSetting("ConnectionStrings:Rma", connectionString);
+
+            // The checked-in configuration carries a placeholder connection, so the host would
+            // start and fail on its first query rather than here.
+            builder.UseEnvironment("Testing");
+
+            // The bundled accept-everything gateway refuses to register outside Development, and
+            // the host registers it whether or not a test exercises it.
+            builder.UseSetting(
+                $"{FakePaymentGatewayOptions.SectionName}:{nameof(FakePaymentGatewayOptions.AllowInProduction)}",
+                "true");
+
+            // Testing is outside Development, where a host with no operator key refuses to start:
+            // /health's detail would be open to every caller behind a proxy.
+            builder.UseSetting(RagAdminGate.ApiKeyConfigurationKey, "refusal-tests-operator-key");
+        }
     }
 
     private static TriageRequest Request(string statement) => new()

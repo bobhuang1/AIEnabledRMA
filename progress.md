@@ -1015,3 +1015,25 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
 - **Gate:** `suite` 683 passed, 0 skipped, 0 failed, all gates passed. Mutation: changing the quoted sentence in the
   runbook from "its own scope" to "a scope" fails the new fact alone with the message in its failure output, while
   the rest of `ToolDocumentationTests` passes.
+
+## 2026-11-27 — The refusal sink is checked where the host registers it
+
+- **The failure only a booted host can show.** `TriagePipeline` takes `ITriageRefusalLog` as an optional constructor
+  argument, and the container hands that parameter its `null` default when no sink is registered. So deleting
+  `AddScoped<ITriageRefusalLog, EfTriageRefusalLog>` from `Program.cs` leaves the host starting, the guard refusing,
+  the customer receiving the canned sentence, and every refusal dropped: nothing in a response or a log line changes.
+  `The_web_host_writes_the_refusal_through_the_sink_it_registers` resolves `ITriageService` from the booted Web host
+  against a migrated throwaway database, drives an off-topic sentence through the shipped corpus and guard, and reads
+  the row back from `triage_refusals` through a separate context.
+- **Why the pipeline's own facts cannot cover it.** The other five in `TriageRefusalTests` pass a sink in, so they
+  measure the pipeline's recording and redaction and cannot see a registration that is missing — and the wiring is
+  precisely the part that fails silently. The row is the only observable difference between a host that records
+  refusals and one that drops them.
+- **The fixture registers nothing.** The host factory overrides the connection string and the three settings a host
+  needs to start outside a deployed environment (Testing, the fake gateway's opt-in, the operator key) and supplies no
+  sink of its own, so the assertion is about `Program`'s registration rather than the fixture's.
+- **Gate:** `suite` 684 passed, 0 skipped, 0 failed, all gates passed. Mutation: deleting
+  `builder.Services.AddScoped<ITriageRefusalLog, EfTriageRefusalLog>();` from `Program.cs` fails
+  `The_web_host_writes_the_refusal_through_the_sink_it_registers` with "0 refusal row(s) in triage_refusals. A
+  pipeline whose log is not registered still refuses and still answers the customer…", while the class's other five
+  facts — including the one that asserts a refusal is stored — still pass.
