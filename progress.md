@@ -1107,3 +1107,27 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   exception was thrown", while the other eighteen facts in the class pass; deleting only the `AllowedClientIds`
   block from `EnsureUsable` fails the empty-allow-list row alone, so each row measures its own precondition rather
   than a shared earlier failure.
+
+## 2026-11-27 — A name word can carry an internal capital or an apostrophe
+
+- **What the pattern could not spell.** `NameWord` was one `[A-Z][a-z]+` with an optional `[-'][A-Za-z]+` tail, so
+  `McDonald` (a capital mid-word) and `O'Brien` (a lone capital before the apostrophe, with no lowercase run after
+  it) never matched: the boundary check after the partial word failed, and the name was left exactly as typed. The
+  word is now three shapes — a plain word, one with an internal capital (`McDonald`, `MacLeod`, `DeVries`), and one
+  leading with a single capital before its apostrophe (`O'Brien`, `D'Angelo`) — each taking the same
+  hyphen-or-apostrophe tail, so `Anne-Marie` and `O'Brien` are one word rather than a word and the fragment beside
+  it. The typographic apostrophe is accepted as well as the straight one, because a phone keyboard produces the
+  first.
+- **Why the group and the tail are load-bearing.** The constant is concatenated into two cue patterns; an ungrouped
+  alternation would have bound the words that follow a name to its last branch only, which is how a two-word name
+  quietly becomes one. A pattern that stopped at `Anne-Marie` would have left the surname as typed, which reads as
+  redacted and is worse than leaving both.
+- **The narrow side is unchanged.** A cue is still required and the deny-list still decides: a capitalised product,
+  platform, weekday or sentence continuation after a cue is left alone, and so is a protected value — what
+  `A_product_name_is_not_a_person_even_after_a_cue` and `An_introduction_cue_in_front_of_an_ordinary_word_names_nobody`
+  keep asserting.
+- **Gate:** `suite` 690 passed, 0 skipped, 0 failed, all gates passed. Mutation: restoring `NameWord` to the old
+  single run fails `A_name_with_an_internal_capital_or_an_apostrophe_is_redacted` and only that fact; the product,
+  deny-list, stability and serial facts in `PiiRedactorTests` pass under it, so the new spellings are what the new
+  fact measures rather than the pass's shape. plan.md's P3 paragraph now names the internal capital and the
+  apostrophe beside the cues.

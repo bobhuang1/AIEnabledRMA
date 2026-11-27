@@ -180,6 +180,39 @@ public sealed class PiiRedactorTests
     }
 
     /// <summary>
+    /// "Mr McDonald" and "I'm Anne-Marie O'Brien": the capital is not always the word's first
+    /// letter, and a name word that stopped at it left the person as typed.
+    /// </summary>
+    /// <remarks>
+    /// The old word was one `[A-Z][a-z]+`, which cannot span the internal capital of `McDonald` or
+    /// the apostrophe after a lone `O`; the trailing boundary then failed and the match was skipped,
+    /// so the statement came back unchanged and the pass looked like it was working. The three
+    /// spellings are asserted together because they are one rule in `NameWord`.
+    /// </remarks>
+    [Fact]
+    public void A_name_with_an_internal_capital_or_an_apostrophe_is_redacted()
+    {
+        // A session each, so the placeholder numbers are the first one in both and the assertion is
+        // about the name being replaced rather than about the order the session saw them in.
+        var internalCapital = Session().Redact("Mr McDonald fitted the replacement.").Text;
+        var apostrophe = Session().Redact("I'm Anne-Marie O'Brien and the hinge sticks.").Text;
+
+        Assert.Contains("[NAME_1]", internalCapital, StringComparison.Ordinal);
+        Assert.DoesNotContain("McDonald", internalCapital, StringComparison.Ordinal);
+
+        // One person, one placeholder: a pattern that stopped at "Anne-Marie" would leave the
+        // surname behind, which is worse than leaving the whole name because it reads as redacted.
+        Assert.Contains("[NAME_1]", apostrophe, StringComparison.Ordinal);
+        Assert.DoesNotContain("Anne-Marie", apostrophe, StringComparison.Ordinal);
+        Assert.DoesNotContain("O'Brien", apostrophe, StringComparison.Ordinal);
+        Assert.DoesNotContain("[NAME_2]", apostrophe, StringComparison.Ordinal);
+
+        // Detection reads the same patterns, so the scan sees the identifiers too.
+        Assert.True(Session().ContainsIdentifiers("Mr McDonald called about the serial"));
+        Assert.True(Session().ContainsIdentifiers("I'm Anne-Marie O'Brien, same fault"));
+    }
+
+    /// <summary>
     /// Stability is what lets the model say "the person above": the same name has to keep one
     /// placeholder however the customer arrives at it, and whether or not the caller also supplied it.
     /// </summary>

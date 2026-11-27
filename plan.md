@@ -446,7 +446,9 @@ bullets stay as requirements.
   words, after an honourific — `Mr`, `Mrs`, `Ms`, `Mx`, `Miss`, `Dr`, `Prof`, `Sir`, `Dame`, `Rev`, with or without
   the full stop — and `IntroducedName` takes the name after `my name is`, `my name's`, `I'm`, `I am`, `this is` or
   `call me`. The cue is matched without regard to case because people type `i'm`; the name stays case-sensitive, so
-  "I'm still waiting" continues a sentence rather than naming someone. A candidate whose first word is in
+  "I'm still waiting" continues a sentence rather than naming someone. The word itself may carry an internal
+  capital or an apostrophe (`Mr McDonald`, `O'Brien`, `Anne-Marie`), because a word that stopped at the first
+  capital or the apostrophe left those people as typed. A candidate whose first word is in
   `NotAName` — sentence continuations, weekdays, months, platforms, and fault nouns such as `Fault`, `Serial`,
   `Model` — is left alone, and so is a protected value, so "This is Windows 11" and "the Vertex Widget X1" survive.
   The placeholder is keyed by the name, so a person keeps one index whether they arrive through a title, an

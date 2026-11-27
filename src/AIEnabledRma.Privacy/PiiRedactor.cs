@@ -76,7 +76,25 @@ public sealed partial class PiiRedactor : IPiiRedactor
     /// apostrophe, and never a token with a digit in it. Being capitalised is the whole test, which
     /// is why this pass needs a cue in front of it rather than scanning every capital.
     /// </summary>
-    private const string NameWord = @"[A-Z][a-z]+(?:[-'][A-Za-z]+)?";
+    /// <remarks>
+    /// Three shapes, because English names do not put their only capital at the front of the word:
+    /// a plain word (<c>Harrison</c>), one with an internal capital (<c>McDonald</c>,
+    /// <c>MacLeod</c>), and one that leads with a single capital before its apostrophe
+    /// (<c>O'Brien</c>, <c>D'Angelo</c>). Each takes the same hyphen-or-apostrophe tail, so
+    /// <c>Anne-Marie</c> and <c>O'Brien</c> are one word rather than a name and the fragment beside
+    /// it. The group is not optional decoration: this constant is concatenated into two cue
+    /// patterns, and an ungrouped alternation would bind the words that follow the name to its last
+    /// branch only. A single <c>[A-Z][a-z]+</c> could not span <c>Mc|Donald</c> or an <c>O</c> with
+    /// no lowercase after it, so the trailing boundary check failed and the whole word was skipped —
+    /// the pass then redacted nothing, which is the failure that looks like a working redactor. The
+    /// typographic apostrophe is accepted as well as the straight one, because a phone keyboard
+    /// produces the first.
+    /// </remarks>
+    private const string NameWord =
+        @"(?:[A-Z][a-z]+"              // Harrison, Anne
+        + @"|[A-Z][a-z]*[A-Z][a-z]+"   // McDonald, MacLeod, DeVries
+        + @"|[A-Z]['’][A-Z][a-z]+)"    // O'Brien, D'Angelo
+        + @"(?:[-'’][A-Za-z][a-z]+)*"; // the tail: -Marie, 's
 
     /// <summary>
     /// "Mr Harrison", "Dr. Ada Lovelace": a title is a person by construction, so the words after it
