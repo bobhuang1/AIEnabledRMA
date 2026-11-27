@@ -16,12 +16,3 @@ public interface ITriageRefusalLog
 {
     Task RecordAsync(TriageRefusal refusal, CancellationToken cancellationToken = default);
 }
-
-/// <summary>
-/// The log a host with nowhere to write refusals gets, so the pipeline can be built without one.
-/// </summary>
-public sealed class NoTriageRefusalLog : ITriageRefusalLog
-{
-    public Task RecordAsync(TriageRefusal refusal, CancellationToken cancellationToken = default) =>
-        Task.CompletedTask;
-}

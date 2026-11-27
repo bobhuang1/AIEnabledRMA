@@ -1037,3 +1037,28 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   `The_web_host_writes_the_refusal_through_the_sink_it_registers` with "0 refusal row(s) in triage_refusals. A
   pipeline whose log is not registered still refuses and still answers the customer…", while the class's other five
   facts — including the one that asserts a refusal is stored — still pass.
+
+## 2026-11-27 — The no-op refusal log nothing registered
+
+- **What went.** `NoTriageRefusalLog` was the "host with nowhere to write" sink, and nothing bound it: the Web host
+  registers `EfTriageRefusalLog`, no other host registers one at all, and no test constructed it. It existed to stand
+  in for an argument's default, and the argument already has one — `ITriageRefusalLog? refusalLog = null` — so the
+  container supplies `null` and the pipeline's early return does exactly what the no-op's `Task.CompletedTask` did,
+  with one fewer type to keep in sync when the interface grows.
+- **Why the default is the right answer rather than a convenience.** A process with no database (a unit test, a host
+  that has not been given a connection) still refuses and still answers the customer; the refusal is decided before
+  the write, and a missing sink is the same case as a sink that throws. `ITriageRefusalLog` keeps its one production
+  implementation in `AIEnabledRma.Data`.
+- **No new fact, and why that is not an omission.** The path the deleted type covered is already asserted: every
+  fact in `TriagePipelineTests` builds the pipeline without the argument — `Build` supplies seven of the eight
+  constructor parameters — so `An_out_of_domain_question_never_reaches_the_model` and
+  `A_session_with_no_devices_refuses` both take the refusal through the null branch and would fail if that branch
+  stopped being supported. A fact written against the deleted class by name would duplicate one of them and could not
+  fail if the class were added back.
+- **Gate:** `suite` 684 passed, 0 skipped, 0 failed, all gates passed. No mutation: deleting an unreferenced type
+  leaves no behaviour to mutate, and the two facts above already fail if the null-log branch grows an exception.
+  The first run of the gate in this session failed one unrelated fact, `TrustedProxyTests`'
+  `Each_customer_behind_a_trusted_proxy_gets_their_own_allowance`, on `ArticleSanitizer`'s 250 ms regex timeout while
+  the corpus loader parsed an article during a host boot; the rerun passed it and nothing in this change touches the
+  loader. The flake is recorded here rather than dropped, because a timeout under parallel host boots is a real
+  property of that budget.
