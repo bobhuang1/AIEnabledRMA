@@ -1131,3 +1131,24 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   deny-list, stability and serial facts in `PiiRedactorTests` pass under it, so the new spellings are what the new
   fact measures rather than the pass's shape. plan.md's P3 paragraph now names the internal capital and the
   apostrophe beside the cues.
+
+## 2026-11-27 — The deny-list is platforms and fault nouns now
+
+- **Most of the list existed for one cue.** `NotAName` carried the sentence continuations ("Not", "Sorry",
+  "Still", "Afraid", …), the weekdays and the months — more than half its entries — and almost all of them only
+  ever matched a capitalised word after "this is", because after "my name is", "I'm" or "call me" a capitalised
+  product is not something people write. The list is now the two kinds that do that work: platforms, vendors and
+  standards (`Windows` … `PDF`), and the fault nouns a description is written in (`Fault`, `Serial`, `Model`, …).
+- **Why the cue stayed and the entries went.** Dropping "this is" would have emptied the list completely, and it
+  keeps `A_product_name_is_not_a_person_even_after_a_cue` passing — measured, not assumed: with the cue removed the
+  pass never fires on "This is Windows 11", so that fact can no longer tell a kept product from a redacted one. The
+  cue is also what catches "This is Marcus Webb", and a missed name is the failure this pass exists to prevent.
+- **The price is asserted rather than left to be discovered.** A capitalised continuation after a cue is now
+  masked: "I'm Sorry for the delay" becomes "[NAME_1] for the delay".
+  `A_capitalised_continuation_after_a_cue_is_masked_rather_than_kept` pins both halves — the introduction still
+  redacts, the continuation is now a placeholder — so the trade is visible in the suite instead of arriving as a
+  surprise. plan.md's P3 paragraph names the two kinds the list holds and says the continuations were removed.
+- **Gate:** `suite` 691 passed, 0 skipped, 0 failed, all gates passed. Mutations against `PiiRedactorTests`: putting
+  "Sorry" back in the list fails the new fact alone (17 of 18 pass); removing "this is" from the cue also fails
+  the new fact alone, and `A_product_name_is_not_a_person_even_after_a_cue` passes under it — the measurement behind
+  keeping the cue and trimming the list instead.

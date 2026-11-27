@@ -449,8 +449,12 @@ bullets stay as requirements.
   "I'm still waiting" continues a sentence rather than naming someone. The word itself may carry an internal
   capital or an apostrophe (`Mr McDonald`, `O'Brien`, `Anne-Marie`), because a word that stopped at the first
   capital or the apostrophe left those people as typed. A candidate whose first word is in
-  `NotAName` — sentence continuations, weekdays, months, platforms, and fault nouns such as `Fault`, `Serial`,
-  `Model` — is left alone, and so is a protected value, so "This is Windows 11" and "the Vertex Widget X1" survive.
+  `NotAName` — platforms and vendors (`Windows`, `MacBook`, `Microsoft`, …) and fault nouns such as `Fault`,
+  `Serial`, `Model` — is left alone, and so is a protected value, so "This is Windows 11" and "the Vertex Widget
+  X1" survive. The sentence continuations, weekdays and months that used to sit in that list are gone: almost all
+  of them only ever matched a word the writer happened to capitalise after "this is", and the cue was worth more
+  than they were, because it is what catches "This is Marcus Webb". A capitalised continuation after a cue is now
+  masked, which `PiiRedactorTests` records as the price of the trim.
   The placeholder is keyed by the name, so a person keeps one index whether they arrive through a title, an
   introduction, or the caller's customer record.
 - **What a model would still add, and does not have one:** a name with no cue in front of it ("fitted by Harrison

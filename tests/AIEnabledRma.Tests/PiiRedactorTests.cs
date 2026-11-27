@@ -253,6 +253,33 @@ public sealed class PiiRedactorTests
         Assert.DoesNotContain("[NAME_", product.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// What the shorter deny-list costs, recorded here rather than discovered later: a capitalised
+    /// ordinary word after a cue is now a person to this pass.
+    /// </summary>
+    /// <remarks>
+    /// The list used to hold the sentence continuations ("Not", "Sorry", "Still", …), the weekdays
+    /// and the months, and almost all of them only ever matched a word capitalised after "this is".
+    /// The cue stayed and they went, because the cue is what catches "This is Marcus Webb" and a
+    /// missed name is the failure this pass exists to prevent, while a masked "Sorry" costs the model
+    /// one word of a sentence it can still read. Both halves are asserted so a later reader sees the
+    /// trade was chosen: an introduction still redacts, and the continuation is now masked.
+    /// </remarks>
+    [Fact]
+    public void A_capitalised_continuation_after_a_cue_is_masked_rather_than_kept()
+    {
+        var introduced = Session().Redact("This is Marcus Webb from the repair shop.").Text;
+        var continuation = Session().Redact("I'm Sorry for the delay, the unit is still dead.").Text;
+
+        // The half that matters: the cue still finds an introduction.
+        Assert.Contains("[NAME_1]", introduced, StringComparison.Ordinal);
+        Assert.DoesNotContain("Marcus", introduced, StringComparison.Ordinal);
+
+        // The cost of the trim: "Sorry" names nobody, and nothing in the list says so any more.
+        Assert.Contains("[NAME_1]", continuation, StringComparison.Ordinal);
+        Assert.DoesNotContain("Sorry", continuation, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void A_serial_stated_in_an_introduction_is_still_kept()
     {

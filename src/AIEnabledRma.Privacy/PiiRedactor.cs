@@ -127,28 +127,31 @@ public sealed partial class PiiRedactor : IPiiRedactor
     /// <summary>
     /// Words that come after a cue without naming anybody. The cue pattern cannot tell "This is
     /// Windows 11" from "This is Marcus Webb", so the first word of the candidate decides: a
-    /// capitalised product, weekday, month or ordinary continuation is not a person, and a name pass
-    /// that redacted them would cost the model the platform the fault is on.
+    /// capitalised platform, vendor or fault noun is not a person, and a name pass that redacted
+    /// them would cost the model the platform the fault is on.
     /// </summary>
     /// <remarks>
     /// A deny-list is the deterministic way to keep the pass narrow. What it cannot do is recognise a
     /// name that is spelled like a product nobody listed, or one introduced in another language —
     /// that is the part a local NER model would have to do.
+    ///
+    /// It holds only those two kinds now. It used to carry the sentence continuations ("Not",
+    /// "Sorry", "Still", …), the weekdays and the months as well — more than half the list — and
+    /// almost all of them only ever matched a word the writer happened to capitalise after
+    /// "this is". The cue is the part worth keeping, because it is what catches "This is Marcus
+    /// Webb" and a missed name is the failure this pass exists to prevent; the entries that only
+    /// served capitalised continuations were the machinery this list was mostly made of, and they
+    /// are gone. The cost is a placeholder where an ordinary word was capitalised after a cue, which
+    /// `A_capitalised_continuation_after_a_cue_is_masked_rather_than_kept` records.
     /// </remarks>
     private static readonly HashSet<string> NotAName = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Not", "Still", "Also", "Just", "Very", "Sorry", "Afraid", "Confused", "Trying", "Getting",
-        "Using", "Going", "Able", "Unable", "Here", "There", "Okay", "Ok", "Yes", "No", "Hi", "Hello",
-        "Thanks", "Thank", "Please", "On", "In", "At", "The", "A", "An", "And", "But", "So", "It",
-        "This", "That", "My", "Our", "Your", "His", "Her", "Their", "When", "If", "After", "Before",
-        "Because", "Since", "While", "Once", "Then", "Now", "Today", "Yesterday", "Tomorrow", "Again",
-        "Always", "Never", "Maybe", "Sure", "Fine", "Good", "Bad", "Broken", "Dead", "Dark", "Loud",
-        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
-        "January", "February", "March", "April", "May", "June", "July", "August", "September",
-        "October", "November", "December",
+        // Platforms, vendors and standards.
         "Windows", "Mac", "MacBook", "Linux", "Android", "iPhone", "iPad", "Chrome", "Edge", "Firefox",
         "Excel", "Word", "Outlook", "Teams", "Zoom", "Google", "Amazon", "Samsung", "Apple",
         "Microsoft", "Dell", "Lenovo", "Intel", "NVIDIA", "USB", "HDMI", "Bluetooth", "PDF",
+
+        // Fault nouns: the labels a fault description is written in.
         "Fault", "Error", "Code", "Serial", "Model", "Order", "Unit", "Device", "Product", "Support",
         "Engineer", "Technician", "Customer", "Case", "Ticket", "Address", "Phone", "Email",
         "Invoice", "Warranty",
