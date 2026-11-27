@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Domain.Rules;
 using AIEnabledRma.Domain.Triage;
 using AIEnabledRma.Privacy;
@@ -322,6 +323,7 @@ public sealed class KnowledgeBaseHardeningTests : IDisposable
             new PiiRedactor(),
             Options.Create(new RmaPolicyOptions()),
             Options.Create(new TriagePipelineOptions()),
+            new FakeClock(DateTimeOffset.UtcNow),
             NullLogger<TriagePipeline>.Instance);
 
         await pipeline.TriageAsync(

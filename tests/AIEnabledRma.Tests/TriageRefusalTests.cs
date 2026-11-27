@@ -1,6 +1,7 @@
 using AIEnabledRma.Ai;
 using AIEnabledRma.Data;
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Domain.Rules;
 using AIEnabledRma.Domain.Triage;
 using AIEnabledRma.Privacy;
@@ -72,6 +73,52 @@ public sealed class TriageRefusalTests : IAsyncLifetime
         Assert.True(
             (DateTimeOffset.UtcNow - row.AtUtc).Duration() < TimeSpan.FromMinutes(5),
             $"the refusal is stamped {row.AtUtc:O}, which is not when the test ran");
+    }
+
+    /// <summary>
+    /// The stamp comes from the same seam as every other date in the flow, so a refusal can be put
+    /// in the past and read through the report's window without a test waiting for one. The wall
+    /// clock made the row's date the only one in the system a test could not choose: a fact about
+    /// the window had to seed its own rows rather than produce them through the pipeline.
+    /// </summary>
+    [Fact]
+    public async Task A_refusal_is_stamped_by_the_clock_the_flow_reads()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await MigrateAsync(cancellationToken);
+
+        // Midnight, thirty days back: inside a sixty-day window and outside a seven-day one, and
+        // exact to the second, so the assertion is about the instant rather than about precision.
+        var stampedAt = new DateTimeOffset(
+            DateTimeOffset.UtcNow.AddDays(-30).UtcDateTime.Date,
+            TimeSpan.Zero);
+
+        await using (var write = _database.CreateContext())
+        {
+            var pipeline = Build(new EfTriageRefusalLog(write), out _, new FakeClock(stampedAt));
+
+            var result = await pipeline.TriageAsync(
+                Request(OffTopicStatement),
+                cancellationToken);
+
+            Assert.True(result.RefusedByScopeGuard);
+        }
+
+        await using var read = _database.CreateContext();
+        var row = Assert.Single(await read.TriageRefusals.AsNoTracking().ToListAsync(cancellationToken));
+
+        // The pipeline's own row, dated by the clock it was given, not by the machine's.
+        Assert.Equal(stampedAt, row.AtUtc);
+
+        // The window reads the same instant back, so "refused this week" and "refused this quarter"
+        // are two queries against one row rather than two waits.
+        var week = await TriageRefusalReport.ReadAsync(
+            read, DateTimeOffset.UtcNow.AddDays(-7), 10, cancellationToken);
+        Assert.Equal(0, week.Refusals);
+
+        var quarter = await TriageRefusalReport.ReadAsync(
+            read, DateTimeOffset.UtcNow.AddDays(-60), 10, cancellationToken);
+        Assert.Equal(1, quarter.Refusals);
     }
 
     [Fact]
@@ -289,7 +336,10 @@ public sealed class TriageRefusalTests : IAsyncLifetime
     /// The pipeline with its real guard and redactor, a model that always answers the same verdict,
     /// and the log under test.
     /// </summary>
-    private static TriagePipeline Build(ITriageRefusalLog log, out StubChatModel model)
+    private static TriagePipeline Build(
+        ITriageRefusalLog log,
+        out StubChatModel model,
+        IClock? clock = null)
     {
         model = new StubChatModel(new ChatCompletion
         {
@@ -330,6 +380,7 @@ public sealed class TriageRefusalTests : IAsyncLifetime
             new PiiRedactor(),
             Options.Create(new RmaPolicyOptions { HumanReviewConfidenceThreshold = 0.45 }),
             Options.Create(new TriagePipelineOptions()),
+            clock ?? new FakeClock(DateTimeOffset.UtcNow),
             NullLogger<TriagePipeline>.Instance,
             log);
     }

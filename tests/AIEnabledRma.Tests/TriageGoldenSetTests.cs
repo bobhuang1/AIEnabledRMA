@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using AIEnabledRma.Ai;
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Domain.Rules;
 using AIEnabledRma.Domain.Triage;
 using AIEnabledRma.Domain.Triage.Evaluation;
@@ -697,6 +698,7 @@ public sealed class TriageGoldenSetTests(ITestOutputHelper output)
                 new PiiRedactor(),
                 Options.Create(new RmaPolicyOptions()),
                 Options.Create(options),
+                new SystemClock(),
                 NullLogger<TriagePipeline>.Instance);
 
             return new EvalPipeline(

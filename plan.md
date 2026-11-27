@@ -785,9 +785,10 @@ bullets stay as requirements.
 - **Refusals are evidence now, not just a dead end.** A question the scope guard turns away used to leave nothing
   behind: the customer saw the canned refusal and the question was discarded, so the one signal that the corpus has
   a hole was thrown away at the moment it was produced. `triage_refusals` now records each refusal with the guard's
-  reason and the statement *after* the redaction pass — placeholders, not identifiers — and `DbAdmin refusals` ranks
-  them by how often they were asked inside a window, which is the list a corpus review works from. The table is
-  pruned with the audit tables (365 days) because a redacted sentence nobody acted on should not be kept forever.
+  reason, the instant `IClock` reports, and the statement *after* the redaction pass — placeholders, not
+  identifiers — and `DbAdmin refusals` ranks them by how often they were asked inside a window, which is the list
+  a corpus review works from. The table is pruned with the audit tables (365 days) because a redacted sentence
+  nobody acted on should not be kept forever.
 - **Outstanding:** the numbers are the bundled model's. A nightly or manual run against a real provider is still the
   plan's open half, and it would be a separate entry rather than an edit to this one.
 

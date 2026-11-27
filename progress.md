@@ -1062,3 +1062,25 @@ All of the following is pushed to `origin/main`, and each commit has a green CI 
   the corpus loader parsed an article during a host boot; the rerun passed it and nothing in this change touches the
   loader. The flake is recorded here rather than dropped, because a timeout under parallel host boots is a real
   property of that budget.
+
+## 2026-11-27 — The refusal row is stamped by the flow's clock
+
+- **The one date a test could not choose.** `TriagePipeline` stamped a refusal with `DateTimeOffset.UtcNow`, so the
+  row's `at_utc` was the only date in the system outside `IClock`. The pipeline now takes the clock the rest of the
+  flow already reads and stamps `clock.UtcNow`. The parameter is required rather than optional: a pipeline with no
+  clock has no defensible answer, and a default of `DateTimeOffset.UtcNow` would put the wall clock back in through
+  the seam it was meant to go through.
+- **What it buys, in the fact that now exists.** `A_refusal_is_stamped_by_the_clock_the_flow_reads` gives the
+  pipeline a clock frozen at midnight thirty days back, drives a refusal through the real guard and EF sink, asserts
+  the row's `at_utc` is that instant, then reads it through `TriageRefusalReport` twice: absent from a seven-day
+  window, present in a sixty-day one. Before this, a fact about the window had to seed its own rows, because the
+  pipeline's own rows always landed at "now".
+- **Every construction site names a clock.** `TriagePipelineTests` and `KnowledgeBaseHardeningTests` pass
+  `FakeClock`, the golden-set harness passes `SystemClock`, and `TriageRefusalTests.Build` defaults to a `FakeClock`
+  at now so the existing freshness assertion keeps its meaning. plan.md's refusal paragraph now says the row carries
+  the instant `IClock` reports.
+- **Gate:** `suite` 685 passed, 0 skipped, 0 failed, all gates passed. Mutations: reverting the line to
+  `DateTimeOffset.UtcNow` does not build — `CS9113`, "Parameter 'clock' is unread", under `-warnaserror`, so an
+  unused seam cannot land at all — and the compiling mutant `clock.UtcNow.AddMinutes(1)` fails
+  `A_refusal_is_stamped_by_the_clock_the_flow_reads` on the exact instant while the other six facts in
+  `TriageRefusalTests` pass, including the five-minute freshness assertion that a one-minute drift stays inside.

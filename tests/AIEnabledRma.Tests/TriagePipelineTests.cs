@@ -1,4 +1,5 @@
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Domain.Rules;
 using AIEnabledRma.Domain.Triage;
 using Microsoft.Extensions.Logging;
@@ -89,6 +90,7 @@ public sealed class TriagePipelineTests
                 HumanReviewConfidenceThreshold = 0.45,
             }),
             Microsoft.Extensions.Options.Options.Create(new TriagePipelineOptions()),
+            new FakeClock(DateTimeOffset.UtcNow),
             logger ?? NullLogger<TriagePipeline>.Instance);
 
         return (pipeline, model);

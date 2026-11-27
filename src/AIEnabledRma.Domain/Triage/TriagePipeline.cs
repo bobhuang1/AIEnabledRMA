@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using AIEnabledRma.Domain.Abstractions;
+using AIEnabledRma.Domain.Rma;
 using AIEnabledRma.Domain.Rules;
 using AIEnabledRma.Domain.Triage;
 using Microsoft.Extensions.Logging;
@@ -31,6 +32,7 @@ public sealed partial class TriagePipeline(
     IPiiRedactor redactor,
     IOptions<RmaPolicyOptions> policyOptions,
     IOptions<TriagePipelineOptions> pipelineOptions,
+    IClock clock,
     ILogger<TriagePipeline> logger,
     ITriageRefusalLog? refusalLog = null) : ITriageService
 {
@@ -157,6 +159,13 @@ public sealed partial class TriagePipeline(
     /// written: the customer's answer is already decided, and losing it would be worse than losing
     /// the evidence.
     /// </summary>
+    /// <remarks>
+    /// The stamp comes from <see cref="IClock"/>, the seam the rest of the flow already reads, so a
+    /// refusal can be placed in the past and read through <c>DbAdmin refusals</c>' window without a
+    /// test waiting for that window to move. Reading the wall clock here made the row's date the
+    /// only one in the system a test could not choose: a fact about the window had to seed its own
+    /// rows, and could not assert that a refusal the pipeline produced falls inside or outside one.
+    /// </remarks>
     private async Task RecordRefusalAsync(
         string reason,
         TriageRequest request,
@@ -179,7 +188,7 @@ public sealed partial class TriagePipeline(
                 new TriageRefusal
                 {
                     Id = Guid.NewGuid(),
-                    AtUtc = DateTimeOffset.UtcNow,
+                    AtUtc = clock.UtcNow,
                     Reason = reason,
                     Statement = statement,
                 },
